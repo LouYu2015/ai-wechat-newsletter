@@ -54,13 +54,13 @@ CLAUDE_SYSTEM_PROMPT = """为以下群聊消息编写一个每日总结，让对
 
 最开始要有一个导读和目录。目录要有层级结构：先列出主要类别（如"行业新闻"、"AI 工具"、"方法论"），再在每个类别下缩进列出具体条目。格式示例：
 
-1. 行业新闻
-   - 某条新闻标题
-   - 另一条新闻标题
-2. AI 工具
-   - 工具名称
-3. 方法论
-   - 方法论名称"""
+行业新闻
+- 某条新闻标题
+- 另一条新闻标题
+AI 工具
+- 工具名称
+方法论
+- 方法论名称"""
 
 GEMINI_EXTRACTION_PROMPT = """你正在分析一段微信群聊的屏幕录像（已减速处理以便更清晰地查看内容）。
 
@@ -453,11 +453,13 @@ def generate_report_with_claude(chat_history: str, api_key: str) -> str:
 
                 return report_text  # success
 
-            except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError) as e:
+            except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError,
+                    anthropic.APIStatusError) as e:
                 if attempt < max_retries:
-                    wait = 5 * attempt
+                    # Overloaded errors (529) need a longer back-off
+                    wait = 30 if isinstance(e, anthropic.APIStatusError) else 5 * attempt
                     console.print(
-                        f"[yellow]连接中断 ({e.__class__.__name__})，"
+                        f"[yellow]Claude 请求失败 ({e.__class__.__name__})，"
                         f"{wait}s 后重试 ({attempt}/{max_retries})...[/yellow]"
                     )
                     time.sleep(wait)
