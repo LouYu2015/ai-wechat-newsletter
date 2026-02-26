@@ -566,6 +566,32 @@ def _get_pdf_css() -> str:
     """
 
 
+def _get_report_date() -> str:
+    """Return today's date, or yesterday's if it is just past midnight (before 04:00)."""
+    now = datetime.now()
+    if now.hour < 4:
+        yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        console.print(
+            f"[yellow]当前时间 {now.strftime('%H:%M')}（刚过午夜），"
+            f"使用昨天日期: {yesterday}[/yellow]"
+        )
+        return yesterday
+    return now.strftime("%Y-%m-%d")
+
+
+def _get_pdf_path(recording_date: str) -> Path:
+    """Return a unique PDF path inside archive/, never overwriting an existing file."""
+    archive_dir = OUTPUT_DIR / "archive"
+    archive_dir.mkdir(exist_ok=True)
+    stem = f"{recording_date} 群聊日报"
+    path = archive_dir / f"{stem}.pdf"
+    counter = 2
+    while path.exists():
+        path = archive_dir / f"{stem} ({counter}).pdf"
+        counter += 1
+    return path
+
+
 def convert_to_pdf(markdown_text: str, output_path: Path) -> None:
     """Convert Markdown text to PDF with 20pt font and Chinese support."""
     from weasyprint import HTML, CSS
@@ -624,21 +650,10 @@ def main() -> None:
         console.rule("[bold]Step 2  查找屏幕录像")
         video_path = find_latest_screen_recording()
         size_mb = video_path.stat().st_size / 1024 / 1024
-        _now = datetime.now()
-        if _now.hour < 4:
-            recording_date = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
-            console.print(
-                f"[yellow]当前时间 {_now.strftime('%H:%M')}（刚过午夜），"
-                f"使用昨天日期: {recording_date}[/yellow]"
-            )
-        else:
-            recording_date = _now.strftime("%Y-%m-%d")
-        pdf_filename = f"{recording_date} 群聊日报.pdf"
         console.print(
             f"[green]找到文件:[/green] [cyan]{video_path.name}[/cyan] "
             f"[dim]({size_mb:.1f} MB)[/dim]"
         )
-        console.print(f"[green]日报日期:[/green] [cyan]{recording_date}[/cyan]\n")
 
         chat_history = ""
 
@@ -672,7 +687,9 @@ def main() -> None:
 
         # Step 6: PDF
         console.rule("[bold]Step 6  导出 PDF")
-        pdf_path = OUTPUT_DIR / pdf_filename
+        recording_date = _get_report_date()
+        console.print(f"[green]日报日期:[/green] [cyan]{recording_date}[/cyan]\n")
+        pdf_path = _get_pdf_path(recording_date)
         convert_to_pdf(report_markdown, pdf_path)
         console.print()
 
