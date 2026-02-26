@@ -27,6 +27,7 @@ from rich.progress import (
 from rich.panel import Panel
 
 import markdown as md_lib
+from markdown.extensions.toc import TocExtension
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 DOWNLOADS_DIR = Path("/Users/louyu/Downloads")
@@ -52,15 +53,7 @@ CLAUDE_SYSTEM_PROMPT = """为以下群聊消息编写一个每日总结，让对
 
 文章需要言简意赅，但是保留重要、有用的信息。
 
-最开始要有一个导读和目录。目录要有层级结构：先列出主要类别（如"行业新闻"、"AI 工具"、"方法论"），再在每个类别下缩进列出具体条目。格式示例：
-
-行业新闻
-- 某条新闻标题
-- 另一条新闻标题
-AI 工具
-- 工具名称
-方法论
-- 方法论名称"""
+最开始要有一段导读，介绍今天内容的亮点。导读之后，单独一行写 [TOC]，程序将在此处自动插入目录。"""
 
 GEMINI_EXTRACTION_PROMPT = """你正在分析一段微信群聊的屏幕录像（已减速处理以便更清晰地查看内容）。
 
@@ -471,6 +464,11 @@ def generate_report_with_claude(chat_history: str, api_key: str) -> str:
 
 # ── PDF Generation ─────────────────────────────────────────────────────────────
 
+def _toc_slugify(value: str, separator: str) -> str:
+    """Hex-encode UTF-8 bytes to produce a safe, unique ASCII HTML ID."""
+    return value.strip().encode('utf-8').hex()
+
+
 def _get_pdf_css() -> str:
     return """
     @font-face {
@@ -588,6 +586,28 @@ def _get_pdf_css() -> str:
         border-top: 1pt solid #ddd;
         margin: 14pt 0;
     }
+
+    a {
+        color: #1a56db;
+        text-decoration: none;
+    }
+
+    .toc {
+        background: #f0f5ff;
+        border: 1pt solid #93c5fd;
+        border-radius: 6pt;
+        padding: 14pt 20pt;
+        margin: 16pt 0 24pt 0;
+    }
+
+    .toc ul {
+        margin: 4pt 0;
+        padding-left: 20pt;
+    }
+
+    .toc li {
+        margin: 5pt 0;
+    }
     """
 
 
@@ -604,7 +624,10 @@ def convert_to_pdf(markdown_text: str, output_path: Path) -> None:
     ) as progress:
         task = progress.add_task("Markdown → HTML...", total=None)
 
-        converter = md_lib.Markdown(extensions=["tables", "fenced_code", "nl2br"])
+        converter = md_lib.Markdown(extensions=[
+            "tables", "fenced_code", "nl2br",
+            TocExtension(slugify=_toc_slugify, toc_depth="2-3"),
+        ])
         html_body = converter.convert(markdown_text)
 
         progress.update(task, description="渲染 PDF（可能需要几秒）...")
