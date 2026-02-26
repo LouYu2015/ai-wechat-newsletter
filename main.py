@@ -5,7 +5,6 @@ Processes a WeChat screen recording and generates an AI-powered daily report.
 """
 
 import os
-import re
 import sys
 import glob
 import json
@@ -15,7 +14,7 @@ import tempfile
 import subprocess
 import fractions
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -120,51 +119,6 @@ def find_latest_screen_recording() -> Path:
     latest = max(files, key=os.path.getmtime)
     return Path(latest)
 
-
-def infer_date_from_video(video_path: Path) -> str:
-    """
-    Infer the recording date from the filename.
-
-    Priority:
-    1. MM-DD-YYYY pattern in filename (e.g. ScreenRecording_02-21-2026 ...)
-    2. YYYY-MM-DD pattern in filename
-    3. If parsing fails and current time is 0:00–4:00 → yesterday
-    4. If parsing fails otherwise → prompt user to enter date
-    """
-    name = video_path.stem
-
-    # Try MM-DD-YYYY (macOS default format)
-    m = re.search(r'(\d{2})-(\d{2})-(\d{4})', name)
-    if m:
-        month, day, year = m.groups()
-        return f"{year}-{month}-{day}"
-
-    # Try YYYY-MM-DD
-    m = re.search(r'(\d{4})-(\d{2})-(\d{2})', name)
-    if m:
-        return m.group(0)
-
-    # Filename parsing failed
-    now = datetime.now()
-    if now.hour < 4:
-        yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-        console.print(
-            f"[yellow]无法从文件名推断日期。"
-            f"当前时间 {now.strftime('%H:%M')}（刚过午夜），使用昨天日期: {yesterday}[/yellow]"
-        )
-        return yesterday
-
-    # Prompt user
-    console.print("[yellow]无法从文件名自动推断日期，请手动输入。[/yellow]")
-    while True:
-        user_input = console.input(
-            "[bold]请输入日期（格式 YYYY-MM-DD，直接回车使用今天）: [/bold]"
-        ).strip()
-        if not user_input:
-            return date.today().strftime("%Y-%m-%d")
-        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', user_input):
-            return user_input
-        console.print("[red]格式不正确，请重新输入（例如 2026-02-21）[/red]")
 
 
 # ── ffmpeg Utilities ───────────────────────────────────────────────────────────
@@ -670,7 +624,15 @@ def main() -> None:
         console.rule("[bold]Step 2  查找屏幕录像")
         video_path = find_latest_screen_recording()
         size_mb = video_path.stat().st_size / 1024 / 1024
-        recording_date = infer_date_from_video(video_path)
+        _now = datetime.now()
+        if _now.hour < 4:
+            recording_date = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
+            console.print(
+                f"[yellow]当前时间 {_now.strftime('%H:%M')}（刚过午夜），"
+                f"使用昨天日期: {recording_date}[/yellow]"
+            )
+        else:
+            recording_date = _now.strftime("%Y-%m-%d")
         pdf_filename = f"{recording_date} 群聊日报.pdf"
         console.print(
             f"[green]找到文件:[/green] [cyan]{video_path.name}[/cyan] "
