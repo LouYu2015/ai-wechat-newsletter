@@ -5,6 +5,7 @@ Processes a WeChat screen recording and generates an AI-powered daily report.
 """
 
 import os
+import re
 import sys
 import glob
 import json
@@ -563,6 +564,21 @@ def _get_pdf_css() -> str:
     .toc li {
         margin: 5pt 0;
     }
+
+    .back-to-toc {
+        float: right;
+        font-weight: normal;
+        line-height: 1;
+    }
+
+    .back-to-toc a {
+        font-size: 0.6em;
+        color: #1a56db;
+        background: #e8f0fe;
+        border: 0.5pt solid #93c5fd;
+        border-radius: 100pt;
+        padding: 3pt 8pt;
+    }
     """
 
 
@@ -610,6 +626,15 @@ def convert_to_pdf(markdown_text: str, output_path: Path) -> None:
             TocExtension(slugify=_toc_slugify, toc_depth="2-3"),
         ])
         html_body = converter.convert(markdown_text)
+
+        # Add id to TOC div so headings can link back to it
+        html_body = html_body.replace('<div class="toc">', '<div class="toc" id="toc">', 1)
+        # Insert a "back to TOC" arrow inside each H2 / H3 heading
+        html_body = re.sub(
+            r'(</h[23]>)',
+            r'<span class="back-to-toc"><a href="#toc">↑ 目录</a></span>\1',
+            html_body,
+        )
 
         progress.update(task, description="渲染 PDF（可能需要几秒）...")
 
