@@ -541,11 +541,12 @@ def _get_pdf_css() -> str:
     }
 
     blockquote {
-        border-left: 4pt solid #aaa;
+        border-left: 4pt solid #93c5fd;
+        border-radius: 0 6pt 6pt 0;
         margin: 12pt 0;
-        padding: 4pt 14pt;
-        color: #444;
-        background: #f8f8f8;
+        padding: 8pt 16pt;
+        color: #374151;
+        background: #f0f5ff;
     }
 
     code {
