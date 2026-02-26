@@ -53,6 +53,12 @@ CLAUDE_SYSTEM_PROMPT = """为以下群聊消息编写一个每日总结，让对
 
 文章需要言简意赅，但是保留重要、有用的信息。
 
+所有引用群友观点或发言的地方，必须使用 Markdown 引用框（> 语法），每人一段。例如：
+
+> 某某人：认为这个工具很好，并指出"某某原因"
+
+> 某某人：不同意上面的观点，因为"某某原因"
+
 最开始要有一段导读，介绍今天内容的亮点。导读之后，单独一行写 [TOC]，程序将在此处自动插入目录。"""
 
 GEMINI_EXTRACTION_PROMPT = """你正在分析一段微信群聊的屏幕录像（已减速处理以便更清晰地查看内容）。
@@ -497,7 +503,7 @@ def _get_pdf_css() -> str:
 
     blockquote {
         border-left: 4pt solid #93c5fd;
-        border-radius: 0 6pt 6pt 0;
+        border-radius: 0 20pt 20pt 0;
         margin: 12pt 0;
         padding: 8pt 16pt;
         color: #374151;
