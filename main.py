@@ -699,13 +699,15 @@ def main() -> None:
             # Step 4: Gemini extraction
             console.rule("[bold]Step 4  Gemini 提取聊天记录")
             chat_history = extract_chat_with_gemini(slowed_path, gemini_key)
+            recording_date = _get_report_date()
             debug_dir = OUTPUT_DIR / "debug"
             debug_dir.mkdir(exist_ok=True)
-            (debug_dir / "gemini_output.txt").write_text(chat_history, encoding="utf-8")
+            debug_filename = f"gemini_output_{recording_date}.txt"
+            (debug_dir / debug_filename).write_text(chat_history, encoding="utf-8")
             console.print(
                 f"[green]聊天记录提取完毕[/green] "
                 f"[dim]{len(chat_history):,} 字符[/dim] "
-                f"[dim](已保存至 debug/gemini_output.txt)[/dim]\n"
+                f"[dim](已保存至 debug/{debug_filename})[/dim]\n"
             )
 
         # Step 5: Claude report
@@ -718,7 +720,6 @@ def main() -> None:
 
         # Step 6: PDF
         console.rule("[bold]Step 6  导出 PDF")
-        recording_date = _get_report_date()
         console.print(f"[green]日报日期:[/green] [cyan]{recording_date}[/cyan]\n")
         pdf_path = _get_pdf_path(recording_date)
         convert_to_pdf(report_markdown, pdf_path)
