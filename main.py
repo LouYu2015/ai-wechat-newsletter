@@ -30,7 +30,7 @@ import markdown as md_lib
 from markdown.extensions.toc import TocExtension
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-DOWNLOADS_DIR = Path("/Users/louyu/Downloads")
+DOWNLOADS_DIR = Path.home() / "Downloads"
 OUTPUT_DIR = Path.cwd()
 GEMINI_MODEL = "gemini-2.5-flash"
 CLAUDE_MODEL = "claude-opus-4-6"
