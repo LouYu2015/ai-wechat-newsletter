@@ -4,6 +4,7 @@ WeChat Group Chat Daily Report Generator
 Processes a WeChat screen recording and generates an AI-powered daily report.
 """
 
+import argparse
 import os
 import re
 import sys
@@ -33,9 +34,10 @@ from markdown.extensions.toc import TocExtension
 DOWNLOADS_DIR = Path.home() / "Downloads"
 OUTPUT_DIR = Path.cwd()
 GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_SUMMARY_MODEL = "gemini-3.0-pro"
 CLAUDE_MODEL = "claude-opus-4-6"
 
-CLAUDE_SYSTEM_PROMPT = """为以下群聊消息编写一个每日总结，让对 AI 前沿发展感兴趣的人士了解群里的最新动态。总结中要包含具体的群友名称。其中重点关注最新的行业新闻， AI 工具和方法论。
+SUMMARY_PROMPT = """为以下群聊消息编写一个每日总结，让对 AI 前沿发展感兴趣的人士了解群里的最新动态。总结中要包含具体的群友名称。其中重点关注最新的行业新闻， AI 工具和方法论。
 
 新闻要包括：
 新闻要点
@@ -80,7 +82,7 @@ console = Console()
 
 # ── API Key Management ─────────────────────────────────────────────────────────
 
-def load_or_prompt_api_keys() -> tuple[str, str]:
+def load_or_prompt_api_keys(need_anthropic: bool = False) -> tuple[str, str]:
     """Load API keys from .env or prompt user and save them."""
     env_path = Path(".env")
     load_dotenv(env_path)
@@ -93,7 +95,7 @@ def load_or_prompt_api_keys() -> tuple[str, str]:
         console.print("[yellow]需要 Gemini API Key（将保存到 .env 文件）[/yellow]")
         gemini_key = console.input("[bold]请输入 GEMINI_API_KEY: [/bold]").strip()
         changed = True
-    if not anthropic_key:
+    if need_anthropic and not anthropic_key:
         console.print("[yellow]需要 Anthropic API Key（将保存到 .env 文件）[/yellow]")
         anthropic_key = console.input("[bold]请输入 ANTHROPIC_API_KEY: [/bold]").strip()
         changed = True
@@ -106,7 +108,8 @@ def load_or_prompt_api_keys() -> tuple[str, str]:
             and not line.startswith("ANTHROPIC_API_KEY=")
         ]
         lines.append(f"GEMINI_API_KEY={gemini_key}")
-        lines.append(f"ANTHROPIC_API_KEY={anthropic_key}")
+        if anthropic_key:
+            lines.append(f"ANTHROPIC_API_KEY={anthropic_key}")
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         console.print("[green]API Keys 已保存到 .env[/green]")
 
@@ -363,20 +366,79 @@ def extract_chat_with_gemini(video_path: Path, api_key: str) -> str:
     return extracted_text
 
 
-# ── Claude Report Generation ───────────────────────────────────────────────────
+# ── Gemini Report Generation ───────────────────────────────────────────────────
+
+def generate_report_with_gemini(chat_history: str, api_key: str) -> str:
+    """Generate daily report using Gemini with streaming and retry on errors."""
+    from google import genai as google_genai
+    from google.genai import types
+
+    client = google_genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=300000),
+    )
+
+    prompt = f"{SUMMARY_PROMPT}\n\n--- 聊天记录 ---\n\n{chat_history}"
+
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        report_text = ""
+        char_count = 0
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]Gemini 正在生成日报..."),
+            TextColumn("[dim]{task.description}[/dim]"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            attempt_label = f" (第 {attempt}/{max_retries} 次)" if attempt > 1 else ""
+            task = progress.add_task(f"0 字{attempt_label}", total=None)
+
+            try:
+                response_stream = client.models.generate_content_stream(
+                    model=GEMINI_SUMMARY_MODEL,
+                    contents=[types.Part.from_text(text=prompt)],
+                    config=types.GenerateContentConfig(
+                        temperature=0.7,
+                        max_output_tokens=65536,
+                    ),
+                )
+
+                for chunk in response_stream:
+                    if chunk.text:
+                        report_text += chunk.text
+                        char_count += len(chunk.text)
+                        progress.update(task, description=f"{char_count:,} 字已生成{attempt_label}")
+
+                return report_text  # success
+
+            except Exception as e:
+                if attempt < max_retries:
+                    wait = 10 * attempt
+                    console.print(
+                        f"[yellow]Gemini 请求失败 ({e.__class__.__name__})，"
+                        f"{wait}s 后重试 ({attempt}/{max_retries})...[/yellow]"
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
+
+    return report_text  # unreachable, satisfies type checker
+
 
 def generate_report_with_claude(chat_history: str, api_key: str) -> str:
     """Generate daily report using Claude with streaming and retry on connection errors."""
     import anthropic
     import httpx
 
-    # Set generous timeouts: 30s connect, 10min read (large input + long generation)
     client = anthropic.Anthropic(
         api_key=api_key,
         timeout=httpx.Timeout(600.0, connect=30.0),
     )
 
-    user_message = f"{CLAUDE_SYSTEM_PROMPT}\n\n--- 聊天记录 ---\n\n{chat_history}"
+    user_message = f"{SUMMARY_PROMPT}\n\n--- 聊天记录 ---\n\n{chat_history}"
 
     max_retries = 3
     for attempt in range(1, max_retries + 1):
@@ -410,7 +472,6 @@ def generate_report_with_claude(chat_history: str, api_key: str) -> str:
             except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError,
                     anthropic.APIStatusError) as e:
                 if attempt < max_retries:
-                    # Overloaded errors (529) need a longer back-off
                     wait = 30 if isinstance(e, anthropic.APIStatusError) else 5 * attempt
                     console.print(
                         f"[yellow]Claude 请求失败 ({e.__class__.__name__})，"
@@ -665,6 +726,13 @@ def convert_to_pdf(markdown_text: str, output_path: Path) -> None:
 # ── Main Pipeline ──────────────────────────────────────────────────────────────
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="微信群聊日报生成器")
+    parser.add_argument(
+        "--summary", choices=["gemini", "claude"], default="claude",
+        help="总结模型：claude（默认，claude-opus-4-6）或 gemini（gemini-3.0-pro）",
+    )
+    args = parser.parse_args()
+
     console.print(Panel.fit(
         "[bold cyan]微信群聊日报生成器[/bold cyan]\n"
         "[dim]WeChat Group Chat Daily Report Generator[/dim]",
@@ -674,45 +742,61 @@ def main() -> None:
     try:
         # Step 1: API Keys
         console.rule("[bold]Step 1  API Key 配置")
-        gemini_key, anthropic_key = load_or_prompt_api_keys()
+        gemini_key, anthropic_key = load_or_prompt_api_keys(need_anthropic=(args.summary == "claude"))
         console.print("[green]API Keys 就绪[/green]\n")
 
-        # Step 2: Find video
-        console.rule("[bold]Step 2  查找屏幕录像")
-        video_path = find_latest_screen_recording()
-        size_mb = video_path.stat().st_size / 1024 / 1024
-        console.print(
-            f"[green]找到文件:[/green] [cyan]{video_path.name}[/cyan] "
-            f"[dim]({size_mb:.1f} MB)[/dim]"
-        )
+        # Determine date early so we can check for a cached debug file
+        recording_date = _get_report_date()
+        debug_dir = OUTPUT_DIR / "debug"
+        debug_dir.mkdir(exist_ok=True)
+        debug_filename = f"gemini_output_{recording_date}.txt"
+        debug_file = debug_dir / debug_filename
 
         chat_history = ""
 
-        with temp_directory() as tmpdir:
-            # Step 3: Slow down video
-            console.rule("[bold]Step 3  视频处理 (5x 减速)")
-            slowed_path = tmpdir / "slowed_recording.mp4"
-            slow_down_video(video_path, slowed_path)
-            slowed_mb = slowed_path.stat().st_size / 1024 / 1024
-            console.print(f"[green]减速视频已生成[/green] [dim]({slowed_mb:.1f} MB)[/dim]\n")
-
-            # Step 4: Gemini extraction
-            console.rule("[bold]Step 4  Gemini 提取聊天记录")
-            chat_history = extract_chat_with_gemini(slowed_path, gemini_key)
-            recording_date = _get_report_date()
-            debug_dir = OUTPUT_DIR / "debug"
-            debug_dir.mkdir(exist_ok=True)
-            debug_filename = f"gemini_output_{recording_date}.txt"
-            (debug_dir / debug_filename).write_text(chat_history, encoding="utf-8")
+        if debug_file.exists():
+            # Skip video processing — use cached extraction result
+            console.rule("[bold]Step 2  使用缓存的聊天记录")
+            chat_history = debug_file.read_text(encoding="utf-8")
             console.print(
-                f"[green]聊天记录提取完毕[/green] "
-                f"[dim]{len(chat_history):,} 字符[/dim] "
-                f"[dim](已保存至 debug/{debug_filename})[/dim]\n"
+                f"[green]已加载缓存文件:[/green] [cyan]debug/{debug_filename}[/cyan] "
+                f"[dim]({len(chat_history):,} 字符)[/dim]\n"
+            )
+        else:
+            # Step 2: Find video
+            console.rule("[bold]Step 2  查找屏幕录像")
+            video_path = find_latest_screen_recording()
+            size_mb = video_path.stat().st_size / 1024 / 1024
+            console.print(
+                f"[green]找到文件:[/green] [cyan]{video_path.name}[/cyan] "
+                f"[dim]({size_mb:.1f} MB)[/dim]"
             )
 
-        # Step 5: Claude report
-        console.rule("[bold]Step 5  Claude 生成日报")
-        report_markdown = generate_report_with_claude(chat_history, anthropic_key)
+            with temp_directory() as tmpdir:
+                # Step 3: Slow down video
+                console.rule("[bold]Step 3  视频处理 (5x 减速)")
+                slowed_path = tmpdir / "slowed_recording.mp4"
+                slow_down_video(video_path, slowed_path)
+                slowed_mb = slowed_path.stat().st_size / 1024 / 1024
+                console.print(f"[green]减速视频已生成[/green] [dim]({slowed_mb:.1f} MB)[/dim]\n")
+
+                # Step 4: Gemini extraction
+                console.rule("[bold]Step 4  Gemini 提取聊天记录")
+                chat_history = extract_chat_with_gemini(slowed_path, gemini_key)
+                (debug_dir / debug_filename).write_text(chat_history, encoding="utf-8")
+                console.print(
+                    f"[green]聊天记录提取完毕[/green] "
+                    f"[dim]{len(chat_history):,} 字符[/dim] "
+                    f"[dim](已保存至 debug/{debug_filename})[/dim]\n"
+                )
+
+        # Step 5: Generate report
+        if args.summary == "claude":
+            console.rule(f"[bold]Step 5  Claude 生成日报 [dim]({CLAUDE_MODEL})[/dim]")
+            report_markdown = generate_report_with_claude(chat_history, anthropic_key)
+        else:
+            console.rule(f"[bold]Step 5  Gemini 生成日报 [dim]({GEMINI_SUMMARY_MODEL})[/dim]")
+            report_markdown = generate_report_with_gemini(chat_history, gemini_key)
         console.print(
             f"[green]日报生成完毕[/green] "
             f"[dim]{len(report_markdown):,} 字符[/dim]\n"
