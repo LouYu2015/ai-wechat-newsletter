@@ -19,6 +19,7 @@ import fractions
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -39,7 +40,13 @@ GEMINI_SUMMARY_MODEL = "gemini-3.0-pro"
 CLAUDE_MODEL = "claude-opus-4-6"
 
 # ── Database Constants ──────────────────────────────────────────────────────────
-CHATLOG_DIR = Path.home() / "Documents/chatlog"
+CHATLOG_DIR = Path.home() / "Documents/chatlog"          # pre-decrypted fallback
+CHATLOG_MAC_DIR = Path(__file__).parent / "chatlog-mac"  # keys.json lives here
+WECHAT_DATA_DIR = (
+    Path.home()
+    / "Library/Containers/com.tencent.xinWeChat"
+    / "Data/Documents/xwechat_files"
+)
 GROUP_CHAT_ID = "26389512912@chatroom"
 # MD5 of GROUP_CHAT_ID (echo -n "26389512912@chatroom" | md5)
 GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
@@ -140,6 +147,78 @@ def load_or_prompt_api_keys(need_anthropic: bool = False) -> tuple[str, str]:
     return gemini_key, anthropic_key
 
 
+# ── Encrypted DB Connection ────────────────────────────────────────────────────
+
+# Module-level connection cache (rel_path → connection object)
+_db_conns: dict[str, Any] = {}
+
+
+def _find_db_storage() -> Path | None:
+    """Return the WeChat db_storage directory, or None if not found."""
+    if not WECHAT_DATA_DIR.exists():
+        return None
+    result = subprocess.run(
+        ['find', str(WECHAT_DATA_DIR), '-name', 'db_storage', '-type', 'd',
+         '-maxdepth', '5'],
+        capture_output=True, text=True, timeout=5,
+    )
+    first = result.stdout.strip().split('\n')[0]
+    return Path(first) if first else None
+
+
+def _get_conn(rel_path: str) -> Any:
+    """Return a (cached) DB connection for *rel_path*.
+
+    Priority:
+    1. Encrypted source via sqlcipher3 (never writes to disk)
+    2. Pre-decrypted file in ~/Documents/chatlog/ (fallback)
+
+    Raises FileNotFoundError if neither is available.
+    """
+    if rel_path in _db_conns:
+        return _db_conns[rel_path]
+
+    # ── Try encrypted source ──────────────────────────────────────────────
+    keys_file = CHATLOG_MAC_DIR / "keys.json"
+    if keys_file.exists():
+        try:
+            import sqlcipher3
+            keys = json.loads(keys_file.read_text())
+            if rel_path in keys:
+                db_storage = _find_db_storage()
+                if db_storage:
+                    src = db_storage / rel_path
+                    if src.exists():
+                        enc_key = keys[rel_path]['enc_key']
+                        conn = sqlcipher3.connect(str(src))
+                        conn.execute(f"PRAGMA key = \"x'{enc_key}'\"")
+                        conn.execute("PRAGMA cipher_page_size = 4096")
+                        conn.execute("PRAGMA cipher_compatibility = 4")
+                        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+                        _db_conns[rel_path] = conn
+                        console.print(
+                            f"[dim]已连接加密源: {rel_path}[/dim]"
+                        )
+                        return conn
+        except Exception as exc:
+            console.print(
+                f"[yellow]加密连接失败 ({rel_path}): {exc}，回退到已解密文件[/yellow]"
+            )
+
+    # ── Fallback: pre-decrypted file ──────────────────────────────────────
+    dec = CHATLOG_DIR / rel_path
+    if dec.exists():
+        conn = sqlite3.connect(str(dec))
+        _db_conns[rel_path] = conn
+        console.print(f"[dim]使用已解密文件: {rel_path}[/dim]")
+        return conn
+
+    raise FileNotFoundError(
+        f"找不到数据库 {rel_path}。\n"
+        "请确保 chatlog-mac/keys.json 存在，或先运行 decrypt_wechat.sh 解密。"
+    )
+
+
 # ── Database Chat Extraction ───────────────────────────────────────────────────
 
 def _decompress_if_needed(data) -> str:
@@ -198,17 +277,13 @@ def _format_quoted(refermsg: str) -> str:
 
 def _load_contact_map() -> dict[str, str]:
     """Return a dict mapping WeChat username → display nickname."""
-    contact_db = CHATLOG_DIR / "contact/contact.db"
-    conn = sqlite3.connect(str(contact_db))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT username, nick_name FROM contact "
-            "WHERE nick_name IS NOT NULL AND nick_name != ''"
-        )
-        return {row[0]: row[1] for row in cur.fetchall()}
-    finally:
-        conn.close()
+    conn = _get_conn("contact/contact.db")
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT username, nick_name FROM contact "
+        "WHERE nick_name IS NOT NULL AND nick_name != ''"
+    )
+    return {row[0]: row[1] for row in cur.fetchall()}
 
 
 def extract_chat_from_db(date_str: str) -> str:
@@ -221,33 +296,27 @@ def extract_chat_from_db(date_str: str) -> str:
     end_ts   = int((date + timedelta(days=1, hours=1)).timestamp())
 
     # Collect rows from both shards; newer messages live in message_0.db
-    db_files = [
-        CHATLOG_DIR / "message/message_0.db",
-        CHATLOG_DIR / "message/message_1.db",
-    ]
     rows: list[tuple] = []
-    for db_file in db_files:
-        if not db_file.exists():
-            continue
-        conn = sqlite3.connect(str(db_file))
+    for rel in ["message/message_0.db", "message/message_1.db"]:
         try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT name FROM sqlite_master "
-                f"WHERE type='table' AND name='{GROUP_TABLE}'"
-            )
-            if not cur.fetchone():
-                continue
-            cur.execute(
-                f"SELECT create_time, local_type, message_content "
-                f"FROM {GROUP_TABLE} "
-                f"WHERE create_time >= ? AND create_time < ? "
-                f"ORDER BY create_time",
-                (start_ts, end_ts),
-            )
-            rows.extend(cur.fetchall())
-        finally:
-            conn.close()
+            conn = _get_conn(rel)
+        except FileNotFoundError:
+            continue
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT name FROM sqlite_master "
+            f"WHERE type='table' AND name='{GROUP_TABLE}'"
+        )
+        if not cur.fetchone():
+            continue
+        cur.execute(
+            f"SELECT create_time, local_type, message_content "
+            f"FROM {GROUP_TABLE} "
+            f"WHERE create_time >= ? AND create_time < ? "
+            f"ORDER BY create_time",
+            (start_ts, end_ts),
+        )
+        rows.extend(cur.fetchall())
 
     rows.sort(key=lambda x: x[0])
 
@@ -364,25 +433,22 @@ def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
 
     # Latest message timestamp across all DB shards
     last_ts = 0
-    for db_file in [CHATLOG_DIR / "message/message_0.db",
-                    CHATLOG_DIR / "message/message_1.db"]:
-        if not db_file.exists():
-            continue
-        conn = sqlite3.connect(str(db_file))
+    for rel in ["message/message_0.db", "message/message_1.db"]:
         try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT name FROM sqlite_master "
-                f"WHERE type='table' AND name='{GROUP_TABLE}'"
-            )
-            if not cur.fetchone():
-                continue
-            cur.execute(f"SELECT MAX(create_time) FROM {GROUP_TABLE}")
-            row = cur.fetchone()
-            if row and row[0]:
-                last_ts = max(last_ts, row[0])
-        finally:
-            conn.close()
+            conn = _get_conn(rel)
+        except FileNotFoundError:
+            continue
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT name FROM sqlite_master "
+            f"WHERE type='table' AND name='{GROUP_TABLE}'"
+        )
+        if not cur.fetchone():
+            continue
+        cur.execute(f"SELECT MAX(create_time) FROM {GROUP_TABLE}")
+        row = cur.fetchone()
+        if row and row[0]:
+            last_ts = max(last_ts, row[0])
 
     if not last_ts:
         return []

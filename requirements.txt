@@ -4,3 +4,4 @@ rich>=13.0.0
 python-dotenv>=1.0.0
 markdown>=3.6
 weasyprint>=60.0
+sqlcipher3>=0.6.2
