@@ -12,6 +12,7 @@ import glob
 import json
 import time
 import shutil
+import sqlite3
 import tempfile
 import subprocess
 import fractions
@@ -36,6 +37,29 @@ OUTPUT_DIR = Path.cwd()
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_SUMMARY_MODEL = "gemini-3.0-pro"
 CLAUDE_MODEL = "claude-opus-4-6"
+
+# ── Database Constants ──────────────────────────────────────────────────────────
+CHATLOG_DIR = Path.home() / "Documents/chatlog"
+GROUP_CHAT_ID = "26389512912@chatroom"
+# MD5 of GROUP_CHAT_ID (echo -n "26389512912@chatroom" | md5)
+GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
+
+# local_type values
+_MSG_TEXT     = 1
+_MSG_IMAGE    = 3
+_MSG_VOICE    = 34
+_MSG_VIDEO    = 43
+_MSG_STICKER  = 47
+_MSG_CARD     = 42
+_MSG_SYSTEM   = 10000
+_MSG_QUOTE    = 244813135921   # AppMsg subtype=57 (quoted reply)
+_MSG_LINK_OPEN = 4294967345   # AppMsg subtype=1
+_MSG_LINK_CARD = 21474836529  # AppMsg subtype=5
+_MSG_FILE     = 25769803825   # AppMsg subtype=6
+_MSG_GIF      = 34359738417   # AppMsg subtype=8
+_MSG_FORWARD  = 81604378673   # AppMsg subtype=19
+_MSG_MINIAPP  = 154618822705  # AppMsg subtype=36
+_MSG_TAP      = 266287972401  # AppMsg subtype=62
 
 SUMMARY_PROMPT = """为以下群聊消息编写一个每日总结，让对 AI 前沿发展感兴趣的人士了解群里的最新动态。总结中要包含具体的群友名称。其中重点关注最新的行业新闻， AI 工具和方法论。
 
@@ -114,6 +138,268 @@ def load_or_prompt_api_keys(need_anthropic: bool = False) -> tuple[str, str]:
         console.print("[green]API Keys 已保存到 .env[/green]")
 
     return gemini_key, anthropic_key
+
+
+# ── Database Chat Extraction ───────────────────────────────────────────────────
+
+def _decompress_if_needed(data) -> str:
+    """Decompress zstd-compressed message content or return as string."""
+    if isinstance(data, bytes) and data[:4] == b'\x28\xb5\x2f\xfd':
+        result = subprocess.run(
+            ['zstd', '-d', '-', '--stdout'],
+            input=data, capture_output=True,
+        )
+        return result.stdout.decode('utf-8', errors='replace')
+    if isinstance(data, bytes):
+        return data.decode('utf-8', errors='replace')
+    return data or ''
+
+
+def _parse_sender_content(raw: str) -> tuple[str, str]:
+    """Parse 'sender_id:\\ncontent' format. Returns (sender_id, content)."""
+    pos = raw.find(':\n')
+    if pos > 0:
+        candidate = raw[:pos]
+        if ' ' not in candidate and len(candidate) < 60:
+            return candidate, raw[pos + 2:]
+    return '', raw
+
+
+def _xml_text(xml_str: str, tag: str) -> str:
+    """Extract first matching tag's text content from an XML string."""
+    m = re.search(rf'<{tag}>(.*?)</{tag}>', xml_str, re.DOTALL)
+    return m.group(1).strip() if m else ''
+
+
+def _format_quoted(refermsg: str) -> str:
+    """Render a <refermsg> block as a short readable string."""
+    ref_type = _xml_text(refermsg, 'type')
+    displayname = _xml_text(refermsg, 'displayname')
+    content = _xml_text(refermsg, 'content')
+    prefix = f"{displayname}: " if displayname else ""
+
+    if ref_type == '1':
+        text = content[:100] + ('…' if len(content) > 100 else '')
+        return prefix + text
+    elif ref_type == '3':
+        return prefix + '[图片]'
+    elif ref_type == '34':
+        return prefix + '[语音]'
+    elif ref_type == '43':
+        return prefix + '[视频]'
+    elif ref_type == '47':
+        return prefix + '[表情包]'
+    elif ref_type == '49':
+        title = _xml_text(content, 'title') if content else ''
+        return prefix + (title if title else '[消息]')
+    else:
+        return prefix + '[消息]'
+
+
+def _load_contact_map() -> dict[str, str]:
+    """Return a dict mapping WeChat username → display nickname."""
+    contact_db = CHATLOG_DIR / "contact/contact.db"
+    conn = sqlite3.connect(str(contact_db))
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT username, nick_name FROM contact "
+            "WHERE nick_name IS NOT NULL AND nick_name != ''"
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def extract_chat_from_db(date_str: str) -> str:
+    """Extract and format messages for *date_str* (YYYY-MM-DD) ±1 hour from SQLite."""
+    contact_map = _load_contact_map()
+
+    # Time window: 23:00 of previous day → 01:00 of next day
+    date = datetime.strptime(date_str, '%Y-%m-%d')
+    start_ts = int((date - timedelta(hours=1)).timestamp())
+    end_ts   = int((date + timedelta(days=1, hours=1)).timestamp())
+
+    # Collect rows from both shards; newer messages live in message_0.db
+    db_files = [
+        CHATLOG_DIR / "message/message_0.db",
+        CHATLOG_DIR / "message/message_1.db",
+    ]
+    rows: list[tuple] = []
+    for db_file in db_files:
+        if not db_file.exists():
+            continue
+        conn = sqlite3.connect(str(db_file))
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT name FROM sqlite_master "
+                f"WHERE type='table' AND name='{GROUP_TABLE}'"
+            )
+            if not cur.fetchone():
+                continue
+            cur.execute(
+                f"SELECT create_time, local_type, message_content "
+                f"FROM {GROUP_TABLE} "
+                f"WHERE create_time >= ? AND create_time < ? "
+                f"ORDER BY create_time",
+                (start_ts, end_ts),
+            )
+            rows.extend(cur.fetchall())
+        finally:
+            conn.close()
+
+    rows.sort(key=lambda x: x[0])
+
+    lines: list[str] = []
+    for create_time, local_type, message_content in rows:
+        ts = datetime.fromtimestamp(create_time).strftime('%H:%M')
+        raw = _decompress_if_needed(message_content)
+
+        if local_type == _MSG_TEXT:
+            sender_id, content = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id)
+            content = content.strip()
+            if name and content:
+                lines.append(f"[{ts}] {name}: {content}")
+
+        elif local_type == _MSG_QUOTE:
+            sender_id, xml = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id)
+            title = _xml_text(xml, 'title').strip()
+            if name and title:
+                line = f"[{ts}] {name}: {title}"
+                refermsg_m = re.search(r'<refermsg>(.*?)</refermsg>', xml, re.DOTALL)
+                if refermsg_m:
+                    line += f"\n  > 引用 {_format_quoted(refermsg_m.group(1))}"
+                lines.append(line)
+
+        elif local_type == _MSG_TAP:
+            # No sender prefix; title contains the full "A 拍了拍 B" string
+            title = _xml_text(raw, 'title').strip()
+            if title:
+                lines.append(f"[{ts}] {title}")
+
+        elif local_type == _MSG_SYSTEM:
+            text = raw.strip()
+            if text:
+                lines.append(f"[{ts}] [系统] {text}")
+
+        elif local_type in (_MSG_LINK_CARD, _MSG_LINK_OPEN):
+            sender_id, xml = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id) or sender_id
+            title = _xml_text(xml, 'title')
+            prefix = f"[{ts}] {name}: " if name else f"[{ts}] "
+            lines.append(prefix + ("[链接] " + title if title else "[链接]"))
+
+        elif local_type == _MSG_FILE:
+            sender_id, xml = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id) or sender_id
+            title = _xml_text(xml, 'title')
+            prefix = f"[{ts}] {name}: " if name else f"[{ts}] "
+            lines.append(prefix + ("[文件] " + title if title else "[文件]"))
+
+        elif local_type == _MSG_FORWARD:
+            sender_id, xml = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id) or sender_id
+            title = _xml_text(xml, 'title')
+            prefix = f"[{ts}] {name}: " if name else f"[{ts}] "
+            lines.append(prefix + ("[合并转发] " + title if title else "[合并转发]"))
+
+        elif local_type == _MSG_MINIAPP:
+            sender_id, xml = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id) or sender_id
+            title = _xml_text(xml, 'title')
+            prefix = f"[{ts}] {name}: " if name else f"[{ts}] "
+            lines.append(prefix + ("[小程序] " + title if title else "[小程序]"))
+
+        elif local_type == _MSG_IMAGE:
+            sender_id, _ = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id)
+            if name:
+                lines.append(f"[{ts}] {name}: [图片]")
+
+        elif local_type == _MSG_VOICE:
+            sender_id, _ = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id)
+            if name:
+                lines.append(f"[{ts}] {name}: [语音]")
+
+        elif local_type == _MSG_VIDEO:
+            sender_id, _ = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id)
+            if name:
+                lines.append(f"[{ts}] {name}: [视频]")
+
+        elif local_type == _MSG_STICKER:
+            sender_id, _ = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id)
+            if name:
+                lines.append(f"[{ts}] {name}: [表情包]")
+
+        elif local_type in (_MSG_CARD, _MSG_GIF):
+            sender_id, _ = _parse_sender_content(raw)
+            name = contact_map.get(sender_id, sender_id)
+            label = '[名片]' if local_type == _MSG_CARD else '[GIF]'
+            if name:
+                lines.append(f"[{ts}] {name}: {label}")
+
+    return '\n'.join(lines)
+
+
+def find_missing_dates() -> list[str]:
+    """Return sorted list of dates (YYYY-MM-DD) that lack an archive PDF."""
+    # Existing archive dates
+    archive_dir = OUTPUT_DIR / "archive"
+    existing: set[str] = set()
+    if archive_dir.exists():
+        for pdf in archive_dir.glob("*.pdf"):
+            m = re.match(r'^(\d{4}-\d{2}-\d{2})\b', pdf.stem)
+            if m:
+                existing.add(m.group(1))
+
+    # Latest message timestamp across all DB shards
+    last_ts = 0
+    for db_file in [CHATLOG_DIR / "message/message_0.db",
+                    CHATLOG_DIR / "message/message_1.db"]:
+        if not db_file.exists():
+            continue
+        conn = sqlite3.connect(str(db_file))
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT name FROM sqlite_master "
+                f"WHERE type='table' AND name='{GROUP_TABLE}'"
+            )
+            if not cur.fetchone():
+                continue
+            cur.execute(f"SELECT MAX(create_time) FROM {GROUP_TABLE}")
+            row = cur.fetchone()
+            if row and row[0]:
+                last_ts = max(last_ts, row[0])
+        finally:
+            conn.close()
+
+    if not last_ts:
+        return []
+
+    # A day D is complete when the DB contains a message at D+1 01:00 or later.
+    # Equivalent: (last_message_time - 1h).date() - 1 day
+    last_dt = datetime.fromtimestamp(last_ts)
+    last_complete = (last_dt - timedelta(hours=1)).date() - timedelta(days=1)
+
+    if not existing:
+        return [last_complete.strftime('%Y-%m-%d')]
+
+    max_archive = datetime.strptime(max(existing), '%Y-%m-%d').date()
+    missing: list[str] = []
+    current = max_archive + timedelta(days=1)
+    while current <= last_complete:
+        date_str = current.strftime('%Y-%m-%d')
+        if date_str not in existing:
+            missing.append(date_str)
+        current += timedelta(days=1)
+    return missing
 
 
 # ── Video Discovery ────────────────────────────────────────────────────────────
@@ -725,11 +1011,46 @@ def convert_to_pdf(markdown_text: str, output_path: Path) -> None:
 
 # ── Main Pipeline ──────────────────────────────────────────────────────────────
 
+def _run_db_pipeline(date_str: str, summary_model: str,
+                     gemini_key: str, anthropic_key: str) -> None:
+    """Extract from DB for *date_str*, generate report, and save PDF."""
+    # Step A: Extract from database
+    console.rule(f"[bold]数据库提取  [cyan]{date_str}[/cyan]")
+    chat_history = extract_chat_from_db(date_str)
+    console.print(
+        f"[green]提取完毕[/green] "
+        f"[dim]{len(chat_history):,} 字符，"
+        f"{chat_history.count(chr(10)) + 1} 行[/dim]\n"
+    )
+    if not chat_history.strip():
+        console.print(f"[yellow]  {date_str} 当天无消息，跳过[/yellow]")
+        return
+
+    # Step B: Generate report
+    if summary_model == "claude":
+        console.rule(f"[bold]Claude 生成日报  [dim]({CLAUDE_MODEL})[/dim]")
+        report_markdown = generate_report_with_claude(chat_history, anthropic_key)
+    else:
+        console.rule(f"[bold]Gemini 生成日报  [dim]({GEMINI_SUMMARY_MODEL})[/dim]")
+        report_markdown = generate_report_with_gemini(chat_history, gemini_key)
+    console.print(f"[green]日报生成完毕[/green] [dim]{len(report_markdown):,} 字符[/dim]\n")
+
+    # Step C: PDF
+    console.rule("[bold]导出 PDF")
+    pdf_path = _get_pdf_path(date_str)
+    convert_to_pdf(report_markdown, pdf_path)
+    console.print(f"[green]已保存:[/green] [cyan]{pdf_path}[/cyan]\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="微信群聊日报生成器")
     parser.add_argument(
         "--summary", choices=["gemini", "claude"], default="claude",
         help="总结模型：claude（默认，claude-opus-4-6）或 gemini（gemini-3.0-pro）",
+    )
+    parser.add_argument(
+        "--video", action="store_true",
+        help="使用屏幕录像 + Gemini OCR 模式（默认为数据库模式）",
     )
     args = parser.parse_args()
 
@@ -744,6 +1065,30 @@ def main() -> None:
         console.rule("[bold]Step 1  API Key 配置")
         gemini_key, anthropic_key = load_or_prompt_api_keys(need_anthropic=(args.summary == "claude"))
         console.print("[green]API Keys 就绪[/green]\n")
+
+        # ── DB mode (default) ─────────────────────────────────────────────────
+        if not args.video:
+            console.rule("[bold]Step 2  检测缺失日期")
+            missing = find_missing_dates()
+            if not missing:
+                console.print("[green]archive 已是最新，无需生成新日报。[/green]")
+                return
+            console.print(
+                f"发现 [cyan]{len(missing)}[/cyan] 个缺失日期: "
+                + ", ".join(f"[cyan]{d}[/cyan]" for d in missing) + "\n"
+            )
+            for date_str in missing:
+                _run_db_pipeline(date_str, args.summary, gemini_key, anthropic_key)
+
+            console.print(Panel.fit(
+                f"[bold green]完成！[/bold green]\n"
+                f"共生成 [cyan]{len(missing)}[/cyan] 份日报",
+                border_style="green",
+                title="Success",
+            ))
+            return
+
+        # ── Video mode (opt-in with --video) ─────────────────────────────────
 
         # Determine date early so we can check for a cached debug file
         recording_date = _get_report_date()
