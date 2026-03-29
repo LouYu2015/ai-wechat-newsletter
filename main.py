@@ -347,8 +347,12 @@ def extract_chat_from_db(date_str: str) -> str:
     return '\n'.join(lines)
 
 
-def find_missing_dates() -> list[str]:
-    """Return sorted list of dates (YYYY-MM-DD) that lack an archive PDF."""
+def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
+    """Return sorted list of dates (YYYY-MM-DD) that lack an archive PDF.
+
+    If *allow_incomplete* is True, also include the last day in the DB even
+    if it hasn't reached the midnight + 1h threshold.
+    """
     # Existing archive dates
     archive_dir = OUTPUT_DIR / "archive"
     existing: set[str] = set()
@@ -387,6 +391,8 @@ def find_missing_dates() -> list[str]:
     # Equivalent: (last_message_time - 1h).date() - 1 day
     last_dt = datetime.fromtimestamp(last_ts)
     last_complete = (last_dt - timedelta(hours=1)).date() - timedelta(days=1)
+    if allow_incomplete:
+        last_complete = max(last_complete, last_dt.date())
 
     if not existing:
         return [last_complete.strftime('%Y-%m-%d')]
@@ -1052,6 +1058,10 @@ def main() -> None:
         "--video", action="store_true",
         help="使用屏幕录像 + Gemini OCR 模式（默认为数据库模式）",
     )
+    parser.add_argument(
+        "--allow-incomplete", action="store_true",
+        help="也为最后一天（尚未过午夜+1小时）生成不完整日报",
+    )
     args = parser.parse_args()
 
     console.print(Panel.fit(
@@ -1069,7 +1079,7 @@ def main() -> None:
         # ── DB mode (default) ─────────────────────────────────────────────────
         if not args.video:
             console.rule("[bold]Step 2  检测缺失日期")
-            missing = find_missing_dates()
+            missing = find_missing_dates(allow_incomplete=args.allow_incomplete)
             if not missing:
                 console.print("[green]archive 已是最新，无需生成新日报。[/green]")
                 return
