@@ -426,7 +426,7 @@ def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
     archive_dir = OUTPUT_DIR / "archive"
     existing: set[str] = set()
     if archive_dir.exists():
-        for pdf in archive_dir.glob("*.pdf"):
+        for pdf in archive_dir.rglob("*.pdf"):
             m = re.match(r'^(\d{4}-\d{2}-\d{2})\b', pdf.stem)
             if m:
                 existing.add(m.group(1))
@@ -1020,6 +1020,38 @@ def _get_report_date() -> str:
     return now.strftime("%Y-%m-%d")
 
 
+def archive_old_files() -> None:
+    """Move PDFs older than 7 days from archive/ into archive/YYYY/MM/ subdirs."""
+    archive_dir = OUTPUT_DIR / "archive"
+    if not archive_dir.exists():
+        return
+
+    cutoff = (datetime.now() - timedelta(days=7)).date()
+    moved = 0
+
+    for pdf in sorted(archive_dir.glob("*.pdf")):
+        m = re.match(r'^(\d{4}-\d{2}-\d{2})\b', pdf.stem)
+        if not m:
+            continue
+        file_date = datetime.strptime(m.group(1), '%Y-%m-%d').date()
+        if file_date >= cutoff:
+            continue
+
+        dest_dir = archive_dir / file_date.strftime('%Y') / file_date.strftime('%m')
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / pdf.name
+        if dest.exists():
+            counter = 2
+            while dest.exists():
+                dest = dest_dir / f"{pdf.stem} ({counter}){pdf.suffix}"
+                counter += 1
+        pdf.rename(dest)
+        moved += 1
+
+    if moved:
+        console.print(f"[dim]已将 {moved} 个旧日报归档至年/月子目录[/dim]")
+
+
 def _get_pdf_path(recording_date: str) -> Path:
     """Return a unique PDF path inside archive/, never overwriting an existing file."""
     archive_dir = OUTPUT_DIR / "archive"
@@ -1144,6 +1176,7 @@ def main() -> None:
 
         # ── DB mode (default) ─────────────────────────────────────────────────
         if not args.video:
+            archive_old_files()
             console.rule("[bold]Step 2  检测缺失日期")
             missing = find_missing_dates(allow_incomplete=args.allow_incomplete)
             if not missing:
