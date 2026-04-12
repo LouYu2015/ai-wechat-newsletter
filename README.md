@@ -1,8 +1,29 @@
 # WeChat 群聊日报生成器
 
-自动处理微信群聊屏幕录像，用 AI 生成每日群聊日报 PDF。
+自动读取微信群聊记录，用 AI 生成每日群聊日报 PDF。
 
-## 功能流程
+## 两种运行模式
+
+### 模式一：数据库模式（默认，推荐）
+
+直接读取 WeChat 本地加密数据库，无需录像。
+
+**前提条件：** 需要 `chatlog-mac/` 目录（含 `keys.json` 解密密钥文件）。该目录因微信版权原因不随代码一起发布。
+
+如果没有 `chatlog-mac/` 或 `keys.json`，请使用下方的录像模式。
+
+**流程：**
+
+1. 自动检测 `archive/` 中缺失的日期
+2. 直接读取 WeChat 加密数据库，提取对应日期的聊天记录
+3. 调用 **Claude** 根据聊天记录生成每日日报（Markdown 格式）
+4. 将日报转换为 PDF（20pt 字体，适合手机阅读）
+
+### 模式二：录像模式（`--video`）
+
+通过屏幕录像 + Gemini OCR 识别聊天内容，无需数据库密钥。
+
+**流程：**
 
 1. 从 `~/Downloads` 读取最新的 `ScreenRecording*` 视频
 2. 用 ffmpeg 将视频减速 5 倍，帧率也降低 5 倍
@@ -51,7 +72,15 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 
 ```bash
 source .venv/bin/activate
+
+# 数据库模式（默认）
 python3 main.py
+
+# 录像模式（无 keys.json 时使用）
+python3 main.py --video
+
+# 也为当天不完整日期生成日报
+python3 main.py --allow-incomplete
 ```
 
 ## 输出
@@ -69,11 +98,11 @@ archive/2026-02-21 群聊日报.pdf
 archive/2026-02-21 群聊日报 (2).pdf
 ```
 
-> **日期逻辑**：若在午夜至凌晨 4 点之间运行，自动使用前一天的日期。
+超过 7 天的文件会自动整理到 `archive/YYYY/MM/` 子目录。
 
-**`debug/`** — Gemini 原始提取结果
+**`debug/`** — Markdown 原文
 
-文件名格式：`gemini_output_YYYY-MM-DD.txt`，保存 Gemini 从视频中提取的聊天记录原文，方便排查提取质量问题。
+文件名格式：`YYYY-MM-DD.md`，保存 AI 生成的日报 Markdown 原文，方便排查内容质量问题。
 
 ## License
 

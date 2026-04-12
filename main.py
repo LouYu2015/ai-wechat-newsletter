@@ -68,7 +68,7 @@ _MSG_FORWARD  = 81604378673   # AppMsg subtype=19
 _MSG_MINIAPP  = 154618822705  # AppMsg subtype=36
 _MSG_TAP      = 266287972401  # AppMsg subtype=62
 
-SUMMARY_PROMPT = """为以下群聊消息编写一个每日总结，让对 AI 前沿发展感兴趣的人士了解群里的最新动态。总结中要包含具体的群友名称。其中重点关注最新的行业新闻， AI 工具和方法论。
+SUMMARY_PROMPT = """为以下群聊消息编写一个每日总结，让对 AI 前沿发展感兴趣的人士了解群里的最新动态。总结中要包含具体的群友名称。其中重点关注最新的行业新闻、AI 工具和方法论，同时也要捕捉群里的人情味与有趣瞬间。
 
 新闻要包括：
 新闻要点
@@ -84,6 +84,16 @@ SUMMARY_PROMPT = """为以下群聊消息编写一个每日总结，让对 AI �
 详细方法论
 群友的代表性例子（包含群友名称）
 
+## 闲聊与花絮
+
+在正文内容之后，必须添加一个"闲聊与花絮"章节，记录当天群里有意思的非专业内容，让读者感受到群里的温度和氛围。这个章节要包含：
+- **有趣的吐槽或玩笑**：群友的幽默发言、梗、双关、让人会心一笑的对话
+- **有意思的闲聊话题**：不属于 AI 行业动态，但引发了热烈讨论或有趣互动的话题
+- **群友的个人分享**：生活经历、踩坑记录、个人小成就等有人情味的内容
+- **精彩的互怼或争论**：观点不同的群友之间轻松的交锋（如有）
+
+写作要求：语气轻松活泼，像朋友之间聊天一样，不必正经。每个小点用 2-4 句话概述，点到为止，不要过度展开。如果当天闲聊内容较少，可以只写 1-2 条；如果没有值得一提的闲聊，可以不写此章节。
+
 文章需要言简意赅，但是保留重要、有用的信息。
 
 所有引用群友观点或发言的地方，必须使用 Markdown 引用框（> 语法），每人一段。例如：
@@ -92,7 +102,7 @@ SUMMARY_PROMPT = """为以下群聊消息编写一个每日总结，让对 AI �
 
 > 某某人：不同意上面的观点，因为"某某原因"
 
-最开始要有一段导读，介绍今天内容的亮点。导读之后，单独一行写 [TOC]，程序将在此处自动插入目录。"""
+最开始要有一段导读，介绍今天内容的亮点（包括有趣的闲聊花絮）。导读之后，单独一行写 [TOC]，程序将在此处自动插入目录。"""
 
 GEMINI_EXTRACTION_PROMPT = """你正在分析一段微信群聊的屏幕录像（已减速处理以便更清晰地查看内容）。
 
@@ -1065,6 +1075,17 @@ def _get_pdf_path(recording_date: str) -> Path:
     return path
 
 
+DEBUG_DIR = Path(__file__).parent / "debug"
+
+
+def save_debug_markdown(date_str: str, markdown_text: str) -> Path:
+    """Save markdown to debug/YYYY-MM-DD.md for inspection."""
+    DEBUG_DIR.mkdir(exist_ok=True)
+    path = DEBUG_DIR / f"{date_str}.md"
+    path.write_text(markdown_text, encoding="utf-8")
+    return path
+
+
 def convert_to_pdf(markdown_text: str, output_path: Path) -> None:
     """Convert Markdown text to PDF with 20pt font and Chinese support."""
     from weasyprint import HTML, CSS
@@ -1143,7 +1164,9 @@ def _run_db_pipeline(date_str: str, summary_model: str,
     console.rule("[bold]导出 PDF")
     pdf_path = _get_pdf_path(date_str)
     convert_to_pdf(report_markdown, pdf_path)
-    console.print(f"[green]已保存:[/green] [cyan]{pdf_path}[/cyan]\n")
+    md_path = save_debug_markdown(date_str, report_markdown)
+    console.print(f"[green]已保存:[/green] [cyan]{pdf_path}[/cyan]")
+    console.print(f"[green]Markdown:[/green] [dim]{md_path}[/dim]\n")
 
 
 def main() -> None:
@@ -1261,6 +1284,8 @@ def main() -> None:
         console.print(f"[green]日报日期:[/green] [cyan]{recording_date}[/cyan]\n")
         pdf_path = _get_pdf_path(recording_date)
         convert_to_pdf(report_markdown, pdf_path)
+        md_path = save_debug_markdown(recording_date, report_markdown)
+        console.print(f"[dim]Markdown: {md_path}[/dim]")
         console.print()
 
         console.print(Panel.fit(

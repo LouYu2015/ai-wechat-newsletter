@@ -6,3 +6,5 @@ __pycache__/
 *.mp4
 /var/folders/
 debug/
+archive/
+chatlog-mac/
