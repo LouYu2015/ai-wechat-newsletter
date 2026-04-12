@@ -31,6 +31,45 @@
 4. 调用 **Claude** 根据聊天记录生成每日日报（Markdown 格式）
 5. 将日报转换为 PDF（20pt 字体，适合手机阅读）
 
+## 配置目标群聊
+
+`main.py` 顶部有两个常量需要根据你的群聊修改：
+
+```python
+GROUP_CHAT_ID = "26389512912@chatroom"
+GROUP_TABLE   = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
+```
+
+### 第一步：找到群聊的 `GROUP_CHAT_ID`
+
+先按 `chatlog-mac/README.md` 的说明完成解密，数据会落在 `~/Documents/chatlog/`。然后按群名查询：
+
+```bash
+sqlite3 ~/Documents/chatlog/contact/contact.db \
+  "SELECT username, nick_name FROM contact WHERE nick_name LIKE '%群名关键字%';"
+```
+
+输出示例：
+
+```
+26389512912@chatroom|AI生产力训练营
+```
+
+`username` 字段（格式为 `xxxxxxxxxx@chatroom`）即为 `GROUP_CHAT_ID`。
+
+### 第二步：计算 `GROUP_TABLE`
+
+`GROUP_TABLE` 是 `GROUP_CHAT_ID` 的 MD5，加上前缀 `Msg_`：
+
+```bash
+echo -n "26389512912@chatroom" | md5
+# 输出：1f5cd6985e2d31687fc076061b1fa6da
+```
+
+将 `echo -n` 后的内容替换为你自己的 `GROUP_CHAT_ID`，所得 MD5 加上 `Msg_` 前缀即为 `GROUP_TABLE`。
+
+将两个值更新到 `main.py` 顶部即可。
+
 ## 环境要求
 
 - Python 3.11+
