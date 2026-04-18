@@ -1,87 +1,19 @@
 # WeChat 群聊日报生成器
 
-自动读取微信群聊记录，用 AI 生成每日群聊日报 PDF。
+自动从微信群聊记录生成每日日报：群内版（真实昵称 + PDF）与公开版（匿名化 + GitHub Pages）。
 
-## 两种运行模式
+## 功能概览
 
-### 模式一：数据库模式（默认，推荐）
-
-直接读取 WeChat 本地加密数据库，无需录像。
-
-**前提条件：** 需要 `chatlog-mac/` 目录（含 `keys.json` 解密密钥文件）。该目录因微信版权原因不随代码一起发布。
-
-如果没有 `chatlog-mac/` 或 `keys.json`，请使用下方的录像模式。
-
-**流程：**
-
-1. 自动检测 `archive/` 中缺失的日期
-2. 直接读取 WeChat 加密数据库，提取对应日期的聊天记录
-3. 调用 **Claude** 根据聊天记录生成每日日报（Markdown 格式）
-4. 将日报转换为 PDF（20pt 字体，适合手机阅读）
-
-### 模式二：录像模式（`--video`）
-
-通过屏幕录像 + Gemini OCR 识别聊天内容，无需数据库密钥。
-
-**流程：**
-
-1. 从 `~/Downloads` 读取最新的 `ScreenRecording*` 视频
-2. 用 ffmpeg 将视频减速 5 倍，帧率也降低 5 倍
-3. 调用 **Gemini Flash** 从视频中提取聊天记录
-4. 调用 **Claude** 根据聊天记录生成每日日报（Markdown 格式）
-5. 将日报转换为 PDF（20pt 字体，适合手机阅读）
-
-## 配置目标群聊
-
-`main.py` 顶部有两个常量需要根据你的群聊修改：
-
-```python
-GROUP_CHAT_ID = "26389512912@chatroom"
-GROUP_TABLE   = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
-```
-
-### 第一步：找到群聊的 `GROUP_CHAT_ID`
-
-先按 `chatlog-mac/README.md` 的说明完成解密，数据会落在 `~/Documents/chatlog/`。然后按群名查询：
-
-```bash
-sqlite3 ~/Documents/chatlog/contact/contact.db \
-  "SELECT username, nick_name FROM contact WHERE nick_name LIKE '%群名关键字%';"
-```
-
-输出示例：
-
-```
-26389512912@chatroom|AI生产力训练营
-```
-
-`username` 字段（格式为 `xxxxxxxxxx@chatroom`）即为 `GROUP_CHAT_ID`。
-
-### 第二步：计算 `GROUP_TABLE`
-
-`GROUP_TABLE` 是 `GROUP_CHAT_ID` 的 MD5，加上前缀 `Msg_`：
-
-```bash
-echo -n "26389512912@chatroom" | md5
-# 输出：1f5cd6985e2d31687fc076061b1fa6da
-```
-
-将 `echo -n` 后的内容替换为你自己的 `GROUP_CHAT_ID`，所得 MD5 加上 `Msg_` 前缀即为 `GROUP_TABLE`。
-
-将两个值更新到 `main.py` 顶部即可。
+- **双版本产出**：群内版保留真实昵称，公开版经过三级隐私处理后发布到 GitHub Pages
+- **结构化提取**：用 Claude Opus 从聊天记录中提取 JSON 中间表示，再分别渲染两个版本
+- **三级隐私模型**：`/optout`（不出现）/ 默认匿名（稳定派生）/ `/alias`（自定义公开别名）
+- **泄漏检测**：公开版发布前，用 Claude Haiku 二次确认真实昵称是否为人名引用
+- **7 天滚动归档**：超过 7 天的 PDF 自动整理到 `archive/YYYY/MM/` 子目录
 
 ## 环境要求
 
 - Python 3.11+
-- ffmpeg（通过 Homebrew 安装）
-
-```bash
-brew install ffmpeg
-```
-
-## 安装依赖
-
-创建虚拟环境并安装依赖：
+- `chatlog-mac/keys.json`（微信数据库解密密钥，不随代码发布）
 
 ```bash
 python3 -m venv .venv
@@ -91,57 +23,109 @@ pip install -r requirements.txt
 
 ## API Key 配置
 
-程序首次运行时会提示你输入 API Key，并自动保存到项目目录的 `.env` 文件中。之后运行无需重新输入。
-
-**获取 API Key：**
-
-- **GEMINI_API_KEY**：前往 [Google AI Studio](https://aistudio.google.com/) 获取
-- **ANTHROPIC_API_KEY**：前往 [Anthropic Console](https://console.anthropic.com/) 获取
-
-也可以手动创建 `.env` 文件：
+首次运行时会提示输入，自动保存到 `.env`；也可手动创建：
 
 ```
-GEMINI_API_KEY=your_gemini_api_key_here
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here   # 仅 --summary gemini 时需要
 ```
 
-> **安全提示**：`.env` 文件已被 `.gitignore` 排除，不会被提交到版本控制系统。请勿将 API Key 泄露给他人。
+## 配置目标群聊
+
+编辑 `wechat_daily/config.py`，修改以下两个常量：
+
+```python
+GROUP_CHAT_ID = "26389512912@chatroom"
+GROUP_TABLE   = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
+```
+
+### 查找 GROUP_CHAT_ID
+
+```bash
+sqlite3 ~/Documents/chatlog/contact/contact.db \
+  "SELECT username, nick_name FROM contact WHERE nick_name LIKE '%群名关键字%';"
+```
+
+输出示例：`26389512912@chatroom|AI生产力训练营`，`username` 即为 `GROUP_CHAT_ID`。
+
+### 计算 GROUP_TABLE
+
+```bash
+echo -n "26389512912@chatroom" | md5
+# 输出：1f5cd6985e2d31687fc076061b1fa6da
+# GROUP_TABLE = "Msg_" + 上面的 MD5
+```
 
 ## 使用方法
 
 ```bash
 source .venv/bin/activate
 
-# 数据库模式（默认）
+# 生成缺失日报（Claude 结构化提取，默认）
 python3 main.py
 
-# 录像模式（无 keys.json 时使用）
-python3 main.py --video
+# 生成后推送公开版到 GitHub Pages
+python3 main.py -y
 
 # 也为当天不完整日期生成日报
 python3 main.py --allow-incomplete
+
+# 使用 Gemini 生成（仅群内版，无公开版）
+python3 main.py --summary gemini
 ```
 
-## 输出
+**`-y` 标志**：推送上一次运行生成的本地 commit 到公开仓库。本次生成的 commit 下次带 `-y` 才推送，留出人工审核窗口。
 
-每次运行会在项目目录下生成两类文件：
+## 输出文件
 
-**`archive/`** — 日报 PDF
+| 路径 | 说明 |
+|------|------|
+| `archive/YYYY-MM-DD 群聊日报.pdf` | 群内版 PDF（真实昵称） |
+| `debug/YYYY-MM-DD.md` | 群内版 Markdown 原文 |
+| `debug/extract-YYYY-MM-DD.json` | Claude 提取的中间 JSON（供 `redact.py` 使用） |
+| `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
 
-文件名格式：`YYYY-MM-DD 群聊日报.pdf`
+## 公开版隐私模型
 
-同一天重复运行时，自动添加序号后缀，不覆盖已有文件：
+群友在微信群内发送以下指令（单独成行，下次跑日报时生效）：
+
+| 指令 | 说明 |
+|------|------|
+| `/alias <名字>` | 设置公开版显示别名（1–16 字符） |
+| `/alias` | 清空别名，恢复默认匿名名 |
+| `/optout` | 退出公开版，发言完全移除 |
+| `/optin` | 重新参与公开版 |
+
+指令执行结果会在每期群内版日报末尾的「本期指令执行记录」章节中公布。
+
+## 辅助脚本
+
+```bash
+# 从零重建别名数据库（从历史消息完整回放所有指令）
+python3 -m scripts.rebuild_aliases
+
+# 事后撤回某用户在指定日期区间的公开版内容
+python3 -m scripts.redact --wxid <wxid> --from 2026-04-01 --to 2026-04-14 [-y]
+```
+
+## 项目结构
 
 ```
-archive/2026-02-21 群聊日报.pdf
-archive/2026-02-21 群聊日报 (2).pdf
+wechat_daily/
+├── config.py          # 常量、路径、env 加载
+├── wechat_db.py       # SQLCipher 连接（只读，immutable 模式）
+├── contacts.py        # wxid → 昵称映射
+├── message_parser.py  # 消息解析
+├── chat_extractor.py  # 按日期提取消息
+├── aliases.py         # 别名数据库、指令扫描、备份
+├── privacy.py         # token 化、optout 遮蔽、泄漏检测
+├── llm_extractor.py   # Claude 结构化提取（tool use + 流式输出）
+├── renderer.py        # 中间 JSON → Markdown（群内版 / 公开版）
+├── pdf.py             # Markdown → PDF
+├── archiver.py        # 7 天滚动归档
+├── publisher.py       # 公开仓库 commit / push / 预览
+└── cli.py             # 主流程编排
 ```
-
-超过 7 天的文件会自动整理到 `archive/YYYY/MM/` 子目录。
-
-**`debug/`** — Markdown 原文
-
-文件名格式：`YYYY-MM-DD.md`，保存 AI 生成的日报 Markdown 原文，方便排查内容质量问题。
 
 ## License
 
