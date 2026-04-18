@@ -1,0 +1,153 @@
+"""Integration tests for AliasDB.scan_commands against a synthetic WeChat DB."""
+
+from __future__ import annotations
+
+import sqlite3
+
+import pytest
+
+from wechat_daily.aliases import AliasDB
+from wechat_daily.config import GROUP_TABLE
+from wechat_daily.contacts import ContactMap
+from wechat_daily.message_parser import MSG_TEXT
+
+SALT = b'\x00' * 32
+
+
+def _make_synth_db(tmp_path, rows: list[tuple]) -> sqlite3.Connection:
+    """Build a temp sqlite DB matching WeChat's GROUP_TABLE schema.
+
+    *rows* is a list of (create_time, local_type, message_content_bytes).
+    """
+    db_path = tmp_path / "synth.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        f"CREATE TABLE {GROUP_TABLE} ("
+        f"  create_time INTEGER,"
+        f"  local_type INTEGER,"
+        f"  message_content BLOB"
+        f")"
+    )
+    conn.executemany(
+        f"INSERT INTO {GROUP_TABLE} (create_time, local_type, message_content) "
+        f"VALUES (?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    return conn
+
+
+def _encode(wxid: str, body: str) -> bytes:
+    """WeChat message_content is 'wxid:\\ncontent' plain bytes."""
+    return f"{wxid}:\n{body}".encode('utf-8')
+
+
+@pytest.fixture
+def patched_aliases(monkeypatch, tmp_path):
+    """Patch ALIASES_* paths AND get_conn so scan_commands hits a temp DB."""
+    import wechat_daily.aliases as mod
+
+    monkeypatch.setattr(mod, "ALIASES_FILE", tmp_path / "aliases.json")
+    monkeypatch.setattr(mod, "ALIASES_CURSOR_FILE", tmp_path / "cursor")
+    monkeypatch.setattr(mod, "ANON_SALT_FILE", tmp_path / "salt.txt")
+    monkeypatch.setattr(mod, "ALIASES_BACKUP_DIR", tmp_path / "backup")
+
+    yield mod
+
+
+def test_scan_commands_sets_alias(patched_aliases, monkeypatch, tmp_path):
+    mod = patched_aliases
+    rows = [(1000, MSG_TEXT, _encode("wxid_alice", "/alias Duckie"))]
+    conn = _make_synth_db(tmp_path, rows)
+
+    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+
+    db = AliasDB(users={}, reservations=[], salt=SALT)
+    db.get_or_create_user("wxid_alice", "Alice")
+    db.scan_commands(ContactMap.from_dict({"wxid_alice": "Alice"}))
+
+    assert db._users["wxid_alice"]["public_alias"] == "Duckie"
+
+
+def test_scan_commands_writes_cursor(patched_aliases, monkeypatch, tmp_path):
+    mod = patched_aliases
+    rows = [
+        (1000, MSG_TEXT, _encode("wxid_alice", "/alias Duckie")),
+        (2000, MSG_TEXT, _encode("wxid_alice", "hello world")),  # non-command
+    ]
+    conn = _make_synth_db(tmp_path, rows)
+    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+
+    db = AliasDB(users={}, reservations=[], salt=SALT)
+    db.scan_commands()
+
+    # Cursor advanced to the max create_time, even for non-command rows
+    assert (tmp_path / "cursor").read_text().strip() == "2000"
+
+
+def test_scan_commands_incremental(patched_aliases, monkeypatch, tmp_path):
+    """A second run with the cursor set should skip already-processed rows."""
+    mod = patched_aliases
+    rows = [
+        (1000, MSG_TEXT, _encode("wxid_alice", "/alias Duckie")),
+        (2000, MSG_TEXT, _encode("wxid_bob", "/alias Quackie")),
+    ]
+    conn = _make_synth_db(tmp_path, rows)
+    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+
+    # Pre-seed cursor past the first row
+    (tmp_path / "cursor").write_text("1500")
+
+    db = AliasDB(users={}, reservations=[], salt=SALT)
+    db.scan_commands()
+
+    # Bob's command was processed; Alice's was NOT (already past cursor)
+    assert db._users.get("wxid_bob", {}).get("public_alias") == "Quackie"
+    assert db._users.get("wxid_alice", {}).get("public_alias") is None
+
+
+def test_scan_commands_ignores_non_slash_text(patched_aliases, monkeypatch, tmp_path):
+    mod = patched_aliases
+    rows = [
+        (1000, MSG_TEXT, _encode("wxid_alice", "hello there, /alias Duckie")),
+        # Command not on first line should be ignored too
+        (2000, MSG_TEXT, _encode("wxid_bob", "hi\n/alias Duckie")),
+    ]
+    conn = _make_synth_db(tmp_path, rows)
+    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+
+    db = AliasDB(users={}, reservations=[], salt=SALT)
+    db.scan_commands()
+
+    assert "wxid_alice" not in db._users or db._users["wxid_alice"].get("public_alias") is None
+    assert "wxid_bob" not in db._users or db._users["wxid_bob"].get("public_alias") is None
+
+
+def test_scan_commands_handles_missing_db(patched_aliases, monkeypatch):
+    """When neither message DB exists, scan_commands returns empty without raising."""
+    mod = patched_aliases
+
+    def _raise(rel):
+        raise FileNotFoundError(rel)
+    monkeypatch.setattr(mod, "get_conn", _raise)
+
+    db = AliasDB(users={}, reservations=[], salt=SALT)
+    log = db.scan_commands()
+    assert log == []
+
+
+def test_scan_commands_optout_then_optin(patched_aliases, monkeypatch, tmp_path):
+    mod = patched_aliases
+    rows = [
+        (1000, MSG_TEXT, _encode("wxid_alice", "/optout")),
+        (2000, MSG_TEXT, _encode("wxid_alice", "/optin")),
+    ]
+    conn = _make_synth_db(tmp_path, rows)
+    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+
+    db = AliasDB(users={}, reservations=[], salt=SALT)
+    db.scan_commands()
+
+    # Last-wins replay: ends in optin
+    assert db._users["wxid_alice"]["optout"] is False
+    assert db._users["wxid_alice"]["last_command"] == "/optin"
