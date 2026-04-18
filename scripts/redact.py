@@ -18,8 +18,9 @@ from wechat_daily.aliases import AliasDB
 from wechat_daily.config import DEBUG_DIR
 from wechat_daily.publisher import ensure_repo, commit, push_pending
 from wechat_daily.renderer import DailyReport, render_public
-from wechat_daily.privacy import leak_check
+from wechat_daily.privacy import ClaudeLeakConfirmer, leak_check
 from wechat_daily.contacts import ContactMap
+from wechat_daily.config import get_anthropic_key
 
 
 def redact(wxid: str, from_date: str, to_date: str, push: bool) -> None:
@@ -65,7 +66,8 @@ def redact(wxid: str, from_date: str, to_date: str, push: bool) -> None:
 
         if contact_map:
             try:
-                leak_check(public_md, contact_map, db)
+                confirmer = ClaudeLeakConfirmer(api_key=get_anthropic_key())
+                leak_check(public_md, contact_map, db, confirmer)
             except Exception as e:
                 print(f"  {date_str}: 泄漏检测失败 ({e})，跳过")
                 continue

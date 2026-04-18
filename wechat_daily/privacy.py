@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Iterator
 
 from .message_parser import (
     Message, QuotedMessage,
@@ -42,6 +42,10 @@ class TokenMap:
 
     def wxid(self, token: str) -> str | None:
         return self._rev.get(token)
+
+    def all_tokens(self) -> list[str]:
+        """Return all tokens (default_anons) known to this map."""
+        return list(self._rev.keys())
 
 
 def _nickname_pairs(contact_map: "ContactMap") -> list[tuple[str, str]]:
@@ -92,16 +96,28 @@ def _tap_has_optout_party(
 ) -> bool:
     """True iff a TAP message mentions an optout user's nickname.
 
-    Scans nicknames longest-first so that e.g. optout '李' does not trigger
-    when only '李明' is present in content.
+    Scans ALL nicknames (no length filter) longest-first so that e.g. optout
+    '李' does not trigger when only '李明' is present in content.
+    The no-filter policy here is intentional: TAP messages are short and
+    structured, so false positives from short names are unlikely, and we prefer
+    to err on the side of privacy protection.
     """
     optout = set(alias_db.optout_wxids())
+    # Build pairs from all nicknames (no ≤ 4 char filter), sorted longest-first.
+    all_pairs: list[tuple[str, str]] = []
+    for nickname in contact_map.all_nicknames():
+        if not nickname:
+            continue
+        wxid = contact_map.wxid_for_nickname(nickname)
+        if wxid:
+            all_pairs.append((nickname, wxid))
+    all_pairs.sort(key=lambda p: len(p[0]), reverse=True)
+
     remaining = content
-    for nickname, wxid in _nickname_pairs(contact_map):
+    for nickname, wxid in all_pairs:
         if nickname in remaining:
             if wxid in optout:
                 return True
-            # Erase so shorter nicknames (potential substrings) don't rematch.
             remaining = remaining.replace(nickname, ' ')
     return False
 
@@ -270,20 +286,118 @@ def format_tokenized_messages(messages: list[Message]) -> str:
     return '\n'.join(lines)
 
 
+# ── Leak detection ───────────────────────────────────────────────────────────────
+
+_CONFIRM_SYSTEM = """\
+你是一个文本消歧助手。用户会给你一个词和它在文章中出现的上下文片段。
+你要判断：在这一具体出现位置，这个词是**指代一位人类群友**，还是**非人类实体**（AI 模型、软件、算法、产品、公司、协议等）。
+
+判断规则：
+- 如果这个词出现在人名位置（主语/宾语指代说话者、被 @ 被提及、与「说/问/回复/拍了拍/分享」等人类行为搭配）→ 判定 person。
+- 如果它明显指代技术或非人类实体（如「Whisper 模型」「用 Cursor 写代码」「Claude 回复了」）→ 判定 non-person。
+- 拿不准时一律输出 person（宁可误报，确保安全）。
+
+**只输出一个词**：`person` 或 `non-person`。不要任何解释、不要标点、不要代码块。\
+"""
+
+_CONFIRM_USER_TMPL = """\
+目标词：{nickname}
+
+上下文片段（目标词出现在其中）：
+---
+{context}
+---
+
+在这个上下文里，"{nickname}" 指的是 person 还是 non-person？\
+"""
+
+
+class ClaudeLeakConfirmer:
+    """Calls Claude to judge whether a nickname occurrence refers to a real person."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        client=None,
+        model: str | None = None,
+    ) -> None:
+        if client is None:
+            import anthropic
+            import httpx
+            client = anthropic.Anthropic(
+                api_key=api_key,
+                timeout=httpx.Timeout(60.0, connect=10.0),
+            )
+        self._client = client
+        if model is None:
+            from .config import LEAK_CONFIRM_MODEL
+            model = LEAK_CONFIRM_MODEL
+        self._model = model
+
+    def confirm_is_person(self, nickname: str, context: str) -> bool:
+        """Return True if the occurrence is a real person (= leak). Fail-closed on error."""
+        try:
+            resp = self._client.messages.create(
+                model=self._model,
+                max_tokens=16,
+                system=_CONFIRM_SYSTEM,
+                messages=[{
+                    "role": "user",
+                    "content": _CONFIRM_USER_TMPL.format(
+                        nickname=nickname, context=context,
+                    ),
+                }],
+            )
+            text = "".join(
+                b.text for b in resp.content if getattr(b, "type", "") == "text"
+            ).strip().lower()
+            return not text.startswith("non-person")
+        except Exception:
+            return True  # fail-closed: treat unknown as leak
+
+
+def _iter_contexts(text: str, needle: str, window: int = 100) -> Iterator[str]:
+    """Yield each occurrence of *needle* in *text* with up to *window* chars of context."""
+    start = 0
+    while True:
+        i = text.find(needle, start)
+        if i == -1:
+            return
+        lo = max(0, i - window)
+        hi = min(len(text), i + len(needle) + window)
+        yield text[lo:hi]
+        start = i + len(needle)
+
+
 def leak_check(
     markdown: str,
     contact_map: "ContactMap",
     alias_db: "AliasDB",
+    confirmer: ClaudeLeakConfirmer,
 ) -> None:
-    """Raise LeakDetected if any real nickname or optout anon appears in *markdown*."""
-    for nickname in contact_map.all_nicknames():
-        if nickname in markdown:
-            raise LeakDetected(f"真实昵称泄漏: 「{nickname}」")
+    """Raise LeakDetected if a real name or optout anon is found in *markdown*.
 
+    Optout anons and raw wxid strings are hard gates (always raise).
+    Real nicknames are confirmed via *confirmer*; only person-references raise.
+    Nicknames ≤ 4 codepoints are skipped (same threshold as tokenization).
+    """
+    # Hard gate 1: optout users' default_anon must never appear
     for anon in alias_db.optout_anons():
         if anon in markdown:
             raise LeakDetected(f"Optout 用户默认匿名名泄漏: 「{anon}」")
 
-    # Paranoia check: raw wxid strings should never appear in public output
+    # Hard gate 2: raw wxid strings must never appear
     if re.search(r'\bwxid_\w+', markdown):
         raise LeakDetected("检测到原始 wxid 字符串泄漏")
+
+    # LLM-confirmed gate: real nicknames
+    for nickname in contact_map.all_nicknames():
+        if len(nickname) <= 4 or nickname not in markdown:
+            continue
+        for ctx in _iter_contexts(markdown, nickname):
+            try:
+                is_person = confirmer.confirm_is_person(nickname, ctx)
+            except Exception:
+                is_person = True  # fail-closed: confirmer error → treat as leak
+            if is_person:
+                raise LeakDetected(f"真实昵称泄漏: 「{nickname}」")

@@ -231,3 +231,115 @@ def test_front_matter_date_format():
     db = _make_db()
     fm = _extract_front_matter(render_public(report, db))
     assert "date: 2026-04-17 12:00:00 +0800" in fm
+
+
+# ── Heading structure (H2 type group + H3 section title) ───────────────────────
+
+def test_render_group_uses_h2_for_type_and_h3_for_title():
+    report = _make_report()
+    db = _make_db()
+    contacts = _make_contacts()
+    out = render_group(report, db, contacts, command_log=[])
+    assert "## 行业新闻" in out
+    assert "### 新模型发布" in out
+
+
+def test_render_group_anecdote_type_label():
+    report = _make_report()
+    db = _make_db()
+    contacts = _make_contacts()
+    out = render_group(report, db, contacts, command_log=[])
+    assert "## 闲聊花絮" in out
+    assert "### 有趣的互动" in out
+
+
+def test_render_public_uses_h2_for_type_and_h3_for_title():
+    report = _make_report()
+    db = _make_db()
+    out = render_public(report, db)
+    assert "## 行业新闻" in out
+    assert "### 新模型发布" in out
+    # unsafe anecdote section is filtered — its type header should not appear
+    assert "## 闲聊花絮" not in out
+
+
+# ── Token replacement in free-text fields ──────────────────────────────────────
+
+def _make_report_with_tokens() -> DailyReport:
+    """Report whose intro and body contain raw token strings."""
+    alice_token = compute_default_anon("wxid_alice", SALT)
+    return DailyReport.from_dict({
+        "date": "2026-04-17",
+        "intro": f"今天 {alice_token} 分享了很多内容。",
+        "sections": [{
+            "type": "news",
+            "title": "新模型发布",
+            "body": f"{alice_token} 认为这个模型很不错。",
+            "comments": [
+                {"token": alice_token, "text": f"{alice_token} 补充道：很厉害"},
+            ],
+            "tags": [],
+            "public_safe": True,
+            "public_safe_reason": None,
+        }],
+    })
+
+
+def test_render_group_replaces_token_in_intro():
+    report = _make_report_with_tokens()
+    db = _make_db()
+    contacts = _make_contacts()
+    alice_token = compute_default_anon("wxid_alice", SALT)
+    out = render_group(report, db, contacts, command_log=[])
+    assert alice_token not in out
+    assert "Alice" in out
+
+
+def test_render_group_replaces_token_in_body():
+    report = _make_report_with_tokens()
+    db = _make_db()
+    contacts = _make_contacts()
+    alice_token = compute_default_anon("wxid_alice", SALT)
+    out = render_group(report, db, contacts, command_log=[])
+    assert alice_token not in out
+
+
+def test_render_group_unknown_token_preserved():
+    """A token not in alias_db must pass through unchanged."""
+    unknown_token = "活泼的鸵鸟99"
+    report = DailyReport.from_dict({
+        "date": "2026-04-17",
+        "intro": f"{unknown_token} 说了一句话。",
+        "sections": [],
+    })
+    db = _make_db()
+    contacts = _make_contacts()
+    out = render_group(report, db, contacts, command_log=[])
+    assert unknown_token in out
+
+
+def test_render_public_replaces_token_with_public_alias():
+    report = _make_report_with_tokens()
+    db = _make_db()  # alice has public_alias = "Duckie"
+    alice_token = compute_default_anon("wxid_alice", SALT)
+    out = render_public(report, db)
+    assert alice_token not in out
+    assert "Duckie" in out
+    assert "Alice" not in out
+
+
+def test_render_public_masks_optout_token_in_body():
+    """Optout user's token in body text is replaced with '某群友'."""
+    alice_token = compute_default_anon("wxid_alice", SALT)
+    report = DailyReport.from_dict({
+        "date": "2026-04-17",
+        "intro": f"{alice_token} 提出了一个观点。",
+        "sections": [],
+    })
+    db = AliasDB(users={}, reservations=[], salt=SALT)
+    db.get_or_create_user("wxid_alice", "Alice")
+    db._users["wxid_alice"]["optout"] = True
+    out = render_public(report, db)
+    assert alice_token not in out
+    assert "某群友" in out
+    assert "Alice" not in out

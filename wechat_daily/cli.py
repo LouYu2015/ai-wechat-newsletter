@@ -23,7 +23,7 @@ from .contacts import ContactMap
 from .llm_extractor import ExtractionError, extract_report, generate_markdown_with_gemini
 from .pdf import convert_to_pdf
 from .message_parser import MSG_TAP, MSG_SYSTEM
-from .privacy import LeakDetected, format_tokenized_messages, leak_check, tokenize_messages
+from .privacy import ClaudeLeakConfirmer, LeakDetected, format_tokenized_messages, leak_check, tokenize_messages
 from .publisher import commit, preview, push_pending, write_post
 from .renderer import render_group, render_public
 
@@ -164,7 +164,7 @@ def _run_db_pipeline(
         e for e in alias_db.command_log()
         if datetime.fromtimestamp(e['ts']).date() == target_date
     ]
-    group_md = render_group(report, alias_db, contact_map, day_log)
+    group_md = render_group(report, alias_db, contact_map, day_log, token_map=token_map)
 
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
     md_path = DEBUG_DIR / f"{date_str}.md"
@@ -187,10 +187,11 @@ def _run_db_pipeline(
 
     # ── E: Render public version + leak check ───────────────────────────────
     console.rule("[bold]渲染公开版 + 泄漏检测")
-    public_md = render_public(report, alias_db)
+    public_md = render_public(report, alias_db, token_map=token_map)
 
+    confirmer = ClaudeLeakConfirmer(api_key=anthropic_key)
     try:
-        leak_check(public_md, contact_map, alias_db)
+        leak_check(public_md, contact_map, alias_db, confirmer)
     except LeakDetected as e:
         console.print(f"[bold red]泄漏检测失败，公开版已中止:[/bold red] {e}")
         _save_leak_debug(date_str, str(e), public_md)

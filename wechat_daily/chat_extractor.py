@@ -28,20 +28,24 @@ def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> li
     for rel in _db_rels():
         try:
             conn = get_conn(rel)
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{GROUP_TABLE}'"
+            )
+            if not cur.fetchone():
+                continue
+            cur.execute(
+                f"SELECT create_time, local_type, message_content FROM {GROUP_TABLE} "
+                f"WHERE create_time >= ? AND create_time < ? ORDER BY create_time",
+                (start_ts, end_ts),
+            )
+            rows.extend(cur.fetchall())
         except FileNotFoundError:
             continue
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT name FROM sqlite_master WHERE type='table' AND name='{GROUP_TABLE}'"
-        )
-        if not cur.fetchone():
+        except Exception as e:
+            import warnings
+            warnings.warn(f"[chat_extractor] 跳过损坏数据库 {rel}: {e}")
             continue
-        cur.execute(
-            f"SELECT create_time, local_type, message_content FROM {GROUP_TABLE} "
-            f"WHERE create_time >= ? AND create_time < ? ORDER BY create_time",
-            (start_ts, end_ts),
-        )
-        rows.extend(cur.fetchall())
 
     rows.sort(key=lambda x: x[0])
 

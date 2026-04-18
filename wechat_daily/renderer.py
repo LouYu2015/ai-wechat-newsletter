@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from .models import DailyReport, Section, Comment  # re-exported for convenience
 
@@ -12,30 +13,75 @@ if TYPE_CHECKING:
     from .contacts import ContactMap
 
 
+_TYPE_LABELS: dict[str, str] = {
+    "news": "行业新闻",
+    "tool": "工具",
+    "methodology": "方法论",
+    "anecdote": "闲聊花絮",
+}
+
+
+def _build_token_replacer(
+    alias_db: "AliasDB",
+    resolve_fn: Callable[[str], str],
+    extra_tokens: list[str] | None = None,
+) -> Callable[[str], str]:
+    """Return a closure that replaces every known token in a string with resolve_fn(token).
+
+    *extra_tokens* supplements the alias_db's registered users — pass
+    token_map.all_tokens() from the extraction step so that users who were
+    tokenized on-the-fly (not yet in alias_db._users) are also resolved.
+    Tokens are sorted longest-first to prevent substring collisions.
+    """
+    token_set: set[str] = set(alias_db.all_default_anons())
+    if extra_tokens:
+        token_set.update(extra_tokens)
+    tokens = sorted(token_set, key=len, reverse=True)
+    if not tokens:
+        return lambda s: s
+    pattern = re.compile('|'.join(re.escape(t) for t in tokens))
+    mapping = {t: resolve_fn(t) for t in tokens}
+    return lambda text: pattern.sub(lambda m: mapping[m.group(0)], text)
+
+
 # ── Section rendering ────────────────────────────────────────────────────────────
 
-def _render_section(section: Section, token_resolver) -> str:
-    lines = [f"## {section.title}", ""]
-    # Body may contain newline-separated points; emit as-is
-    lines.append(section.body)
+def _render_section(section: Section, token_resolver, text_resolver) -> str:
+    title = text_resolver(section.title)
+    lines = [f"### {title}", ""]
+    lines.append(text_resolver(section.body))
     if section.comments:
         lines.append("")
+        comment_blocks = []
         for comment in section.comments:
             name = token_resolver(comment.token)
-            lines.append(f"> {name}：{comment.text}")
+            text = text_resolver(comment.text)
+            comment_blocks.append(f"> {name}：{text}")
+        # Blank line between each blockquote so they render as separate <blockquote> elements.
+        lines.append('\n\n'.join(comment_blocks))
     return '\n'.join(lines)
 
 
 def _render_sections(
     sections: list[Section],
     token_resolver,
+    text_resolver,
     filter_unsafe: bool,
 ) -> str:
-    parts = [
-        _render_section(s, token_resolver)
-        for s in sections
-        if not (filter_unsafe and not s.public_safe)
-    ]
+    # Group sections by type, preserving first-occurrence order.
+    groups: dict[str, list[Section]] = {}
+    for s in sections:
+        if filter_unsafe and not s.public_safe:
+            continue
+        groups.setdefault(s.type, []).append(s)
+
+    parts: list[str] = []
+    for type_, group in groups.items():
+        label = _TYPE_LABELS.get(type_, type_)
+        group_parts = [f"## {label}"]
+        for s in group:
+            group_parts.append(_render_section(s, token_resolver, text_resolver))
+        parts.append('\n\n'.join(group_parts))
     return '\n\n'.join(parts)
 
 
@@ -46,27 +92,37 @@ def render_group(
     alias_db: "AliasDB",
     contact_map: "ContactMap",
     command_log: list[dict] | None = None,
+    token_map=None,
 ) -> str:
-    """Render the group (private) version with real names and instruction log."""
+    """Render the group (private) version with real names and instruction log.
+
+    *token_map* (a TokenMap from tokenize_messages) ensures every token used
+    during extraction is resolvable, including on-the-fly tokens for users not
+    yet registered in alias_db.
+    """
 
     def token_to_real(token: str) -> str:
-        wxid = alias_db.wxid_of_token(token)
+        # Prefer token_map's direct lookup; fall back to alias_db scan.
+        wxid = (token_map.wxid(token) if token_map else None) \
+               or alias_db.wxid_of_token(token)
         if not wxid:
             return token
         real = contact_map.by_wxid(wxid)
         if real != wxid:
             return real
-        # Fallback to last-seen name stored in aliases (covers contacts not in contact.db)
         return alias_db.real_name_seen(wxid) or wxid
+
+    extra = token_map.all_tokens() if token_map else None
+    text_resolver = _build_token_replacer(alias_db, token_to_real, extra)
 
     parts = [
         f"# {report.date} 群聊日报",
         "",
-        report.intro,
+        text_resolver(report.intro),
         "",
         "[TOC]",
         "",
-        _render_sections(report.sections, token_to_real, filter_unsafe=False),
+        _render_sections(report.sections, token_to_real, text_resolver, filter_unsafe=False),
         "",
         _render_command_log(command_log or [], alias_db, contact_map),
     ]
@@ -113,14 +169,21 @@ def _render_command_log(
 def render_public(
     report: DailyReport,
     alias_db: "AliasDB",
+    token_map=None,
 ) -> str:
     """Render the public (anonymized) version with Jekyll front matter."""
 
     def token_to_public(token: str) -> str:
-        wxid = alias_db.wxid_of_token(token)
-        if wxid:
-            return alias_db.public_name_of(wxid)
-        return token
+        wxid = (token_map.wxid(token) if token_map else None) \
+               or alias_db.wxid_of_token(token)
+        if not wxid:
+            return token
+        if alias_db.is_optout(wxid):
+            return "某群友"
+        return alias_db.public_name_of(wxid)
+
+    extra = token_map.all_tokens() if token_map else None
+    text_resolver = _build_token_replacer(alias_db, token_to_public, extra)
 
     # Gather tags from safe sections only
     all_tags: list[str] = []
@@ -149,9 +212,7 @@ def render_public(
     ]
     front_matter = '\n'.join(front_matter_lines)
 
-    # Strip any stray [TOC] Claude may have included in intro
-    intro = report.intro.replace('[TOC]', '').strip()
-
-    body = _render_sections(report.sections, token_to_public, filter_unsafe=True)
+    intro = text_resolver(report.intro.replace('[TOC]', '').strip())
+    body = _render_sections(report.sections, token_to_public, text_resolver, filter_unsafe=True)
 
     return '\n'.join([front_matter, "", intro, "", body])

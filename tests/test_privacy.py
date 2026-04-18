@@ -7,6 +7,7 @@ from wechat_daily.message_parser import Message, MSG_TEXT, MSG_TAP, MSG_SYSTEM, 
 from wechat_daily.privacy import (
     tokenize_messages, format_tokenized_messages,
     leak_check, LeakDetected, TokenMap, _replace_names,
+    ClaudeLeakConfirmer, build_replace_state,
 )
 from wechat_daily.aliases import AliasDB, compute_default_anon
 from wechat_daily.contacts import ContactMap
@@ -74,11 +75,11 @@ def test_tokenize_replaces_sender():
 
 
 def test_tokenize_replaces_name_in_content():
-    contacts = _contact_map({"wxid_alice": "Alice", "wxid_bob": "Bob"})
+    contacts = _contact_map({"wxid_alice": "Alice", "wxid_bob": "BobbyC"})
     db = _alias_db()
-    messages = [_msg(1000, MSG_TEXT, "wxid_alice", "Bob said hello")]
+    messages = [_msg(1000, MSG_TEXT, "wxid_alice", "BobbyC said hello")]
     result, _ = tokenize_messages(messages, contacts, db)
-    assert "Bob" not in result[0].content
+    assert "BobbyC" not in result[0].content
 
 
 def test_tokenize_replaces_non_sender_name_in_content():
@@ -93,14 +94,14 @@ def test_tokenize_replaces_non_sender_name_in_content():
 
 def test_tokenize_longest_first():
     """Longer names must replace before shorter ones to avoid partial matches."""
-    contacts = _contact_map({"wxid_a": "张三", "wxid_b": "张三四"})
+    contacts = _contact_map({"wxid_a": "张三李四王", "wxid_b": "张三李四王五"})
     db = AliasDB(users={}, reservations=[], salt=SALT)
     db.get_or_create_user("wxid_a")
     db.get_or_create_user("wxid_b")
-    messages = [_msg(1000, MSG_TEXT, "wxid_a", "张三四 said hi")]
+    messages = [_msg(1000, MSG_TEXT, "wxid_a", "张三李四王五 said hi")]
     result, _ = tokenize_messages(messages, contacts, db)
-    assert "张三四" not in result[0].content
-    assert "张三" not in result[0].content
+    assert "张三李四王五" not in result[0].content
+    assert "张三李四王" not in result[0].content
 
 
 # ── Optout masking ──────────────────────────────────────────────────────────────
@@ -170,13 +171,13 @@ def test_tap_with_optout_party():
 
 
 def test_tap_without_optout():
-    contacts = _contact_map({"wxid_alice": "Alice", "wxid_bob": "Bob"})
+    contacts = _contact_map({"wxid_alice": "Alice", "wxid_bob": "BobbyC"})
     db = _alias_db()
-    messages = [_msg(1000, MSG_TAP, "", "Bob 拍了拍 Alice")]
+    messages = [_msg(1000, MSG_TAP, "", "BobbyC 拍了拍 Alice")]
     result, _ = tokenize_messages(messages, contacts, db)
     assert result[0].content != "[某人做了个动作]"
     assert "Alice" not in result[0].content
-    assert "Bob" not in result[0].content
+    assert "BobbyC" not in result[0].content
 
 
 def test_system_message_names_tokenized():
@@ -275,41 +276,154 @@ def test_format_no_sender_no_placeholder_skipped():
     assert "orphan" not in output
 
 
+# ── Fake confirmer for testing ──────────────────────────────────────────────────
+
+class _FakeConfirmer:
+    """Test double for ClaudeLeakConfirmer."""
+
+    def __init__(self, verdict: bool = True, raises: bool = False) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self._verdict = verdict
+        self._raises = raises
+
+    def confirm_is_person(self, nickname: str, context: str) -> bool:
+        self.calls.append((nickname, context))
+        if self._raises:
+            raise RuntimeError("simulated API failure")
+        return self._verdict
+
+
 # ── Leak detection ─────────────────────────────────────────────────────────────
 
 def test_leak_check_clean():
     contacts = _contact_map({"wxid_a": "Alice"})
     db = _alias_db()
     anon = compute_default_anon("wxid_a", SALT)
-    leak_check(f"{anon} said hi", contacts, db)
+    confirmer = _FakeConfirmer(verdict=False)
+    leak_check(f"{anon} said hi", contacts, db, confirmer)
+    assert confirmer.calls == []  # anon is not a real nickname, no call needed
+
+
+def test_leak_check_non_person_not_blocked():
+    """LLM says 'non-person' → no raise even though nickname appears."""
+    contacts = _contact_map({"wxid_a": "Whisper"})
+    db = _alias_db()
+    confirmer = _FakeConfirmer(verdict=False)  # non-person
+    leak_check("比较 Whisper 模型和 Qwen ASR 的效果", contacts, db, confirmer)
+    assert len(confirmer.calls) == 1
+    assert "Whisper" in confirmer.calls[0][1]  # context contains the word
+
+
+def test_leak_check_person_confirmed_raises():
+    """LLM says 'person' → raise LeakDetected."""
+    contacts = _contact_map({"wxid_a": "Whisper"})
+    db = _alias_db()
+    confirmer = _FakeConfirmer(verdict=True)  # person
+    with pytest.raises(LeakDetected, match="Whisper"):
+        leak_check("Whisper 说得对", contacts, db, confirmer)
 
 
 def test_leak_check_detects_real_name():
-    contacts = _contact_map({"wxid_a": "Alice"})
+    contacts = _contact_map({"wxid_a": "AliceLongName"})
     db = _alias_db()
-    with pytest.raises(LeakDetected, match="Alice"):
-        leak_check("Alice said something", contacts, db)
+    confirmer = _FakeConfirmer(verdict=True)
+    with pytest.raises(LeakDetected, match="AliceLongName"):
+        leak_check("AliceLongName said something", contacts, db, confirmer)
 
 
 def test_leak_check_detects_optout_anon():
+    """Optout anon is a hard gate — confirmer must NOT be called."""
     contacts = _contact_map({"wxid_a": "Alice"})
     db = _alias_db(optout_wxids=["wxid_a"])
     anon = compute_default_anon("wxid_a", SALT)
+    confirmer = _FakeConfirmer(verdict=False)
     with pytest.raises(LeakDetected):
-        leak_check(f"{anon} was mentioned", contacts, db)
+        leak_check(f"{anon} was mentioned", contacts, db, confirmer)
+    assert confirmer.calls == []  # hard gate, no LLM call
 
 
 def test_leak_check_detects_raw_wxid():
+    """Raw wxid is a hard gate — confirmer must NOT be called."""
     contacts = _contact_map({})
     db = _alias_db()
+    confirmer = _FakeConfirmer(verdict=False)
     with pytest.raises(LeakDetected, match="wxid"):
-        leak_check("hello wxid_someuser there", contacts, db)
+        leak_check("hello wxid_someuser there", contacts, db, confirmer)
+    assert confirmer.calls == []
 
 
 def test_leak_check_empty_markdown():
     contacts = _contact_map({"wxid_a": "Alice"})
     db = _alias_db()
-    leak_check("", contacts, db)  # should not raise
+    confirmer = _FakeConfirmer(verdict=False)
+    leak_check("", contacts, db, confirmer)  # should not raise
+
+
+def test_leak_check_confirmer_exception_is_leak():
+    """Confirmer exception → fail-closed, raise LeakDetected."""
+    contacts = _contact_map({"wxid_a": "LongNickname"})
+    db = _alias_db()
+    confirmer = _FakeConfirmer(raises=True)
+    with pytest.raises(LeakDetected):
+        leak_check("LongNickname appeared here", contacts, db, confirmer)
+
+
+def test_leak_check_multiple_occurrences_each_confirmed():
+    """Same nickname appearing N times → confirmer called N times."""
+    contacts = _contact_map({"wxid_a": "LongNickname"})
+    db = _alias_db()
+    confirmer = _FakeConfirmer(verdict=False)  # all non-person
+    leak_check("LongNickname and LongNickname and LongNickname", contacts, db, confirmer)
+    assert len(confirmer.calls) == 3
+
+
+def test_leak_check_any_person_occurrence_blocks():
+    """If any one occurrence is judged 'person', raise even if others are non-person."""
+    contacts = _contact_map({"wxid_a": "LongNickname"})
+    db = _alias_db()
+    call_count = [0]
+
+    def _verdict(nickname, context):
+        call_count[0] += 1
+        return call_count[0] == 2  # second call → person
+
+    class _DynConfirmer:
+        def confirm_is_person(self, nickname, context):
+            return _verdict(nickname, context)
+
+    with pytest.raises(LeakDetected):
+        leak_check(
+            "LongNickname tool, LongNickname said, LongNickname model",
+            contacts, db, _DynConfirmer(),
+        )
+    assert call_count[0] == 2  # stops at first person hit
+
+
+def test_leak_check_context_contains_nickname_and_surroundings():
+    """Context passed to confirmer must contain the nickname and surrounding text."""
+    contacts = _contact_map({"wxid_a": "LongNickname"})
+    db = _alias_db()
+    captured = []
+
+    class _CapConfirmer:
+        def confirm_is_person(self, nickname, context):
+            captured.append(context)
+            return False
+
+    leak_check("prefix text LongNickname suffix text", contacts, db, _CapConfirmer())
+    assert len(captured) == 1
+    assert "LongNickname" in captured[0]
+    assert "prefix" in captured[0]
+    assert "suffix" in captured[0]
+
+
+def test_leak_check_short_nickname_skipped():
+    """Nicknames ≤ 4 codepoints are never checked (consistent with tokenization)."""
+    contacts = _contact_map({"wxid_a": "Bob"})  # len=3 ≤ 4
+    db = _alias_db()
+    confirmer = _FakeConfirmer(verdict=True)
+    leak_check("Bob said something about AI", contacts, db, confirmer)
+    assert confirmer.calls == []  # short nickname skipped
 
 
 # ── TAP substring safety ───────────────────────────────────────────────────────
@@ -339,16 +453,17 @@ def test_tap_substring_optout_true_positive():
 
 def test_replace_names_no_token_corruption():
     """A token produced for one user must not be later partially-replaced by
-    a shorter nickname that happens to appear inside it."""
-    # Arrange: user A's nickname happens to be a substring of user B's token.
-    # Compute B's default_anon, then pick a substring of it as A's real name.
-    from wechat_daily.privacy import _replace_names, TokenMap
-    db = _alias_db()
+    a shorter nickname that happens to appear inside it (single-pass guarantee)."""
+    db2 = AliasDB(users={}, reservations=[], salt=SALT)
+    db2.get_or_create_user("wxid_alice")
+    db2.get_or_create_user("wxid_bob")
     b_token = compute_default_anon("wxid_bob", SALT)
-    # Pick a 2-char slice of b_token that is very unlikely to also appear elsewhere
-    snippet = b_token[2:4]
-    contacts = _contact_map({"wxid_alice": snippet, "wxid_bob": "Bob"})
-    tm = TokenMap.build(["wxid_alice", "wxid_bob"], db)
-    out = _replace_names("Bob says hi", contacts, tm)
-    # B's token must appear intact, not mangled by a secondary replace
+    # Alice's nickname = first 5 chars of Bob's token (> 4 chars, passes the filter).
+    # After "BobbySmith" is replaced by b_token, the regex must not re-match
+    # the snippet inside the already-substituted result.
+    snippet = b_token[:5]
+    contacts = _contact_map({"wxid_alice": snippet, "wxid_bob": "BobbySmith"})
+    tm = TokenMap.build(["wxid_alice", "wxid_bob"], db2)
+    pattern, mapping = build_replace_state(contacts, tm)
+    out = _replace_names("BobbySmith says hi", pattern, mapping)
     assert b_token in out

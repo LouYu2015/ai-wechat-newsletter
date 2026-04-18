@@ -51,7 +51,7 @@ def get_conn(rel_path: str, cipher_key: str | None = None) -> Any:
                     src = db_storage / rel_path
                     if src.exists():
                         enc_key = keys[rel_path]['enc_key']
-                        conn = sqlcipher3.connect(str(src))
+                        conn = sqlcipher3.connect(f"file:{src}?immutable=1", uri=True)
                         conn.execute(f"PRAGMA key = \"x'{enc_key}'\"")
                         conn.execute("PRAGMA cipher_page_size = 4096")
                         conn.execute("PRAGMA cipher_compatibility = 4")
