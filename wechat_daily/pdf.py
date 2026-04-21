@@ -56,10 +56,11 @@ def _get_pdf_css() -> str:
         margin: 12pt 0; padding: 8pt 16pt; color: #374151; background: #f0f5ff;
     }
 
-    code { font-family: 'Courier New', 'Menlo', monospace; font-size: 16pt;
-           background: #f0f0f0; padding: 1pt 5pt; border-radius: 3pt; }
-    pre { background: #f0f0f0; padding: 12pt; font-size: 15pt;
-          overflow-x: auto; border-radius: 4pt; }
+    code { font-family: 'Courier New', 'Menlo', monospace, 'ChineseFont', 'PingFang SC', 'STHeiti', sans-serif;
+           font-size: 0.85em; background: #f0f0f0; padding: 1pt 5pt; border-radius: 3pt; }
+    pre { background: #f0f0f0; padding: 12pt;
+          font-family: 'Courier New', 'Menlo', monospace, 'ChineseFont', 'PingFang SC', 'STHeiti', sans-serif;
+          font-size: 0.85em; overflow-x: auto; border-radius: 4pt; }
 
     table { border-collapse: collapse; width: 100%; margin: 12pt 0; }
     th, td { border: 1pt solid #ccc; padding: 7pt 12pt; text-align: left; }

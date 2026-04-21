@@ -62,6 +62,16 @@ _SYSTEM_PROMPT = """\
 - `comments` 只挑选最有代表性的 1–3 条，每条引用原话或近似原话
 - `tags` 使用英文小写、连字符，如 `model-release`、`long-context`、`agent`
 - 若当天消息很少或质量不足，可输出空 sections 列表
+
+## 关于内容完整性（关键约束）
+
+**每个 `body` 字段必须是完整句子，绝对禁止在句子中间截断。**
+
+若遇到无法直接引用的内容（如乱码、格式异常、示例片段），请用描述性语言替代，例如：
+- 不写 "给出了示例（如" → 改写为 "给出了一系列无意义的中文示例，表明模型输出质量严重下降。"
+- 不写 "退化到" → 改写为 "出现严重退化，中文输出质量明显不可用。"
+
+**所有在 `intro` 中提及的话题，都必须在 `sections` 中生成对应条目。** 如果某个话题信息不足，可以简短描述，但不能省略。
 """
 
 # ── Tool schema with strict=True ─────────────────────────────────────────────────
@@ -181,7 +191,7 @@ def extract_report(
             received = 0
             with client.messages.stream(
                 model=CLAUDE_MODEL,
-                max_tokens=8192,
+                max_tokens=16000,
                 system=_SYSTEM_PROMPT,
                 tools=[_TOOL],
                 tool_choice={"type": "tool", "name": "submit_daily_report"},
@@ -218,6 +228,8 @@ def extract_report(
             raw: dict = tool_block.input
             raw["date"] = date_str  # ensure date is always set
 
+            _check_truncation(date_str, raw)
+
             # Build DailyReport (models.py validates types/enums)
             report = DailyReport.from_dict(raw)
             _save_extract(date_str, raw, user_content)
@@ -240,6 +252,35 @@ def extract_report(
 
     _save_failure(date_str, user_content, None, str(last_exc))
     raise last_exc  # type: ignore[misc]
+
+
+_TRUNCATION_ENDINGS = (
+    '到', '如', '（如', '的', '了', '是', '、', '，', '：', '：\n', '为',
+    '（', '(', '"', "'",
+)
+
+
+def _check_truncation(date_str: str, raw: dict) -> None:
+    """Warn (via stderr) if any section body looks like it was cut off mid-sentence.
+
+    With strict=True JSON grammar constraints, Claude can close a string at any
+    valid string boundary. When it encounters content it doesn't want to reproduce
+    (e.g. garbled AI output examples), it may end the body mid-sentence. This
+    function logs a warning so operators notice the issue.
+    """
+    import sys
+    sections = raw.get("sections", [])
+    truncated = []
+    for s in sections:
+        body = s.get("body", "")
+        if body and body.endswith(_TRUNCATION_ENDINGS):
+            truncated.append(s.get("title", "?")[:40])
+    if truncated:
+        print(
+            f"[llm_extractor] WARNING {date_str}: {len(truncated)} section(s) "
+            f"appear truncated mid-sentence: {truncated}",
+            file=sys.stderr,
+        )
 
 
 def _save_extract(date_str: str, raw: dict, user_content: str) -> None:

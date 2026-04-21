@@ -125,6 +125,10 @@ def render_group(
         _render_sections(report.sections, token_to_real, text_resolver, filter_unsafe=False),
         "",
         _render_command_log(command_log or [], alias_db, contact_map),
+        "",
+        "---",
+        "",
+        "公开版日报网站：<https://louyu2015.github.io/AI-chatgroup-daily/>",
     ]
     return '\n'.join(parts)
 
