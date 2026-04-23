@@ -24,11 +24,15 @@ from .message_parser import MSG_TEXT, decompress, parse_sender_content
 from .wechat_db import get_conn
 
 # ── Word lists ──────────────────────────────────────────────────────────────────
+# 40 × 40 = 1600 combinations. Plenty of headroom for 500+ current users and
+# growth, with low collision rate during deterministic walking.
 ADJECTIVES = [
     "聪明", "勇敢", "温柔", "沉稳", "活泼", "机智", "淡定", "好奇",
     "开朗", "认真", "幽默", "细心", "热情", "冷静", "睿智", "随和",
     "坚定", "乐观", "敏锐", "优雅", "豁达", "低调", "务实", "风趣",
     "严谨", "洒脱", "稳重", "灵巧", "博学", "专注",
+    "温暖", "安静", "神秘", "直率", "坦荡", "谨慎", "灵动", "飘逸",
+    "天真", "倔强",
 ]
 
 ANIMALS = [
@@ -36,6 +40,8 @@ ANIMALS = [
     "狐狸", "兔子", "仓鼠", "猎豹", "北极熊", "浣熊", "鸵鸟", "火烈鸟",
     "犀牛", "斑马", "水獭", "貂", "白鹭", "鹦鹉", "松鼠", "羊驼",
     "树懒", "穿山甲", "蜂鸟", "雪豹", "荷兰猪", "剑鱼", "鲸鱼",
+    "海狸", "河马", "麋鹿", "考拉", "飞鼠", "鸳鸯", "喜鹊", "海龟",
+    "灰熊",
 ]
 
 RESERVED_ALIASES = {
@@ -90,12 +96,22 @@ def _load_or_create_salt() -> bytes:
     return salt
 
 
-def compute_default_anon(wxid: str, salt: bytes) -> str:
+def _initial_anon_indices(wxid: str, salt: bytes) -> tuple[int, int]:
+    """Hash-derived starting (adj_idx, animal_idx) for *wxid*."""
     h = hashlib.sha256(salt + wxid.encode()).digest()
-    adj = ADJECTIVES[h[0] % len(ADJECTIVES)]
-    animal = ANIMALS[h[1] % len(ANIMALS)]
-    suffix = h[2] % 100
-    return f"{adj}的{animal}{suffix:02d}"
+    return h[0] % len(ADJECTIVES), h[1] % len(ANIMALS)
+
+
+def compute_default_anon(wxid: str, salt: bytes) -> str:
+    """Return the initial (no-collision-check) anon name for *wxid*.
+
+    This is the starting point used by ``AliasDB._allocate_default_anon``;
+    actual allocation may walk past collisions and assign a different combo.
+    Tests may use this to predict the token of an isolated user (one with
+    no namespace collisions).
+    """
+    adj_i, ani_i = _initial_anon_indices(wxid, salt)
+    return f"{ADJECTIVES[adj_i]}的{ANIMALS[ani_i]}"
 
 
 # ── AliasDB ─────────────────────────────────────────────────────────────────────
@@ -186,10 +202,28 @@ class AliasDB:
 
     # ── User lookup ──────────────────────────────────────────────────────────
 
+    def _allocate_default_anon(self, wxid: str) -> str:
+        """Pick a unique ``{adj}的{animal}`` for *wxid* by walking from the
+        hash-derived initial position, skipping combos that are already taken
+        by another user or are reserved.
+        """
+        adj_i, ani_i = _initial_anon_indices(wxid, self._salt)
+        n_adj, n_ani = len(ADJECTIVES), len(ANIMALS)
+        used = self.all_default_anons()
+        for k in range(n_adj * n_ani):
+            ai = (adj_i + k // n_ani) % n_adj
+            ni = (ani_i + k) % n_ani
+            candidate = f"{ADJECTIVES[ai]}的{ANIMALS[ni]}"
+            if candidate in used or candidate in RESERVED_ALIASES:
+                continue
+            return candidate
+        raise RuntimeError("alias namespace exhausted; expand ADJECTIVES/ANIMALS")
+
     def get_or_create_user(self, wxid: str, real_name: str | None = None) -> dict:
         if wxid not in self._users:
+            anon = self._allocate_default_anon(wxid)
             self._users[wxid] = {
-                'default_anon': compute_default_anon(wxid, self._salt),
+                'default_anon': anon,
                 'real_name_seen': real_name or wxid,
                 'public_alias': None,
                 'optout': False,
@@ -201,11 +235,9 @@ class AliasDB:
         return self._users[wxid]
 
     def token_of(self, wxid: str) -> str:
-        """Return the stable token (= default_anon) for *wxid*."""
-        user = self._users.get(wxid)
-        if user:
-            return user['default_anon']
-        return compute_default_anon(wxid, self._salt)
+        """Return the stable token (= default_anon) for *wxid*, allocating one
+        on first use. Allocations persist on the next ``save()``."""
+        return self.get_or_create_user(wxid)['default_anon']
 
     def wxid_of_token(self, token: str) -> str | None:
         for wxid, u in self._users.items():
@@ -214,9 +246,7 @@ class AliasDB:
         return None
 
     def public_name_of(self, wxid: str) -> str:
-        user = self._users.get(wxid)
-        if not user:
-            return compute_default_anon(wxid, self._salt)
+        user = self.get_or_create_user(wxid)
         return user.get('public_alias') or user['default_anon']
 
     def real_name_seen(self, wxid: str) -> str | None:

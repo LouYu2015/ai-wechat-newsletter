@@ -46,13 +46,50 @@ def test_default_anon_different_salts():
 
 def test_default_anon_format():
     name = compute_default_anon("wxid_test", SALT)
-    # Should be like "形容词的动物NN"
+    # Format: "{形容词}的{动物}" (no numeric suffix)
     parts = name.split("的")
     assert len(parts) == 2
     assert parts[0] in ADJECTIVES
-    suffix_part = parts[1]
-    # Last two chars are digits
-    assert suffix_part[-2:].isdigit()
+    assert parts[1] in ANIMALS
+
+
+def test_allocation_resolves_collisions():
+    """Two wxids whose hashes map to the same initial combo get distinct
+    tokens via deterministic walking."""
+    db = _make_db()
+    db.get_or_create_user("wxid_a")
+    first = db._users["wxid_a"]["default_anon"]
+    # Force a collision: pre-seed another user with the same anon
+    db._users["wxid_seed"] = {
+        'default_anon': compute_default_anon("wxid_a", SALT),
+        'real_name_seen': 'seed', 'public_alias': None, 'optout': False,
+        'last_command_ts': None, 'last_command': None,
+    }
+    db._users.pop("wxid_a")
+    db.get_or_create_user("wxid_a")
+    walked = db._users["wxid_a"]["default_anon"]
+    assert walked != db._users["wxid_seed"]["default_anon"]
+    assert "的" in walked
+
+
+def test_token_persisted_across_reload(monkeypatch, tmp_path):
+    import wechat_daily.aliases as mod
+    monkeypatch.setattr(mod, "ALIASES_FILE", tmp_path / "aliases.json")
+    monkeypatch.setattr(mod, "ALIASES_CURSOR_FILE", tmp_path / "cursor")
+    monkeypatch.setattr(mod, "ANON_SALT_FILE", tmp_path / "salt.txt")
+    monkeypatch.setattr(mod, "ALIASES_BACKUP_DIR", tmp_path / "backup")
+    mod.ANON_SALT_FILE.write_text(SALT.hex())
+
+    db = AliasDB.load()
+    db.get_or_create_user("wxid_a")
+    db.get_or_create_user("wxid_b")
+    db.save()
+    a_token = db._users["wxid_a"]["default_anon"]
+    b_token = db._users["wxid_b"]["default_anon"]
+
+    db2 = AliasDB.load()
+    assert db2._users["wxid_a"]["default_anon"] == a_token
+    assert db2._users["wxid_b"]["default_anon"] == b_token
 
 
 # ── Command: /alias <name> ───────────────────────────────────────────────────────
