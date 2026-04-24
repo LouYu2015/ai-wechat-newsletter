@@ -68,14 +68,50 @@ def _nickname_pairs(contact_map: "ContactMap") -> list[tuple[str, str]]:
 def build_replace_state(
     contact_map: "ContactMap",
     token_map: TokenMap,
+    only_wxids: set[str] | None = None,
 ) -> tuple["re.Pattern[str] | None", dict[str, str]]:
-    """Precompute (pattern, mapping) for _replace_names.  Call once per batch."""
+    """Precompute (pattern, mapping) for _replace_names. Call once per batch.
+
+    When *only_wxids* is given, the returned pattern only matches nicknames
+    whose wxid is in that set. This pairs with lazy token allocation: we only
+    need to substitute names we actually plan to tokenize.
+    """
     pairs = _nickname_pairs(contact_map)
+    if only_wxids is not None:
+        pairs = [(n, w) for n, w in pairs if w in only_wxids]
     if not pairs:
         return None, {}
     pattern = re.compile('|'.join(re.escape(n) for n, _ in pairs))
     mapping = {n: token_map.token(w) for n, w in pairs}
     return pattern, mapping
+
+
+def _scan_mentioned_wxids(
+    messages: list["Message"],
+    contact_map: "ContactMap",
+) -> set[str]:
+    """Return the set of wxids whose nickname actually appears in any message
+    body, quoted content, or quoted speaker. Drives lazy token allocation."""
+    pairs = _nickname_pairs(contact_map)
+    if not pairs:
+        return set()
+    pattern = re.compile('|'.join(re.escape(n) for n, _ in pairs))
+    nick_to_wxid = {n: w for n, w in pairs}
+
+    mentioned: set[str] = set()
+    for msg in messages:
+        chunks: list[str] = []
+        if msg.content:
+            chunks.append(msg.content)
+        if msg.quoted:
+            if msg.quoted.content:
+                chunks.append(msg.quoted.content)
+            if msg.quoted.speaker_name:
+                chunks.append(msg.quoted.speaker_name)
+        for chunk in chunks:
+            for m in pattern.finditer(chunk):
+                mentioned.add(nick_to_wxid[m.group(0)])
+    return mentioned
 
 
 def _replace_names(
@@ -134,21 +170,21 @@ def tokenize_messages(
     Optout users' messages are replaced with run-length-merged placeholders.
     progress_cb(current, total) is called after each message if provided.
     """
-    # Build token map from ALL known contacts (not just senders).
-    # This ensures names mentioned in message bodies are always tokenized,
-    # even when the mentioned person sent no messages that day.
-    all_wxids: set[str] = set()
-    for msg in messages:
-        if msg.sender_wxid:
-            all_wxids.add(msg.sender_wxid)
-    for nickname in contact_map.all_nicknames():
-        wxid = contact_map.wxid_for_nickname(nickname)
-        if wxid:
-            all_wxids.add(wxid)
+    # Lazy allocation: only senders + nicknames actually mentioned today need
+    # tokens. Pre-allocating for every contact (potentially thousands across
+    # private chats and other groups) would exhaust the 1600-combo namespace
+    # for no benefit, since unmentioned contacts never appear in the LLM input.
+    sender_wxids: set[str] = {
+        msg.sender_wxid for msg in messages if msg.sender_wxid
+    }
+    mentioned_wxids = _scan_mentioned_wxids(messages, contact_map)
+    all_wxids = sender_wxids | mentioned_wxids
     token_map = TokenMap.build(list(all_wxids), alias_db)
 
-    # Precompute regex pattern + mapping once for the whole batch.
-    pattern, mapping = build_replace_state(contact_map, token_map)
+    # Precompute regex pattern + mapping; restrict to wxids we've tokenized.
+    pattern, mapping = build_replace_state(
+        contact_map, token_map, only_wxids=all_wxids,
+    )
 
     result: list[Message] = []
     total = len(messages)

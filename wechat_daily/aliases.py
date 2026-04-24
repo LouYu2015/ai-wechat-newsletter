@@ -182,6 +182,7 @@ class AliasDB:
         ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = {
             'version': 1,
+            'token_format_version': 2,
             'updated_at': self._clock().isoformat(),
             'users': self._users,
             'alias_reservations': self._reservations,
@@ -204,8 +205,9 @@ class AliasDB:
 
     def _allocate_default_anon(self, wxid: str) -> str:
         """Pick a unique ``{adj}的{animal}`` for *wxid* by walking from the
-        hash-derived initial position, skipping combos that are already taken
-        by another user or are reserved.
+        hash-derived initial position, skipping combos taken by another user
+        or reserved. Allocation is lazy — only wxids that actually appear in
+        a day's messages get registered, so 40×40 = 1600 combos is plenty.
         """
         adj_i, ani_i = _initial_anon_indices(wxid, self._salt)
         n_adj, n_ani = len(ADJECTIVES), len(ANIMALS)

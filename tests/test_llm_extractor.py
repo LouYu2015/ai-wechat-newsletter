@@ -125,6 +125,37 @@ def test_extract_report_forces_date(monkeypatch, tmp_path):
     assert report.date == "2026-04-17"
 
 
+def test_extract_report_includes_roster_when_provided(monkeypatch, tmp_path):
+    """When roster_text is passed it must appear in the user message body."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(_Response("tool_use", [_ToolBlock(_valid_payload())]))
+
+    roster = "## 群友花名册\n- 沉稳的狐狸：鸭哥"
+    extract_report(
+        "2026-04-17", "chat history", api_key="fake", client=client,
+        roster_text=roster,
+    )
+
+    call = client.messages.calls[0]
+    user_msg = call["messages"][0]["content"]
+    assert roster in user_msg
+    assert "chat history" in user_msg
+    # Roster must come before the chat block
+    assert user_msg.index(roster) < user_msg.index("chat history")
+
+
+def test_extract_report_omits_roster_when_none(monkeypatch, tmp_path):
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(_Response("tool_use", [_ToolBlock(_valid_payload())]))
+
+    extract_report("2026-04-17", "chat history", api_key="fake", client=client)
+    call = client.messages.calls[0]
+    user_msg = call["messages"][0]["content"]
+    assert "花名册" not in user_msg
+
+
 def test_extract_report_progress_cb_accumulates_bytes(monkeypatch, tmp_path):
     """progress_cb receives monotonically increasing byte counts from JSON deltas."""
     import wechat_daily.llm_extractor as mod

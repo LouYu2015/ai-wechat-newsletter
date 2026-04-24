@@ -23,13 +23,16 @@ _SYSTEM_PROMPT = """\
 
 ## 关于匿名化（最重要的约束，必须严格遵守）
 
-聊天记录中所有群友的名字都已替换为稳定的「token」，格式为「形容词的动物数字」（如「沉稳的大象07」、「活泼的企鹅22」）。这些是虚构名称，不是真实昵称。
+聊天记录中所有群友的名字都已替换为稳定的「token」，格式为「形容词的动物」（如「沉稳的大象」、「活泼的企鹅」）。这些是虚构名称，不是真实昵称。
 
 **硬性规则**：
-- 输出的所有字段中，指代群友时**只能使用这些 token**，绝对禁止出现任何真实人名（无论是中文名、英文名、昵称还是用户名）。
-- 若在聊天记录中看到看起来像真实人名的词语（如英文名 Garry、Alice，或未经替换的昵称），**不要引用或输出这些词**，改用「某群友」代替，或直接省略该引用。
-- 即使是直接引用原话（comments 字段），如果原话中含有非 token 格式的人名，也必须将其替换为「某群友」再引用。
-- 不要尝试根据上下文还原、猜测或推断任何群友的真实身份。
+- 输出的所有字段中，指代群友时**只能使用这些 token**，绝对禁止出现任何真实人名、英文名、昵称、外号、谐音、缩写。
+- 若在聊天记录中看到看起来像真实人名或代称的词语（如英文名 Garry/Alice、未经替换的昵称、群友间的外号「鸭哥」、谐音梗、姓氏缩写等），**不要引用或输出这些词**，请利用下方花名册映射回对应 token；若无法确定对应关系，改用「某群友」代替，或直接省略该引用。
+- 即使是直接引用原话（comments 字段），如果原话中含有非 token 格式的人名/代称，也必须替换为对应 token 或「某群友」再引用。
+
+## 关于花名册（用于解析消息中的代称）
+
+用户消息开头会附带一份**群友花名册**，列出每个 token 对应的真实昵称与已知群昵称变体。聊天记录里可能出现**未列入花名册**但明显指代某位群友的代称（外号、谐音、缩写），请基于上下文与花名册推断对应 token。拿不准时使用「某群友」，**绝不要在输出中保留任何真实昵称或代称**。
 
 ## 关于隐私占位符
 
@@ -169,19 +172,25 @@ def extract_report(
     api_key: str,
     progress_cb=None,
     client=None,
+    roster_text: str | None = None,
 ) -> DailyReport:
     """Call Claude with strict tool use; return a validated DailyReport.
 
     *client* may be injected for testing (any object with ``messages.create``
     that matches the Anthropic SDK surface). If None, a default client is
     constructed using *api_key*.
+
+    *roster_text* is the rendered 群友花名册 (see ``wechat_daily.roster``);
+    when provided it's prepended to the user message so the model can resolve
+    informal references (谐音、外号、缩写) back to tokens.
     """
     import anthropic  # for APIStatusError below
 
     if client is None:
         client = _default_client(api_key)
 
-    user_content = f"以下是 {date_str} 的匿名化群聊记录，请提取日报：\n\n{tokenized_chat}"
+    chat_block = f"以下是 {date_str} 的匿名化群聊记录，请提取日报：\n\n{tokenized_chat}"
+    user_content = f"{roster_text}\n\n---\n\n{chat_block}" if roster_text else chat_block
 
     max_retries = 3
     last_exc: Exception | None = None
@@ -287,9 +296,11 @@ def _save_extract(date_str: str, raw: dict, user_content: str) -> None:
     """Save successful extraction to debug/. Includes truncated input for redact."""
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
     # Store input preview alongside the report for redact.py and debugging.
-    # DailyReport.from_dict ignores unknown top-level keys, so this is safe.
+    # The preview includes the roster header so we can audit "why didn't the
+    # model resolve X" after the fact. DailyReport.from_dict ignores unknown
+    # top-level keys, so this is safe.
     payload = dict(raw)
-    payload['_input_preview'] = user_content[:3000]
+    payload['_input_preview'] = user_content[:5000]
     path = DEBUG_DIR / f"extract-{date_str}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
