@@ -118,7 +118,8 @@ wechat_daily/
 ├── message_parser.py  # 消息解析
 ├── chat_extractor.py  # 按日期提取消息
 ├── aliases.py         # 别名数据库、指令扫描、备份
-├── privacy.py         # token 化、optout 遮蔽、泄漏检测
+├── privacy.py         # token 化（惰性分配）、optout 遮蔽、泄漏检测
+├── roster.py          # token → 真实昵称变体花名册（喂给 LLM 解代称）
 ├── llm_extractor.py   # Claude 结构化提取（tool use + 流式输出）
 ├── renderer.py        # 中间 JSON → Markdown（群内版 / 公开版）
 ├── pdf.py             # Markdown → PDF
