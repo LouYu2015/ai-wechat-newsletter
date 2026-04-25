@@ -23,7 +23,13 @@ from wechat_daily.contacts import ContactMap
 from wechat_daily.config import get_anthropic_key
 
 
-def redact(wxid: str, from_date: str, to_date: str, push: bool) -> None:
+def redact(
+    wxid: str,
+    from_date: str,
+    to_date: str,
+    push: bool,
+    confirmer=None,
+) -> None:
     db = AliasDB.load()
     if wxid not in db._users:
         print(f"[错误] 未知 wxid: {wxid}")
@@ -66,7 +72,8 @@ def redact(wxid: str, from_date: str, to_date: str, push: bool) -> None:
 
         if contact_map:
             try:
-                confirmer = ClaudeLeakConfirmer(api_key=get_anthropic_key())
+                if confirmer is None:
+                    confirmer = ClaudeLeakConfirmer(api_key=get_anthropic_key())
                 leak_check(public_md, contact_map, db, confirmer)
             except Exception as e:
                 print(f"  {date_str}: 泄漏检测失败 ({e})，跳过")

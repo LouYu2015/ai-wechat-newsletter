@@ -173,13 +173,20 @@ def test_public_no_toc_marker():
 
 # ── Leak detection ────────────────────────────────────────────────────────────
 
+class _NonPersonConfirmer:
+    """Stub that always says non-person — equivalent to no LLM-side blocking."""
+
+    def confirm_is_person(self, nickname, context):
+        return False
+
+
 def test_public_passes_leak_check():
     db = _make_db()
     contacts = _make_contacts()
     report = _make_report(db)
     out = render_public(report, db)
     # Should not raise
-    leak_check(out, contacts, db)
+    leak_check(out, contacts, db, _NonPersonConfirmer())
 
 
 def test_public_no_real_names():

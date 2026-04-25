@@ -17,6 +17,13 @@ from wechat_daily.aliases import AliasDB, compute_default_anon
 SALT = b'\x42' * 32
 
 
+class _NonPersonConfirmer:
+    """Stub leak confirmer; treats every nickname occurrence as non-person."""
+
+    def confirm_is_person(self, nickname, context):
+        return False
+
+
 def _git(args, cwd):
     return subprocess.run(
         ['git'] + args, cwd=cwd, check=True,
@@ -152,7 +159,8 @@ def test_redact_writes_post_and_commits_when_no_leak(redact_env):
     _write_extract_no_alice(debug, "2026-04-10", bob_token)
 
     from scripts.redact import redact
-    redact("wxid_alice", "2026-04-10", "2026-04-10", push=False)
+    redact("wxid_alice", "2026-04-10", "2026-04-10", push=False,
+           confirmer=_NonPersonConfirmer())
 
     post = local / "_posts" / "2026" / "04" / "2026-04-10-daily.md"
     assert post.exists()
