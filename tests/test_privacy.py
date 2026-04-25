@@ -75,21 +75,26 @@ def test_tokenize_replaces_sender():
 
 
 def test_tokenize_replaces_name_in_content():
+    """Nicknames are emitted as ``token⟨原文⟩`` for LLM-side disambiguation."""
     contacts = _contact_map({"wxid_alice": "Alice", "wxid_bob": "BobbyC"})
     db = _alias_db()
     messages = [_msg(1000, MSG_TEXT, "wxid_alice", "BobbyC said hello")]
-    result, _ = tokenize_messages(messages, contacts, db)
-    assert "BobbyC" not in result[0].content
+    result, token_map = tokenize_messages(messages, contacts, db)
+    bob_token = token_map.token("wxid_bob")
+    assert f"{bob_token}⟨BobbyC⟩" in result[0].content
+    # Raw nickname only appears inside the ⟨…⟩ marker.
+    assert "BobbyC" in result[0].content
+    assert result[0].content.count("BobbyC") == result[0].content.count("⟨BobbyC⟩")
 
 
 def test_tokenize_replaces_non_sender_name_in_content():
     """Names of people who didn't send any message should still be tokenized."""
     contacts = _contact_map({"wxid_alice": "Alice", "wxid_carol": "Carol"})
     db = _alias_db()
-    # wxid_carol sends nothing; but "Carol" is mentioned in Alice's message
     messages = [_msg(1000, MSG_TEXT, "wxid_alice", "Carol made a good point")]
-    result, _ = tokenize_messages(messages, contacts, db)
-    assert "Carol" not in result[0].content
+    result, token_map = tokenize_messages(messages, contacts, db)
+    carol_token = token_map.token("wxid_carol")
+    assert f"{carol_token}⟨Carol⟩" in result[0].content
 
 
 def test_tokenize_longest_first():
@@ -100,8 +105,9 @@ def test_tokenize_longest_first():
     db.get_or_create_user("wxid_b")
     messages = [_msg(1000, MSG_TEXT, "wxid_a", "张三李四王五 said hi")]
     result, _ = tokenize_messages(messages, contacts, db)
-    assert "张三李四王五" not in result[0].content
-    assert "张三李四王" not in result[0].content
+    # Only the longer nickname should be wrapped; the shorter is consumed by it.
+    assert "⟨张三李四王五⟩" in result[0].content
+    assert "⟨张三李四王⟩" not in result[0].content
 
 
 # ── Optout masking ──────────────────────────────────────────────────────────────
@@ -174,10 +180,11 @@ def test_tap_without_optout():
     contacts = _contact_map({"wxid_alice": "Alice", "wxid_bob": "BobbyC"})
     db = _alias_db()
     messages = [_msg(1000, MSG_TAP, "", "BobbyC 拍了拍 Alice")]
-    result, _ = tokenize_messages(messages, contacts, db)
+    result, token_map = tokenize_messages(messages, contacts, db)
     assert result[0].content != "[某人做了个动作]"
-    assert "Alice" not in result[0].content
-    assert "BobbyC" not in result[0].content
+    # Both names dual-emitted as token⟨原文⟩ (Alice is len 5 > 4 → tokenized).
+    assert f"{token_map.token('wxid_bob')}⟨BobbyC⟩" in result[0].content
+    assert f"{token_map.token('wxid_alice')}⟨Alice⟩" in result[0].content
 
 
 def test_system_message_names_tokenized():
@@ -185,8 +192,8 @@ def test_system_message_names_tokenized():
     contacts = _contact_map({"wxid_alice": "Alice"})
     db = _alias_db()
     messages = [_msg(1000, MSG_SYSTEM, "", "Alice 加入了群聊")]
-    result, _ = tokenize_messages(messages, contacts, db)
-    assert "Alice" not in result[0].content
+    result, token_map = tokenize_messages(messages, contacts, db)
+    assert f"{token_map.token('wxid_alice')}⟨Alice⟩" in result[0].content
     assert result[0].sender_wxid == ""
 
 
@@ -204,10 +211,12 @@ def test_format_normal_message():
     contacts = _contact_map({"wxid_alice": "Alice"})
     db = _alias_db()
     messages = [_msg(1000, MSG_TEXT, "wxid_alice", "Hello world")]
-    tokenized, _ = tokenize_messages(messages, contacts, db)
+    tokenized, token_map = tokenize_messages(messages, contacts, db)
     output = format_tokenized_messages(tokenized)
     assert "Hello world" in output
-    assert "Alice" not in output  # replaced with token
+    # Sender position uses bare token (no ⟨…⟩); content has no Alice mention.
+    assert token_map.token("wxid_alice") in output
+    assert "Alice" not in output
     assert "[16:" in output or "[00:" in output  # has a timestamp
 
 
@@ -263,10 +272,11 @@ def test_format_message_with_quote():
     quoted = QuotedMessage(speaker_wxid="wxid_alice", speaker_name="Alice",
                            content="Alice: hi", ref_type="1")
     messages = [_msg(1000, MSG_QUOTE, "wxid_bob", "agreed", quoted=quoted)]
-    tokenized, _ = tokenize_messages(messages, contacts, db)
+    tokenized, token_map = tokenize_messages(messages, contacts, db)
     output = format_tokenized_messages(tokenized)
     assert "引用" in output
-    assert "Alice" not in output
+    # Alice (len 5 > 4) is tokenized inside the quoted content via dual-emit.
+    assert f"{token_map.token('wxid_alice')}⟨Alice⟩" in output
 
 
 def test_format_no_sender_no_placeholder_skipped():

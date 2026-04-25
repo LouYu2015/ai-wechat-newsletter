@@ -119,10 +119,18 @@ def _replace_names(
     pattern: "re.Pattern[str] | None",
     mapping: dict[str, str],
 ) -> str:
-    """Replace all real nicknames in *text* with tokens using precomputed state."""
+    """Replace nicknames with ``token⟨原文⟩`` so the LLM can disambiguate.
+
+    Some群友 nicknames collide with product/model/company names (e.g. "DeepSeek",
+    "Cursor"). A blind nickname→token substitution silently corrupts technical
+    discussion. By emitting both, we let the summarization model decide per
+    occurrence whether it's a person reference (output token) or a non-person
+    entity (output 原文). The system prompt forbids retaining the ⟨…⟩ markers
+    in the final output, and ``leak_check`` hard-gates them as a safety net.
+    """
     if not pattern:
         return text
-    return pattern.sub(lambda m: mapping[m.group(0)], text)
+    return pattern.sub(lambda m: f"{mapping[m.group(0)]}⟨{m.group(0)}⟩", text)
 
 
 def _tap_has_optout_party(
@@ -425,6 +433,13 @@ def leak_check(
     # Hard gate 2: raw wxid strings must never appear
     if re.search(r'\bwxid_\w+', markdown):
         raise LeakDetected("检测到原始 wxid 字符串泄漏")
+
+    # Hard gate 3: token⟨原文⟩ disambiguation markers must never reach output.
+    # The system prompt instructs the model to choose one side of the marker;
+    # if any ⟨ or ⟩ slips through, treat it as a model failure rather than
+    # silently shipping malformed text.
+    if '⟨' in markdown or '⟩' in markdown:
+        raise LeakDetected("输出残留 ⟨…⟩ 同名消歧标记")
 
     # LLM-confirmed gate: real nicknames
     for nickname in contact_map.all_nicknames():
