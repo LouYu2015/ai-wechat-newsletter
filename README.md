@@ -5,7 +5,7 @@
 ## 功能概览
 
 - **双版本产出**：群内版保留真实昵称，公开版经过三级隐私处理后发布到 GitHub Pages
-- **结构化提取**：用 Claude Opus 从聊天记录中提取 JSON 中间表示，再分别渲染两个版本
+- **Markdown 提取**：用 Claude Opus 从聊天记录中流式生成 Markdown 日报；公开/内部版本通过后期处理分流
 - **三级隐私模型**：`/optout`（不出现）/ 默认匿名（稳定派生）/ `/alias`（自定义公开别名）
 - **泄漏检测**：公开版发布前，用 Claude Haiku 二次确认真实昵称是否为人名引用
 - **7 天滚动归档**：超过 7 天的 PDF 自动整理到 `archive/YYYY/MM/` 子目录
@@ -82,7 +82,8 @@ python3 main.py --summary gemini
 |------|------|
 | `archive/YYYY-MM-DD 群聊日报.pdf` | 群内版 PDF（真实昵称） |
 | `debug/YYYY-MM-DD.md` | 群内版 Markdown 原文 |
-| `debug/extract-YYYY-MM-DD.json` | Claude 提取的中间 JSON（供 `redact.py` 使用） |
+| `debug/extract-YYYY-MM-DD.md` | Claude 流式生成的原始 Markdown 日报 |
+| `debug/extract-YYYY-MM-DD.input.txt` | 喂给 Claude 的输入（花名册 + 匿名化聊天记录）便于事后审计 |
 | `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
 
 ## 公开版隐私模型
@@ -103,9 +104,6 @@ python3 main.py --summary gemini
 ```bash
 # 从零重建别名数据库（从历史消息完整回放所有指令）
 python3 -m scripts.rebuild_aliases
-
-# 事后撤回某用户在指定日期区间的公开版内容
-python3 -m scripts.redact --wxid <wxid> --from 2026-04-01 --to 2026-04-14 [-y]
 ```
 
 ## 项目结构
@@ -120,8 +118,8 @@ wechat_daily/
 ├── aliases.py         # 别名数据库、指令扫描、备份
 ├── privacy.py         # token 化（惰性分配）、optout 遮蔽、泄漏检测
 ├── roster.py          # token → 真实昵称变体花名册（喂给 LLM 解代称）
-├── llm_extractor.py   # Claude 结构化提取（tool use + 流式输出）
-├── renderer.py        # 中间 JSON → Markdown（群内版 / 公开版）
+├── llm_extractor.py   # Claude 流式 Markdown 生成
+├── renderer.py        # Markdown 后期处理：标记剥离、token 替换、群内版 / 公开版渲染
 ├── pdf.py             # Markdown → PDF
 ├── archiver.py        # 7 天滚动归档
 ├── publisher.py       # 公开仓库 commit / push / 预览

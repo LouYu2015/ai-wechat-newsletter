@@ -1,17 +1,16 @@
-"""Structured extraction: tokenized chat → DailyReport JSON via Claude tool use.
+"""Markdown extraction: tokenized chat → DailyReport(markdown) via Claude streaming.
 
-Uses strict=True on the tool definition for grammar-constrained sampling,
-which guarantees schema compliance without needing a separate validator.
+Plain-text streaming output, no tool use. The prompt fixes the markdown
+structure (intro + ## type sections + ### topic three-part blocks + tags
+footer + per-section `[章节不公开：原因]` hide markers). The renderer parses
+the markdown and produces both the group and public versions.
 """
 
 from __future__ import annotations
 
-import json
 import time
-from typing import TYPE_CHECKING
 
 import httpx
-from anthropic.lib.streaming import InputJsonEvent
 
 from .config import CLAUDE_MODEL, GEMINI_SUMMARY_MODEL, DEBUG_DIR
 from .models import DailyReport
@@ -19,150 +18,109 @@ from .models import DailyReport
 # ── System prompt ────────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
-你是一个专门分析 AI 技术讨论群聊天记录的助手。你的任务是从经过匿名化处理的群聊记录中，提取出结构化的日报内容。
+你是一个专门分析 AI 技术讨论群聊天记录的助手。从经过匿名化处理的群聊记录中，写出当天的 Markdown 日报。
 
 ## 关于匿名化（最重要的约束，必须严格遵守）
 
 聊天记录中所有群友的名字都已替换为稳定的「token」，格式为「形容词的动物」（如「沉稳的大象」、「活泼的企鹅」）。这些是虚构名称，不是真实昵称。
 
 **硬性规则**：
-- 输出的所有字段中，指代群友时**只能使用这些 token**，绝对禁止出现任何真实人名、英文名、昵称、外号、谐音、缩写。
-- 若在聊天记录中看到看起来像真实人名或代称的词语（如英文名 Garry/Alice、未经替换的昵称、群友间的外号「鸭哥」、谐音梗、姓氏缩写等），**不要引用或输出这些词**，请利用下方花名册映射回对应 token；若无法确定对应关系，改用「某群友」代替，或直接省略该引用。
-- 即使是直接引用原话（comments 字段），如果原话中含有非 token 格式的人名/代称，也必须替换为对应 token 或「某群友」再引用。
+- 输出中指代群友时**只能使用这些 token**，绝对禁止出现任何真实人名、英文名、昵称、外号、谐音、缩写。
+- 若聊天记录中看到看起来像真实人名或代称的词语（英文名、未替换的昵称、外号、谐音梗、姓氏缩写等），不要直接引用，请利用花名册映射回对应 token；无法确定时改用「某群友」或省略该引用。
+- 即使引用原话，原话中的人名/代称也要先替换为 token 或「某群友」再引用。
 
 ## 关于 `token⟨原文⟩` 标记（同名消歧）
 
-为了避免群友昵称与产品/模型/公司名同形（例如某位群友的昵称恰好叫「DeepSeek」「Cursor」「Claude」）造成的误替换，凡是聊天记录中由系统自动替换的昵称都会以 `token⟨原文⟩` 的形式同时呈现，例如 `谨慎的大象⟨DeepSeek⟩V4`。请基于上下文判断该位置的语义：
+为避免群友昵称与产品/模型/公司名同形（如某群友昵称恰好叫「DeepSeek」），系统自动替换的昵称会以 `token⟨原文⟩` 的形式同时呈现。请基于上下文二选一：
 
-- 指代**群友本人**（被 @、被提及、与「说/问/回复/拍了拍/分享」等人类行为搭配等）→ 输出 token，丢弃 `⟨原文⟩`。例：`谨慎的大象⟨DeepSeek⟩说得对` → 输出「谨慎的大象说得对」。
-- 指代**非人类实体**（AI 模型、产品、工具、公司、协议、版本号等技术名词）→ 输出原文，丢弃 token。例：`谨慎的大象⟨DeepSeek⟩V4 发布了` → 输出「DeepSeek V4 发布了」。
-- **拿不准时一律按群友处理**（输出 token），保守优先。
-- 同一段对话内同一 mention 的判定应保持一致，避免一会儿当人、一会儿当产品。
-- **绝对禁止在最终输出中保留 `⟨` 或 `⟩` 字符或 `token⟨原文⟩` 这种复合形式。** 必须二选一。
+- 指代**群友本人**（被 @、与「说/问/回复/分享」等人类行为搭配）→ 输出 token，丢弃 `⟨原文⟩`。
+- 指代**非人类实体**（AI 模型、产品、工具、公司、协议、版本号）→ 输出原文，丢弃 token。
+- 拿不准时一律按群友处理（输出 token）。
+- **绝对禁止在最终输出中保留 `⟨` 或 `⟩` 字符。**
 
-## 关于花名册（用于解析消息中的代称）
+## 关于花名册
 
-用户消息开头会附带一份**群友花名册**，列出每个 token 对应的真实昵称与已知群昵称变体。聊天记录里可能出现**未列入花名册**但明显指代某位群友的代称（外号、谐音、缩写），请基于上下文与花名册推断对应 token。拿不准时使用「某群友」，**绝不要在输出中保留任何真实昵称或代称**。
+用户消息开头会附带一份**群友花名册**，列出每个 token 对应的真实昵称与已知群昵称变体。聊天记录里可能出现**未列入花名册**但明显指代某位群友的代称（外号、谐音、缩写），请基于上下文与花名册推断对应 token。拿不准时使用「某群友」，**绝不要保留任何真实昵称或代称**。
 
 ## 关于隐私占位符
 
 部分群友已申请隐私保护，其发言以 `[此消息已隐藏]` 或 `[HH:MM–HH:MM] [某群友连续发言 N 条已隐藏]` 标记。处理这些标记时：
 1. 不要试图推测或还原被隐藏的内容。
 2. 若某段讨论的关键输入来自被隐藏消息，用「有群友提出了一个观点，引发了讨论」这类模糊表述。
-3. 若某条回复明显在回应被隐藏的消息（如「说得对」「同意上面」），保留回复，但不推断被回应内容。
-4. 花絮（anecdote）章节：若互动的核心发言来自被隐藏消息，整条跳过。
+3. 若某条回复明显在回应被隐藏的消息，保留回复，但不推断被回应内容。
+4. 闲聊花絮：若互动核心来自被隐藏消息，整条跳过。
 
-## 关于 public_safe 判定
+## 关于内容完整性
 
-对每个 section 的 `public_safe` 字段进行自评。**应标记为 false 的情形**：
+每段正文必须是**完整句子**，不要在句中截断。若遇到无法直接引用的内容（乱码、格式异常、示例片段），请用描述性语言代替：
+- 不写「给出了示例（如」→ 写「给出了一系列无意义的中文示例，表明模型输出质量严重下降」。
+- 不写「退化到」→ 写「出现严重退化，中文输出明显不可用」。
+
+intro 中提到的话题，下方都要有对应章节；信息不足可简短描述，但不省略。
+
+## 输出格式
+
+直接输出 Markdown，不要前言、不要 ```markdown``` 包裹、不要顶级 `#` 标题（程序会另行加上）。结构如下：
+
+1. **导读**：1–2 段，使用 token 介绍当天亮点（包括闲聊花絮）。不要写 `[TOC]`。
+2. **二级章节**：从下面四类中按当天内容选用，没有的就不写，顺序按重要性自定：
+   - `## 行业新闻`
+   - `## 工具`
+   - `## 方法论`
+   - `## 闲聊花絮`
+3. **三级子话题**：每个二级章节下若干 `### 子话题`，**统一三段式**：
+   - 第一行：`### 标题`
+   - 简介：1–3 句话概括要点（段落或要点列表均可）
+   - 引用：0–3 条 Markdown blockquote `> token：原话或近似引用`，每条之间留空行
+4. **tags 行**：全文最末，先一行 `---` 分隔，再一行 `tags: 标签1, 标签2, 标签3`。标签英文小写、连字符（如 `model-release`、`long-context`）。
+
+## 关于「章节不公开」标记
+
+每个 `### 子话题`写完正文后，**重新审视**该章节是否适合公开发布。**默认放出**；只在以下三类之一时才标记不公开：
 1. **隐私顾虑**：内容涉及可与群外信息交叉识别的私人线索（职业、地点、独特经历），即便已匿名化也可能推断出具体个人。
-2. **Opt-out 波及**：section 的核心依赖某位 opted-out 群友的发言，即使占位符已遮蔽，剩余上下文仍可能让人推知被隐藏内容。
-3. **公众环境风险**：内容在公开互联网语境下可能引起误解、争议、或对当事人/相关方产生负面影响（如涉及第三方的评价、敏感话题的玩笑、可能被断章取义的观点）。
+2. **Opt-out 波及**：核心内容依赖被隐藏的发言，剩余上下文仍可能让人推知被隐藏内容。
+3. **公众环境风险**：在公开互联网语境下可能引起误解、争议、对当事人或相关方产生负面影响。
 
-**默认 public_safe = true**；只在明显命中上述三类之一时标 false，并在 `public_safe_reason` 简要说明原因（null 表示安全）。当拿不准时，选 false。
+需要不公开时，在该 `### 子话题`末尾**单独一行**写：
 
-## section type 说明
+```
+[章节不公开：简短原因]
+```
 
-- `news`：AI 行业新闻、重要发布、产品动态
-- `tool`：具体 AI 工具的介绍、评测、使用体验
-- `methodology`：方法论、工作流、提示词技巧等
-- `anecdote`：闲聊、玩笑、有趣互动、非技术话题（只在确实有趣时收录，不强求）
+格式必须严格：方括号、`章节不公开`四字、中文或英文冒号、原因不含 `]`、整行单独一行。拿不准时标记不公开。
 
-## 输出要求
+## 简短示例
 
-- `intro`：一段导读，用 token 指代群友，介绍今天的亮点（包括闲聊花絮）。不要在 intro 中插入 [TOC] 或任何 Markdown 特殊标记。
-- 每个 section 的 `body` 言简意赅，保留重要信息，避免过度展开
-- `comments` 只挑选最有代表性的 1–3 条，每条引用原话或近似原话
-- `tags` 使用英文小写、连字符，如 `model-release`、`long-context`、`agent`
-- 若当天消息很少或质量不足，可输出空 sections 列表
+```
+今天 沉稳的大象 分享了 Claude Opus 4.7 的发布要点，活泼的企鹅 围绕长上下文写了一篇评测。
 
-## 关于内容完整性（关键约束）
+## 行业新闻
 
-**每个 `body` 字段必须是完整句子，绝对禁止在句子中间截断。**
+### Claude Opus 4.7 发布
+新版本主推工具调用稳定性与长上下文表现，价格不变。
 
-若遇到无法直接引用的内容（如乱码、格式异常、示例片段），请用描述性语言替代，例如：
-- 不写 "给出了示例（如" → 改写为 "给出了一系列无意义的中文示例，表明模型输出质量严重下降。"
-- 不写 "退化到" → 改写为 "出现严重退化，中文输出质量明显不可用。"
+> 沉稳的大象：实测 200K 上下文召回明显比 4.6 稳
 
-**所有在 `intro` 中提及的话题，都必须在 `sections` 中生成对应条目。** 如果某个话题信息不足，可以简短描述，但不能省略。
+### 某客户案例
+（正文…）
+
+[章节不公开：涉及未签约客户的敏感信息]
+
+## 方法论
+
+### 用 sub-agent 做并行搜索的小技巧
+（正文…）
+
+> 活泼的企鹅：把 search 与 write 分到两个 agent 后明显更快
+
+---
+
+tags: model-release, long-context, agent
+```
 """
 
-# ── Tool schema with strict=True ─────────────────────────────────────────────────
+# ── Streaming extraction ─────────────────────────────────────────────────────────
 
-_TOOL = {
-    "name": "submit_daily_report",
-    "description": "提交结构化的群聊日报",
-    "strict": True,
-    "input_schema": {
-        "type": "object",
-        "required": ["date", "intro", "sections"],
-        "additionalProperties": False,
-        "properties": {
-            "date": {
-                "type": "string",
-                "description": "日期 YYYY-MM-DD",
-            },
-            "intro": {
-                "type": "string",
-                "description": "导读段落，使用 token 指代群友，不包含 [TOC]",
-            },
-            "sections": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": [
-                        "type", "title", "body", "comments",
-                        "tags", "public_safe", "public_safe_reason",
-                    ],
-                    "additionalProperties": False,
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "enum": ["news", "tool", "methodology", "anecdote"],
-                        },
-                        "title": {"type": "string"},
-                        "body": {
-                            "type": "string",
-                            "description": "正文，多个要点用换行分隔",
-                        },
-                        "comments": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "required": ["token", "text"],
-                                "additionalProperties": False,
-                                "properties": {
-                                    "token": {
-                                        "type": "string",
-                                        "description": "群友 token（匿名名）",
-                                    },
-                                    "text": {
-                                        "type": "string",
-                                        "description": "评论内容，引用原话",
-                                    },
-                                },
-                            },
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "public_safe": {
-                            "type": "boolean",
-                            "description": "是否适合公开发布",
-                        },
-                        "public_safe_reason": {
-                            "type": ["string", "null"],
-                            "description": "public_safe=false 时说明原因，否则 null",
-                        },
-                    },
-                },
-            },
-        },
-    },
-}
-
-# ── Structured extraction ────────────────────────────────────────────────────────
 
 class ExtractionError(Exception):
     """Claude returned an unusable response (refusal or max_tokens cutoff)."""
@@ -184,22 +142,22 @@ def extract_report(
     client=None,
     roster_text: str | None = None,
 ) -> DailyReport:
-    """Call Claude with strict tool use; return a validated DailyReport.
+    """Stream a markdown daily report from Claude; return DailyReport(date, markdown).
 
-    *client* may be injected for testing (any object with ``messages.create``
-    that matches the Anthropic SDK surface). If None, a default client is
-    constructed using *api_key*.
+    *client* may be injected for testing (any object with ``messages.stream``
+    matching the Anthropic SDK surface). If None, a default client is built
+    from *api_key*.
 
     *roster_text* is the rendered 群友花名册 (see ``wechat_daily.roster``);
     when provided it's prepended to the user message so the model can resolve
-    informal references (谐音、外号、缩写) back to tokens.
+    informal references back to tokens.
     """
     import anthropic  # for APIStatusError below
 
     if client is None:
         client = _default_client(api_key)
 
-    chat_block = f"以下是 {date_str} 的匿名化群聊记录，请提取日报：\n\n{tokenized_chat}"
+    chat_block = f"以下是 {date_str} 的匿名化群聊记录，请生成日报：\n\n{tokenized_chat}"
     user_content = f"{roster_text}\n\n---\n\n{chat_block}" if roster_text else chat_block
 
     max_retries = 3
@@ -207,55 +165,55 @@ def extract_report(
 
     for attempt in range(1, max_retries + 1):
         try:
+            buffer_parts: list[str] = []
             received = 0
             with client.messages.stream(
                 model=CLAUDE_MODEL,
                 max_tokens=16000,
                 system=_SYSTEM_PROMPT,
-                tools=[_TOOL],
-                tool_choice={"type": "tool", "name": "submit_daily_report"},
                 messages=[{"role": "user", "content": user_content}],
             ) as stream:
                 for event in stream:
-                    if isinstance(event, InputJsonEvent):
-                        received += len(event.partial_json)
+                    # Accept either the SDK's TextEvent (has .text delta) or a
+                    # generic event with a `text` attribute. We deliberately
+                    # avoid isinstance checks against TextEvent so injected
+                    # test fakes can yield duck-typed events.
+                    delta = getattr(event, "text", None)
+                    if isinstance(delta, str) and getattr(event, "type", None) == "text":
+                        buffer_parts.append(delta)
+                        received += len(delta)
                         if progress_cb:
                             progress_cb(received, attempt)
                 response = stream.get_final_message()
 
-            # Check stop reason before touching content
+            markdown = "".join(buffer_parts)
+
             if response.stop_reason == "refusal":
-                refusal_content = [
-                    {"type": b.type, "text": getattr(b, "text", None)}
-                    for b in response.content
-                ]
-                _save_failure(date_str, user_content, None,
-                              "Claude 拒绝处理该内容", refusal_content)
+                _save_failure(date_str, user_content, markdown, "Claude 拒绝处理该内容")
                 raise ExtractionError("Claude 拒绝处理该内容（stop_reason=refusal）")
 
             if response.stop_reason == "max_tokens":
-                _save_failure(date_str, user_content, None, "响应被 max_tokens 截断")
+                _save_failure(date_str, user_content, markdown, "响应被 max_tokens 截断")
                 raise ExtractionError("响应被 max_tokens 截断，请增大 max_tokens 后重试")
 
-            tool_block = next(
-                (b for b in response.content if b.type == "tool_use"), None
-            )
-            if not tool_block:
-                _save_failure(date_str, user_content, None, "响应中无 tool_use 块")
-                raise ExtractionError("响应中无 tool_use 块")
+            # Fallback: if the streamed buffer is empty but the final response
+            # contains text blocks, harvest them. This shouldn't happen in
+            # practice but guards against SDK event-shape changes.
+            if not markdown:
+                markdown = "".join(
+                    getattr(b, "text", "") for b in (response.content or [])
+                    if getattr(b, "type", None) == "text"
+                )
 
-            raw: dict = tool_block.input
-            raw["date"] = date_str  # ensure date is always set
+            if not markdown.strip():
+                _save_failure(date_str, user_content, markdown, "响应为空")
+                raise ExtractionError("响应为空")
 
-            _check_truncation(date_str, raw)
-
-            # Build DailyReport (models.py validates types/enums)
-            report = DailyReport.from_dict(raw)
-            _save_extract(date_str, raw, user_content)
-            return report
+            _save_extract(date_str, markdown, user_content)
+            return DailyReport(date=date_str, markdown=markdown)
 
         except ExtractionError:
-            raise  # don't retry on logic errors
+            raise
         except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError) as e:
             last_exc = e
             if attempt < max_retries:
@@ -264,74 +222,36 @@ def extract_report(
             last_exc = e
             if attempt < max_retries:
                 time.sleep(30)
-        except (KeyError, TypeError, ValueError) as e:
-            # strict=True makes schema violations very rare, but handle defensively
-            _save_failure(date_str, user_content, locals().get('raw'), str(e))
-            raise ExtractionError(f"响应数据无效: {e}") from e
 
     _save_failure(date_str, user_content, None, str(last_exc))
     raise last_exc  # type: ignore[misc]
 
 
-_TRUNCATION_ENDINGS = (
-    '到', '如', '（如', '的', '了', '是', '、', '，', '：', '：\n', '为',
-    '（', '(', '"', "'",
-)
-
-
-def _check_truncation(date_str: str, raw: dict) -> None:
-    """Warn (via stderr) if any section body looks like it was cut off mid-sentence.
-
-    With strict=True JSON grammar constraints, Claude can close a string at any
-    valid string boundary. When it encounters content it doesn't want to reproduce
-    (e.g. garbled AI output examples), it may end the body mid-sentence. This
-    function logs a warning so operators notice the issue.
-    """
-    import sys
-    sections = raw.get("sections", [])
-    truncated = []
-    for s in sections:
-        body = s.get("body", "")
-        if body and body.endswith(_TRUNCATION_ENDINGS):
-            truncated.append(s.get("title", "?")[:40])
-    if truncated:
-        print(
-            f"[llm_extractor] WARNING {date_str}: {len(truncated)} section(s) "
-            f"appear truncated mid-sentence: {truncated}",
-            file=sys.stderr,
-        )
-
-
-def _save_extract(date_str: str, raw: dict, user_content: str) -> None:
-    """Save successful extraction to debug/. Includes truncated input for redact."""
+def _save_extract(date_str: str, markdown: str, user_content: str) -> None:
+    """Save successful extraction to debug/."""
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    # Store input preview alongside the report for redact.py and debugging.
-    # The preview includes the roster header so we can audit "why didn't the
-    # model resolve X" after the fact. DailyReport.from_dict ignores unknown
-    # top-level keys, so this is safe.
-    payload = dict(raw)
-    payload['_input_preview'] = user_content[:5000]
-    path = DEBUG_DIR / f"extract-{date_str}.json"
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (DEBUG_DIR / f"extract-{date_str}.md").write_text(markdown, encoding="utf-8")
+    # Sidecar: full LLM input (roster + tokenized chat) for post-mortem audit.
+    (DEBUG_DIR / f"extract-{date_str}.input.txt").write_text(
+        user_content[:50000], encoding="utf-8",
+    )
 
 
 def _save_failure(
     date_str: str,
     user_content: str,
-    raw,
+    partial_markdown: str | None,
     reason: str,
-    refusal_content: list | None = None,
 ) -> None:
     """Persist failure details to debug/ for post-mortem inspection."""
+    import json
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
     path = DEBUG_DIR / f"extract-{date_str}.FAILED.json"
-    payload: dict = {
+    payload = {
         "reason": reason,
-        "raw_response": raw,
+        "partial_markdown": partial_markdown,
         "input_preview": user_content[:3000],
     }
-    if refusal_content is not None:
-        payload["refusal_content"] = refusal_content
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

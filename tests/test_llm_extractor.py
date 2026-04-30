@@ -1,33 +1,44 @@
-"""Tests for llm_extractor — uses injected fake client to avoid real API calls."""
+"""Tests for llm_extractor — uses an injected fake client to avoid real API calls."""
 
 from __future__ import annotations
 
-import pytest
-from anthropic.lib.streaming import InputJsonEvent
+import json
 
-from wechat_daily.llm_extractor import extract_report, ExtractionError
+import pytest
+
+from wechat_daily.llm_extractor import ExtractionError, extract_report
 from wechat_daily.models import DailyReport
 
 
-class _ToolBlock:
-    type = "tool_use"
+# ── Fake event/response/stream/client ───────────────────────────────────────────
 
-    def __init__(self, input_: dict) -> None:
-        self.input = input_
+
+class _TextEvent:
+    """Duck-typed text delta event matching anthropic.lib.streaming.TextEvent."""
+
+    type = "text"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _TextBlock:
+    type = "text"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
 
 
 class _Response:
-    def __init__(self, stop_reason: str, content: list) -> None:
+    def __init__(self, stop_reason: str, content: list | None = None) -> None:
         self.stop_reason = stop_reason
-        self.content = content
+        self.content = content or []
 
 
 class _FakeStream:
-    """Minimal context manager that mimics MessageStreamManager."""
-
-    def __init__(self, response: _Response, json_chunks: list[str]) -> None:
+    def __init__(self, events: list, response: _Response) -> None:
+        self._events = events
         self._response = response
-        self._chunks = json_chunks
 
     def __enter__(self):
         return self
@@ -36,148 +47,161 @@ class _FakeStream:
         pass
 
     def __iter__(self):
-        for chunk in self._chunks:
-            yield InputJsonEvent(type="input_json", partial_json=chunk, snapshot={})
+        yield from self._events
 
     def get_final_message(self) -> _Response:
         return self._response
 
 
 class _FakeMessages:
-    def __init__(self, response: _Response, json_chunks: list[str] | None = None) -> None:
+    def __init__(self, events: list, response: _Response) -> None:
+        self._events = events
         self._response = response
-        self._chunks = json_chunks or []
         self.calls: list[dict] = []
 
     def stream(self, **kwargs) -> _FakeStream:
         self.calls.append(kwargs)
-        return _FakeStream(self._response, self._chunks)
+        return _FakeStream(self._events, self._response)
 
 
 class _FakeClient:
-    def __init__(self, response: _Response, json_chunks: list[str] | None = None) -> None:
-        self.messages = _FakeMessages(response, json_chunks)
+    def __init__(
+        self,
+        text_chunks: list[str] | None = None,
+        stop_reason: str = "end_turn",
+        fallback_blocks: list[_TextBlock] | None = None,
+    ) -> None:
+        events = [_TextEvent(t) for t in (text_chunks or [])]
+        response = _Response(stop_reason, fallback_blocks or [])
+        self.messages = _FakeMessages(events, response)
 
 
-def _valid_payload() -> dict:
-    return {
-        "date": "2026-04-17",
-        "intro": "今天讨论了一些话题。",
-        "sections": [
-            {
-                "type": "news",
-                "title": "示例新闻",
-                "body": "正文",
-                "comments": [],
-                "tags": [],
-                "public_safe": True,
-                "public_safe_reason": None,
-            }
-        ],
-    }
+# ── Tests ───────────────────────────────────────────────────────────────────────
 
 
-def test_extract_report_uses_injected_client(monkeypatch, tmp_path):
+def test_streams_text_into_markdown(monkeypatch, tmp_path):
     import wechat_daily.llm_extractor as mod
     monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
-    client = _FakeClient(_Response("tool_use", [_ToolBlock(_valid_payload())]))
+    client = _FakeClient(text_chunks=["intro\n\n", "## 行业新闻\n\n", "### x\nbody\n"])
 
-    report = extract_report("2026-04-17", "chat history", api_key="fake", client=client)
+    report = extract_report("2026-04-30", "chat history", api_key="fake", client=client)
 
     assert isinstance(report, DailyReport)
-    assert report.date == "2026-04-17"
-    assert len(report.sections) == 1
-    assert report.sections[0].title == "示例新闻"
-    # The fake was actually called with the expected model/tool
-    assert client.messages.calls, "client.messages.stream was never invoked"
+    assert report.date == "2026-04-30"
+    assert report.markdown == "intro\n\n## 行业新闻\n\n### x\nbody\n"
+    # Saved to debug
+    assert (tmp_path / "extract-2026-04-30.md").exists()
+    assert (tmp_path / "extract-2026-04-30.input.txt").exists()
+
+
+def test_no_tool_use_in_request(monkeypatch, tmp_path):
+    """Request must not include the old tool_use parameters."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+
     call = client.messages.calls[0]
-    assert call["tools"][0]["name"] == "submit_daily_report"
-    assert call["tool_choice"]["name"] == "submit_daily_report"
+    assert "tools" not in call
+    assert "tool_choice" not in call
+    assert "system" in call
+    assert "messages" in call
 
 
-def test_extract_report_refusal_raises(monkeypatch, tmp_path):
+def test_refusal_raises_and_writes_failure(monkeypatch, tmp_path):
     import wechat_daily.llm_extractor as mod
     monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
-    client = _FakeClient(_Response("refusal", []))
+    client = _FakeClient(text_chunks=[], stop_reason="refusal")
+
     with pytest.raises(ExtractionError, match="拒绝"):
-        extract_report("2026-04-17", "chat", api_key="fake", client=client)
-    # Failure file was written
-    assert (tmp_path / "extract-2026-04-17.FAILED.json").exists()
+        extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    failure = tmp_path / "extract-2026-04-30.FAILED.json"
+    assert failure.exists()
+    payload = json.loads(failure.read_text(encoding="utf-8"))
+    assert "拒绝" in payload["reason"]
 
 
-def test_extract_report_max_tokens_raises(monkeypatch, tmp_path):
+def test_max_tokens_raises(monkeypatch, tmp_path):
     import wechat_daily.llm_extractor as mod
     monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
-    client = _FakeClient(_Response("max_tokens", []))
+    client = _FakeClient(text_chunks=["partial"], stop_reason="max_tokens")
+
     with pytest.raises(ExtractionError, match="截断"):
-        extract_report("2026-04-17", "chat", api_key="fake", client=client)
+        extract_report("2026-04-30", "chat", api_key="fake", client=client)
 
 
-def test_extract_report_forces_date(monkeypatch, tmp_path):
-    """Even if the model returns a different date, our date_str takes precedence."""
+def test_empty_response_raises(monkeypatch, tmp_path):
     import wechat_daily.llm_extractor as mod
     monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
-    payload = _valid_payload()
-    payload["date"] = "1970-01-01"  # model hallucinated
-    client = _FakeClient(_Response("tool_use", [_ToolBlock(payload)]))
+    client = _FakeClient(text_chunks=[], stop_reason="end_turn")
 
-    report = extract_report("2026-04-17", "chat", api_key="fake", client=client)
-    assert report.date == "2026-04-17"
+    with pytest.raises(ExtractionError, match="空"):
+        extract_report("2026-04-30", "chat", api_key="fake", client=client)
 
 
-def test_extract_report_includes_roster_when_provided(monkeypatch, tmp_path):
-    """When roster_text is passed it must appear in the user message body."""
+def test_falls_back_to_response_text_blocks(monkeypatch, tmp_path):
+    """If no streaming events arrived but content has text blocks, harvest them."""
     import wechat_daily.llm_extractor as mod
     monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
-    client = _FakeClient(_Response("tool_use", [_ToolBlock(_valid_payload())]))
+    client = _FakeClient(
+        text_chunks=[],
+        stop_reason="end_turn",
+        fallback_blocks=[_TextBlock("hello world")],
+    )
+
+    report = extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    assert report.markdown == "hello world"
+
+
+def test_roster_prepended(monkeypatch, tmp_path):
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
 
     roster = "## 群友花名册\n- 沉稳的狐狸：鸭哥"
     extract_report(
-        "2026-04-17", "chat history", api_key="fake", client=client,
+        "2026-04-30", "chat history", api_key="fake", client=client,
         roster_text=roster,
     )
 
-    call = client.messages.calls[0]
-    user_msg = call["messages"][0]["content"]
+    user_msg = client.messages.calls[0]["messages"][0]["content"]
     assert roster in user_msg
     assert "chat history" in user_msg
-    # Roster must come before the chat block
     assert user_msg.index(roster) < user_msg.index("chat history")
 
 
-def test_extract_report_omits_roster_when_none(monkeypatch, tmp_path):
+def test_no_roster_when_none(monkeypatch, tmp_path):
     import wechat_daily.llm_extractor as mod
     monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
-    client = _FakeClient(_Response("tool_use", [_ToolBlock(_valid_payload())]))
+    client = _FakeClient(text_chunks=["x"])
 
-    extract_report("2026-04-17", "chat history", api_key="fake", client=client)
-    call = client.messages.calls[0]
-    user_msg = call["messages"][0]["content"]
+    extract_report("2026-04-30", "chat history", api_key="fake", client=client)
+    user_msg = client.messages.calls[0]["messages"][0]["content"]
     assert "花名册" not in user_msg
 
 
-def test_extract_report_progress_cb_accumulates_bytes(monkeypatch, tmp_path):
-    """progress_cb receives monotonically increasing byte counts from JSON deltas."""
+def test_progress_cb_monotonic(monkeypatch, tmp_path):
     import wechat_daily.llm_extractor as mod
     monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
-
-    chunks = ['{"date"', ': "2026', '-04-17"', "}"]
-    client = _FakeClient(
-        _Response("tool_use", [_ToolBlock(_valid_payload())]),
-        json_chunks=chunks,
-    )
+    chunks = ["abc", "de", "fghij"]
+    client = _FakeClient(text_chunks=chunks)
 
     calls: list[tuple[int, int]] = []
     extract_report(
-        "2026-04-17", "chat", api_key="fake", client=client,
+        "2026-04-30", "chat", api_key="fake", client=client,
         progress_cb=lambda received, attempt: calls.append((received, attempt)),
     )
 
-    assert len(calls) == len(chunks)
-    # Byte counts must be strictly increasing
     counts = [c[0] for c in calls]
-    assert counts == sorted(counts) and len(set(counts)) == len(counts)
-    # Final count equals total bytes across all chunks
-    assert counts[-1] == sum(len(c) for c in chunks)
-    # All calls report attempt 1
+    assert counts == [3, 5, 10]
     assert all(attempt == 1 for _, attempt in calls)
+
+
+def test_debug_md_contents_match(monkeypatch, tmp_path):
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["hello\n", "world\n"])
+
+    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    saved = (tmp_path / "extract-2026-04-30.md").read_text(encoding="utf-8")
+    assert saved == "hello\nworld\n"

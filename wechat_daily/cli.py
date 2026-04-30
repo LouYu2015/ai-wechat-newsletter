@@ -157,10 +157,12 @@ def _run_db_pipeline(
             console.print(f"[bold red]结构化提取失败:[/bold red] {e}")
             return
 
-    n_sections = len(report.sections)
-    n_safe = sum(1 for s in report.sections if s.public_safe)
+    md_len = len(report.markdown)
+    n_h3 = report.markdown.count("\n### ") + (1 if report.markdown.startswith("### ") else 0)
+    n_hidden = report.markdown.count("[章节不公开")
     console.print(
-        f"[green]提取完毕[/green] [dim]{n_sections} 个章节，{n_safe} 个公开版可发布[/dim]\n"
+        f"[green]提取完毕[/green] [dim]{md_len:,} 字符，"
+        f"{n_h3} 个 ### 子话题，{n_hidden} 个标记不公开[/dim]\n"
     )
 
     # ── D: Render group version → PDF ───────────────────────────────────────
