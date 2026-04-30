@@ -122,7 +122,8 @@ def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
     last_dt = datetime.fromtimestamp(last_ts)
     last_complete = (last_dt - timedelta(hours=1)).date() - timedelta(days=1)
     if allow_incomplete:
-        last_complete = max(last_complete, last_dt.date())
+        # buffer zone（午夜前后 1 小时）内不推进到新一天
+        last_complete = max(last_complete, (last_dt - timedelta(hours=1)).date())
 
     if not existing:
         return [last_complete.strftime('%Y-%m-%d')]
