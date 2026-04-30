@@ -416,10 +416,12 @@ def render_public(
     text_resolver = _build_token_replacer(alias_db, token_to_public, extra)
     body = text_resolver(body)
 
+    publish_dt = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+
     front_matter_lines = [
         "---",
         f'title: "{report.date} 群聊日报"',
-        f"date: {report.date} 12:00:00 +0800",
+        f"date: {publish_dt}",
         "categories:",
         "  - Daily",
     ]
