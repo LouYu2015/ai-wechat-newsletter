@@ -327,11 +327,11 @@ def render_group(
         wxid = (token_map.wxid(token) if token_map else None) \
                or alias_db.wxid_of_token(token)
         if not wxid:
-            return token
+            return f"<u>{token}</u>"
         real = contact_map.by_wxid(wxid)
-        if real != wxid:
-            return real
-        return alias_db.real_name_seen(wxid) or wxid
+        if real == wxid:
+            real = alias_db.real_name_seen(wxid) or wxid
+        return f"<u>{real}</u>"
 
     extra = token_map.all_tokens() if token_map else None
     text_resolver = _build_token_replacer(alias_db, token_to_real, extra)
@@ -371,7 +371,7 @@ def _render_command_log(
             if real_name == wxid:
                 real_name = alias_db.real_name_seen(wxid) or wxid
             ok_mark = "✓" if entry['ok'] else "✗"
-            lines.append(f"- {ts_str}  {real_name}：{entry['msg']}  {ok_mark}")
+            lines.append(f"- {ts_str}  <u>{real_name}</u>：{entry['msg']}  {ok_mark}")
     else:
         lines.append("- （今日无指令）")
 
@@ -407,10 +407,10 @@ def render_public(
         wxid = (token_map.wxid(token) if token_map else None) \
                or alias_db.wxid_of_token(token)
         if not wxid:
-            return token
+            return f"<u>{token}</u>"
         if alias_db.is_optout(wxid):
-            return "某群友"
-        return alias_db.public_name_of(wxid)
+            return "<u>某群友</u>"
+        return f"<u>{alias_db.public_name_of(wxid)}</u>"
 
     extra = token_map.all_tokens() if token_map else None
     text_resolver = _build_token_replacer(alias_db, token_to_public, extra)
