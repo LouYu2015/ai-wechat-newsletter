@@ -85,6 +85,41 @@ def test_format_quoted_long_content_truncated():
     assert "…" in result
 
 
+def test_parse_row_link_card_with_url():
+    raw = (
+        b"wxid_link:\n<msg><appmsg>"
+        b"<title>Claude Opus 4.7 \xe5\x8f\x91\xe5\xb8\x83</title>"
+        b"<url>https://mp.weixin.qq.com/s?__biz=abc&amp;mid=123&amp;idx=1</url>"
+        b"</appmsg></msg>"
+    )
+    msg = parse_row(1000, MSG_LINK_OPEN, raw)
+    assert msg is not None
+    assert msg.sender_wxid == "wxid_link"
+    assert msg.content == (
+        "[链接] [Claude Opus 4.7 发布]"
+        "(https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1)"
+    )
+
+
+def test_parse_row_link_card_url_missing_falls_back_to_title():
+    raw = b"wxid_link:\n<msg><appmsg><title>just a title</title></appmsg></msg>"
+    msg = parse_row(1000, MSG_LINK_OPEN, raw)
+    assert msg is not None
+    assert msg.content == "[链接] just a title"
+
+
+def test_parse_row_link_card_brackets_in_title_sanitized():
+    raw = (
+        b"wxid_link:\n<msg><appmsg>"
+        b"<title>[\xe9\x87\x8d\xe7\xa3\x85] hello</title>"
+        b"<url>https://example.com/a</url>"
+        b"</appmsg></msg>"
+    )
+    msg = parse_row(1000, MSG_LINK_OPEN, raw)
+    assert msg is not None
+    assert msg.content == "[链接] [［重磅］ hello](https://example.com/a)"
+
+
 def test_decompress_plain_bytes():
     data = b"hello"
     assert decompress(data) == "hello"

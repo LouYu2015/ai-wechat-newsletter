@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -153,7 +154,16 @@ def parse_row(create_time: int, local_type: int, message_content) -> Message | N
     elif local_type in (MSG_LINK_CARD, MSG_LINK_OPEN):
         sender_wxid, xml = parse_sender_content(raw)
         title = xml_text(xml, 'title')
-        label = '[链接] ' + title if title else '[链接]'
+        url = html.unescape(xml_text(xml, 'url'))
+        if title and url:
+            # Markdown link form so the LLM can preserve it verbatim. Sanitize
+            # `[]` in title since they would break the link syntax.
+            safe_title = title.replace('[', '［').replace(']', '］')
+            label = f'[链接] [{safe_title}]({url})'
+        elif title:
+            label = '[链接] ' + title
+        else:
+            label = '[链接]'
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content=label, raw=raw)
 
