@@ -9,8 +9,10 @@ from datetime import datetime, timedelta, date as date_type
 from pathlib import Path
 
 from dotenv import load_dotenv
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.panel import Panel
+from rich.text import Text
 from rich.progress import (
     Progress, SpinnerColumn, TextColumn, TimeElapsedColumn,
 )
@@ -134,24 +136,64 @@ def _run_db_pipeline(
 
     # ── C: Claude structured extraction ─────────────────────────────────────
     console.rule(f"[bold]Claude 结构化提取  [dim]({CLAUDE_MODEL})[/dim]")
-    with Progress(
+    log_lines: list[Text] = []
+    progress = Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]Claude 正在分析群聊..."),
         TextColumn("[dim]{task.description}[/dim]"),
         TimeElapsedColumn(),
         console=console,
-        transient=False,
-    ) as progress:
-        task = progress.add_task("连接中...", total=None)
+    )
+    task = progress.add_task("连接中...", total=None)
+    state = {"text": 0, "thinking": 0}
+
+    def render() -> Group:
+        return Group(*log_lines, progress)
+
+    with Live(render(), console=console, refresh_per_second=10, transient=False) as live:
+        def refresh() -> None:
+            live.update(render())
+
+        def _update_progress(attempt: int) -> None:
+            label = f" (第 {attempt}/3 次)" if attempt > 1 else ""
+            phase = "思考中" if state["text"] == 0 and state["thinking"] > 0 else "已接收"
+            progress.update(
+                task,
+                description=(
+                    f"{phase} 正文 {state['text']:,} 字节 / "
+                    f"thinking {state['thinking']:,} 字节{label}"
+                ),
+            )
+            refresh()
 
         def progress_cb(received: int, attempt: int) -> None:
-            label = f" (第 {attempt}/3 次)" if attempt > 1 else ""
-            progress.update(task, description=f"已接收 {received:,} 字节{label}")
+            state["text"] = received
+            _update_progress(attempt)
+
+        def thinking_cb(received: int, attempt: int) -> None:
+            state["thinking"] = received
+            _update_progress(attempt)
+
+        def header_cb(kind: str, level: int, title: str, attempt: int) -> None:
+            if kind == "thinking":
+                log_lines.append(Text(title, style="dim"))
+            else:
+                indent = "  " * level
+                marker = "###" if level >= 1 else "##"
+                log_lines.append(Text(f"{indent}{marker} {title}", style="bold"))
+            refresh()
+
+        def attempt_cb(attempt: int) -> None:
+            log_lines.append(Text(f"--- 第 {attempt}/3 次重试 ---", style="yellow"))
+            refresh()
 
         try:
             report = extract_report(
                 date_str, chat_history, anthropic_key, progress_cb,
                 roster_text=roster_text or None,
+                thinking_cb=thinking_cb,
+                header_cb=header_cb,
+                attempt_cb=attempt_cb,
             )
         except ExtractionError as e:
             console.print(f"[bold red]结构化提取失败:[/bold red] {e}")

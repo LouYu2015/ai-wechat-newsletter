@@ -8,9 +8,15 @@ the markdown and produces both the group and public versions.
 
 from __future__ import annotations
 
+import re
 import time
 
 import httpx
+
+# Bold-wrapped line in summarized thinking, e.g. "**Analyzing the chat**".
+_THINKING_HEADER_RE = re.compile(r"^\s*\*\*(.+?)\*\*\s*$")
+# Body markdown ## / ### header line.
+_BODY_HEADER_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
 
 from .config import CLAUDE_MODEL, GEMINI_SUMMARY_MODEL, DEBUG_DIR
 from .models import DailyReport
@@ -141,6 +147,9 @@ def extract_report(
     progress_cb=None,
     client=None,
     roster_text: str | None = None,
+    thinking_cb=None,
+    header_cb=None,
+    attempt_cb=None,
 ) -> DailyReport:
     """Stream a markdown daily report from Claude; return DailyReport(date, markdown).
 
@@ -151,6 +160,18 @@ def extract_report(
     *roster_text* is the rendered 群友花名册 (see ``wechat_daily.roster``);
     when provided it's prepended to the user message so the model can resolve
     informal references back to tokens.
+
+    *thinking_cb(received_bytes, attempt)* is invoked as adaptive-thinking
+    content streams in (separate from the visible text body).
+
+    *header_cb(kind, level, title, attempt)* fires when a structural header
+    is detected in the stream: ``kind="thinking"`` for ``**bold**``-wrapped
+    lines in summarized thinking (level=0); ``kind="body"`` for ``##`` /
+    ``###`` markdown lines in the visible body (level 0 for ``##``, 1 for
+    ``###``).
+
+    *attempt_cb(attempt)* fires when a retry begins (attempt >= 2), so
+    front-ends can render a separator in their log.
     """
     import anthropic  # for APIStatusError below
 
@@ -164,29 +185,72 @@ def extract_report(
     last_exc: Exception | None = None
 
     for attempt in range(1, max_retries + 1):
+        if attempt > 1 and attempt_cb:
+            attempt_cb(attempt)
         try:
             buffer_parts: list[str] = []
+            thinking_parts: list[str] = []
             received = 0
+            thinking_received = 0
+            text_line_buf = ""
+            thinking_line_buf = ""
+
+            def _flush_lines(buf: str, kind: str) -> str:
+                """Emit headers for any complete lines in *buf*; return remainder."""
+                if "\n" not in buf or not header_cb:
+                    return buf
+                *complete, remainder = buf.split("\n")
+                for line in complete:
+                    if kind == "thinking":
+                        m = _THINKING_HEADER_RE.match(line)
+                        if m:
+                            header_cb("thinking", 0, m.group(1).strip(), attempt)
+                    else:
+                        m = _BODY_HEADER_RE.match(line)
+                        if m:
+                            level = len(m.group(1)) - 2  # ## → 0, ### → 1
+                            header_cb("body", level, m.group(2).strip(), attempt)
+                return remainder
+
             with client.messages.stream(
                 model=CLAUDE_MODEL,
-                max_tokens=16000,
+                max_tokens=128000,
+                thinking={"type": "adaptive"},
+                output_config={"effort": "medium"},
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_content}],
             ) as stream:
                 for event in stream:
-                    # Accept either the SDK's TextEvent (has .text delta) or a
-                    # generic event with a `text` attribute. We deliberately
-                    # avoid isinstance checks against TextEvent so injected
-                    # test fakes can yield duck-typed events.
+                    etype = getattr(event, "type", None)
+
+                    # Visible text body — SDK helper TextEvent (has .text + type=="text").
                     delta = getattr(event, "text", None)
-                    if isinstance(delta, str) and getattr(event, "type", None) == "text":
+                    if isinstance(delta, str) and etype == "text":
                         buffer_parts.append(delta)
                         received += len(delta)
+                        text_line_buf = _flush_lines(text_line_buf + delta, "body")
                         if progress_cb:
                             progress_cb(received, attempt)
+                        continue
+
+                    # Adaptive-thinking deltas come through as raw
+                    # content_block_delta events with delta.type == "thinking_delta".
+                    if etype == "content_block_delta":
+                        d = getattr(event, "delta", None)
+                        if d is not None and getattr(d, "type", None) == "thinking_delta":
+                            t = getattr(d, "thinking", "")
+                            if isinstance(t, str) and t:
+                                thinking_parts.append(t)
+                                thinking_received += len(t)
+                                thinking_line_buf = _flush_lines(
+                                    thinking_line_buf + t, "thinking",
+                                )
+                                if thinking_cb:
+                                    thinking_cb(thinking_received, attempt)
                 response = stream.get_final_message()
 
             markdown = "".join(buffer_parts)
+            thinking_text = "".join(thinking_parts)
 
             if response.stop_reason == "refusal":
                 _save_failure(date_str, user_content, markdown, "Claude 拒绝处理该内容")
@@ -209,7 +273,7 @@ def extract_report(
                 _save_failure(date_str, user_content, markdown, "响应为空")
                 raise ExtractionError("响应为空")
 
-            _save_extract(date_str, markdown, user_content)
+            _save_extract(date_str, markdown, user_content, thinking_text)
             return DailyReport(date=date_str, markdown=markdown)
 
         except ExtractionError:
@@ -227,7 +291,12 @@ def extract_report(
     raise last_exc  # type: ignore[misc]
 
 
-def _save_extract(date_str: str, markdown: str, user_content: str) -> None:
+def _save_extract(
+    date_str: str,
+    markdown: str,
+    user_content: str,
+    thinking_text: str = "",
+) -> None:
     """Save successful extraction to debug/."""
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
     (DEBUG_DIR / f"extract-{date_str}.md").write_text(markdown, encoding="utf-8")
@@ -235,6 +304,10 @@ def _save_extract(date_str: str, markdown: str, user_content: str) -> None:
     (DEBUG_DIR / f"extract-{date_str}.input.txt").write_text(
         user_content[:50000], encoding="utf-8",
     )
+    if thinking_text:
+        (DEBUG_DIR / f"extract-{date_str}.thinking.md").write_text(
+            thinking_text, encoding="utf-8",
+        )
 
 
 def _save_failure(
