@@ -7,7 +7,8 @@ from wechat_daily.message_parser import Message, MSG_TEXT, MSG_TAP, MSG_SYSTEM, 
 from wechat_daily.privacy import (
     tokenize_messages, format_tokenized_messages,
     leak_check, LeakDetected, TokenMap, _replace_names,
-    ClaudeLeakConfirmer, build_replace_state,
+    build_replace_state, mark_leaks,
+    LEAK_MARK_OPEN, LEAK_MARK_CLOSE,
 )
 from wechat_daily.aliases import AliasDB, compute_default_anon
 from wechat_daily.contacts import ContactMap
@@ -286,154 +287,120 @@ def test_format_no_sender_no_placeholder_skipped():
     assert "orphan" not in output
 
 
-# ── Fake confirmer for testing ──────────────────────────────────────────────────
+# ── Leak detection (hard gates only) ───────────────────────────────────────────
 
-class _FakeConfirmer:
-    """Test double for ClaudeLeakConfirmer."""
-
-    def __init__(self, verdict: bool = True, raises: bool = False) -> None:
-        self.calls: list[tuple[str, str]] = []
-        self._verdict = verdict
-        self._raises = raises
-
-    def confirm_is_person(self, nickname: str, context: str) -> bool:
-        self.calls.append((nickname, context))
-        if self._raises:
-            raise RuntimeError("simulated API failure")
-        return self._verdict
-
-
-# ── Leak detection ─────────────────────────────────────────────────────────────
-
-def test_leak_check_clean():
-    contacts = _contact_map({"wxid_a": "Alice"})
+def test_leak_check_clean_no_hard_gate():
     db = _alias_db()
-    anon = compute_default_anon("wxid_a", SALT)
-    confirmer = _FakeConfirmer(verdict=False)
-    leak_check(f"{anon} said hi", contacts, db, confirmer)
-    assert confirmer.calls == []  # anon is not a real nickname, no call needed
+    anon = compute_default_anon("wxid_alice", SALT)
+    leak_check(f"{anon} said hi", db)
 
 
-def test_leak_check_non_person_not_blocked():
-    """LLM says 'non-person' → no raise even though nickname appears."""
-    contacts = _contact_map({"wxid_a": "Whisper"})
+def test_leak_check_nickname_no_longer_raises():
+    """Real nicknames in the public text used to raise; now they're
+    surfaced via ``mark_leaks`` in the group renderer instead, leaving
+    the public path un-blocked on this class of issue."""
     db = _alias_db()
-    confirmer = _FakeConfirmer(verdict=False)  # non-person
-    leak_check("比较 Whisper 模型和 Qwen ASR 的效果", contacts, db, confirmer)
-    assert len(confirmer.calls) == 1
-    assert "Whisper" in confirmer.calls[0][1]  # context contains the word
-
-
-def test_leak_check_person_confirmed_raises():
-    """LLM says 'person' → raise LeakDetected."""
-    contacts = _contact_map({"wxid_a": "Whisper"})
-    db = _alias_db()
-    confirmer = _FakeConfirmer(verdict=True)  # person
-    with pytest.raises(LeakDetected, match="Whisper"):
-        leak_check("Whisper 说得对", contacts, db, confirmer)
-
-
-def test_leak_check_detects_real_name():
-    contacts = _contact_map({"wxid_a": "AliceLongName"})
-    db = _alias_db()
-    confirmer = _FakeConfirmer(verdict=True)
-    with pytest.raises(LeakDetected, match="AliceLongName"):
-        leak_check("AliceLongName said something", contacts, db, confirmer)
+    leak_check("AliceLongName said something", db)  # no raise
 
 
 def test_leak_check_detects_optout_anon():
-    """Optout anon is a hard gate — confirmer must NOT be called."""
-    contacts = _contact_map({"wxid_a": "Alice"})
-    db = _alias_db(optout_wxids=["wxid_a"])
-    anon = compute_default_anon("wxid_a", SALT)
-    confirmer = _FakeConfirmer(verdict=False)
+    db = _alias_db(optout_wxids=["wxid_alice"])
+    anon = compute_default_anon("wxid_alice", SALT)
     with pytest.raises(LeakDetected):
-        leak_check(f"{anon} was mentioned", contacts, db, confirmer)
-    assert confirmer.calls == []  # hard gate, no LLM call
+        leak_check(f"{anon} was mentioned", db)
 
 
 def test_leak_check_detects_raw_wxid():
-    """Raw wxid is a hard gate — confirmer must NOT be called."""
-    contacts = _contact_map({})
     db = _alias_db()
-    confirmer = _FakeConfirmer(verdict=False)
     with pytest.raises(LeakDetected, match="wxid"):
-        leak_check("hello wxid_someuser there", contacts, db, confirmer)
-    assert confirmer.calls == []
+        leak_check("hello wxid_someuser there", db)
+
+
+def test_leak_check_detects_disambig_marker_residue():
+    db = _alias_db()
+    with pytest.raises(LeakDetected):
+        leak_check("token⟨原文⟩ leaked", db)
 
 
 def test_leak_check_empty_markdown():
-    contacts = _contact_map({"wxid_a": "Alice"})
     db = _alias_db()
-    confirmer = _FakeConfirmer(verdict=False)
-    leak_check("", contacts, db, confirmer)  # should not raise
+    leak_check("", db)
 
 
-def test_leak_check_confirmer_exception_is_leak():
-    """Confirmer exception → fail-closed, raise LeakDetected."""
-    contacts = _contact_map({"wxid_a": "LongNickname"})
-    db = _alias_db()
-    confirmer = _FakeConfirmer(raises=True)
-    with pytest.raises(LeakDetected):
-        leak_check("LongNickname appeared here", contacts, db, confirmer)
+# ── mark_leaks / strip_leak_marks ──────────────────────────────────────────────
 
 
-def test_leak_check_multiple_occurrences_each_confirmed():
-    """Same nickname appearing N times → confirmer called N times."""
-    contacts = _contact_map({"wxid_a": "LongNickname"})
-    db = _alias_db()
-    confirmer = _FakeConfirmer(verdict=False)  # all non-person
-    leak_check("LongNickname and LongNickname and LongNickname", contacts, db, confirmer)
-    assert len(confirmer.calls) == 3
+def test_mark_leaks_wraps_known_nickname():
+    contacts = _contact_map({"wxid_alice": "AliceLongName"})
+    out = mark_leaks("AliceLongName said hi", contacts)
+    assert f"{LEAK_MARK_OPEN}AliceLongName{LEAK_MARK_CLOSE}" in out
 
 
-def test_leak_check_any_person_occurrence_blocks():
-    """If any one occurrence is judged 'person', raise even if others are non-person."""
-    contacts = _contact_map({"wxid_a": "LongNickname"})
-    db = _alias_db()
-    call_count = [0]
-
-    def _verdict(nickname, context):
-        call_count[0] += 1
-        return call_count[0] == 2  # second call → person
-
-    class _DynConfirmer:
-        def confirm_is_person(self, nickname, context):
-            return _verdict(nickname, context)
-
-    with pytest.raises(LeakDetected):
-        leak_check(
-            "LongNickname tool, LongNickname said, LongNickname model",
-            contacts, db, _DynConfirmer(),
-        )
-    assert call_count[0] == 2  # stops at first person hit
+def test_mark_leaks_wraps_two_codepoint_chinese():
+    """The ≤ 4 codepoint filter that hid 「鸭哥」 in the old pipeline is gone:
+    a 2-codepoint nickname must now be wrapped."""
+    contacts = _contact_map({"wxid_a": "鸭哥"})
+    out = mark_leaks("早 鸭哥 起来了", contacts)
+    assert f"{LEAK_MARK_OPEN}鸭哥{LEAK_MARK_CLOSE}" in out
 
 
-def test_leak_check_context_contains_nickname_and_surroundings():
-    """Context passed to confirmer must contain the nickname and surrounding text."""
-    contacts = _contact_map({"wxid_a": "LongNickname"})
-    db = _alias_db()
-    captured = []
-
-    class _CapConfirmer:
-        def confirm_is_person(self, nickname, context):
-            captured.append(context)
-            return False
-
-    leak_check("prefix text LongNickname suffix text", contacts, db, _CapConfirmer())
-    assert len(captured) == 1
-    assert "LongNickname" in captured[0]
-    assert "prefix" in captured[0]
-    assert "suffix" in captured[0]
+def test_mark_leaks_skips_one_codepoint_names():
+    contacts = _contact_map({"wxid_a": "李"})
+    out = mark_leaks("李 说话", contacts)
+    assert LEAK_MARK_OPEN not in out
 
 
-def test_leak_check_short_nickname_skipped():
-    """Nicknames ≤ 4 codepoints are never checked (consistent with tokenization)."""
-    contacts = _contact_map({"wxid_a": "Bob"})  # len=3 ≤ 4
-    db = _alias_db()
-    confirmer = _FakeConfirmer(verdict=True)
-    leak_check("Bob said something about AI", contacts, db, confirmer)
-    assert confirmer.calls == []  # short nickname skipped
+def test_mark_leaks_uses_group_display_over_wechat_nick():
+    contacts = ContactMap.from_dict(
+        {"wxid_a": "default-wechat-nick"},
+        {"wxid_a": "群昵称专属"},
+    )
+    out = mark_leaks("群昵称专属 和 default-wechat-nick", contacts)
+    # Both variants are tracked → both wrapped
+    assert f"{LEAK_MARK_OPEN}群昵称专属{LEAK_MARK_CLOSE}" in out
+    assert f"{LEAK_MARK_OPEN}default-wechat-nick{LEAK_MARK_CLOSE}" in out
+
+
+def test_mark_leaks_longest_first_avoids_partial():
+    contacts = _contact_map({"wxid_a": "张三李四王", "wxid_b": "张三李四王五"})
+    out = mark_leaks("张三李四王五 来了", contacts)
+    # Longer match wins; the prefix string must not separately wrap.
+    assert out.count(LEAK_MARK_OPEN) == 1
+    assert "张三李四王五" in out
+
+
+def test_mark_leaks_no_pairs_returns_input():
+    contacts = _contact_map({})
+    out = mark_leaks("plain text", contacts)
+    assert out == "plain text"
+
+
+def test_mark_leaks_ascii_uses_word_boundary():
+    """Real users have 2-char ASCII WeChat nicknames like ``tea`` or ``ll``.
+    Without ``\\b`` they would match inside ``team``/``skills`` and flood
+    the group version with false positives."""
+    contacts = _contact_map({"wxid_a": "tea", "wxid_b": "ll"})
+    out = mark_leaks("我们的 team skills 都很好", contacts)
+    assert LEAK_MARK_OPEN not in out
+
+
+def test_mark_leaks_ascii_word_match_still_wraps():
+    contacts = _contact_map({"wxid_a": "tea"})
+    out = mark_leaks("我们的 tea 时间", contacts)
+    assert f"{LEAK_MARK_OPEN}tea{LEAK_MARK_CLOSE}" in out
+
+
+def test_replace_names_ascii_word_boundary():
+    """The same boundary rule applies to tokenization: a 2-char ASCII
+    nickname must not invade English words."""
+    contacts = _contact_map({"wxid_a": "tea"})
+    db = AliasDB(users={}, reservations=[], salt=SALT)
+    db.get_or_create_user("wxid_a")
+    tm = TokenMap.build(["wxid_a"], db)
+    pattern, mapping = build_replace_state(contacts, tm)
+    out = _replace_names("team meeting", pattern, mapping)
+    assert "tea⟨tea⟩m" not in out
+    assert out == "team meeting"
 
 
 # ── TAP substring safety ───────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable, Iterator
+from typing import TYPE_CHECKING, Callable
 
 from .message_parser import (
     Message, QuotedMessage,
@@ -51,18 +51,46 @@ class TokenMap:
 def _nickname_pairs(contact_map: "ContactMap") -> list[tuple[str, str]]:
     """Return [(nickname, wxid)] sorted by nickname length desc.
 
-    Skips empty names and nicknames with ≤ 4 codepoints (≈ 2 Chinese characters)
-    to avoid false matches inside URLs and short technical tokens.
+    Pulls 群昵称 + 微信昵称 from ContactMap and keeps anything ≥ 2 codepoints.
+    The model still sees the original via the ``token⟨原文⟩`` form, so short-
+    name false positives are recoverable downstream — being aggressive here
+    is what catches 2-character nicknames like 「鸭哥」 that the previous
+    ≤ 4 filter silently dropped.
     """
-    pairs: list[tuple[str, str]] = []
-    for nickname in contact_map.all_nicknames():
-        if len(nickname) <= 4:
-            continue
-        wxid = contact_map.wxid_for_nickname(nickname)
-        if wxid:
-            pairs.append((nickname, wxid))
+    pairs = [(n, w) for n, w in contact_map.all_pairs() if len(n) >= 2]
     pairs.sort(key=lambda p: len(p[0]), reverse=True)
     return pairs
+
+
+def _is_ascii_word(s: str) -> bool:
+    """A name made only of regex ``\\w`` ASCII characters can be safely
+    bracketed by ``\\b``. CJK characters are not in ``\\w``, so applying
+    ``\\b`` to e.g. 「鸭哥」 produces a boundary at *every* CJK position
+    and never matches — keep those as bare literals."""
+    return bool(s) and all(c.isascii() and (c.isalnum() or c == "_") for c in s)
+
+
+def _compile_nickname_pattern(
+    pairs: list[tuple[str, str]],
+) -> "re.Pattern[str] | None":
+    """Build an alternation regex that respects word boundaries for ASCII-
+    only names but matches CJK names as raw substrings.
+
+    Without ``\\b`` on ASCII pairs, a 2-character nickname like ``tea`` would
+    match inside ``team`` — devastating once the ≤ 4 codepoint filter is
+    relaxed for CJK. The contact table holds ~20k users; many short Latin
+    aliases collide with English words.
+    """
+    if not pairs:
+        return None
+    parts: list[str] = []
+    for name, _ in pairs:
+        esc = re.escape(name)
+        if _is_ascii_word(name):
+            parts.append(rf"\b{esc}\b")
+        else:
+            parts.append(esc)
+    return re.compile("|".join(parts))
 
 
 def build_replace_state(
@@ -81,7 +109,7 @@ def build_replace_state(
         pairs = [(n, w) for n, w in pairs if w in only_wxids]
     if not pairs:
         return None, {}
-    pattern = re.compile('|'.join(re.escape(n) for n, _ in pairs))
+    pattern = _compile_nickname_pattern(pairs)
     mapping = {n: token_map.token(w) for n, w in pairs}
     return pattern, mapping
 
@@ -95,7 +123,9 @@ def _scan_mentioned_wxids(
     pairs = _nickname_pairs(contact_map)
     if not pairs:
         return set()
-    pattern = re.compile('|'.join(re.escape(n) for n, _ in pairs))
+    pattern = _compile_nickname_pattern(pairs)
+    if pattern is None:
+        return set()
     nick_to_wxid = {n: w for n, w in pairs}
 
     mentioned: set[str] = set()
@@ -147,14 +177,8 @@ def _tap_has_optout_party(
     to err on the side of privacy protection.
     """
     optout = set(alias_db.optout_wxids())
-    # Build pairs from all nicknames (no ≤ 4 char filter), sorted longest-first.
-    all_pairs: list[tuple[str, str]] = []
-    for nickname in contact_map.all_nicknames():
-        if not nickname:
-            continue
-        wxid = contact_map.wxid_for_nickname(nickname)
-        if wxid:
-            all_pairs.append((nickname, wxid))
+    # All known names from both sources; longest-first to avoid substring traps.
+    all_pairs = list(contact_map.all_pairs())
     all_pairs.sort(key=lambda p: len(p[0]), reverse=True)
 
     remaining = content
@@ -332,123 +356,51 @@ def format_tokenized_messages(messages: list[Message]) -> str:
 
 # ── Leak detection ───────────────────────────────────────────────────────────────
 
-_CONFIRM_SYSTEM = """\
-你是一个文本消歧助手。用户会给你一个词和它在文章中出现的上下文片段。
-你要判断：在这一具体出现位置，这个词是**指代一位人类群友**，还是**非人类实体**（AI 模型、软件、算法、产品、公司、协议等）。
-
-判断规则：
-- 如果这个词出现在人名位置（主语/宾语指代说话者、被 @ 被提及、与「说/问/回复/拍了拍/分享」等人类行为搭配）→ 判定 person。
-- 如果它明显指代技术或非人类实体（如「Whisper 模型」「用 Cursor 写代码」「Claude 回复了」）→ 判定 non-person。
-- 拿不准时一律输出 person（宁可误报，确保安全）。
-
-**只输出一个词**：`person` 或 `non-person`。不要任何解释、不要标点、不要代码块。\
-"""
-
-_CONFIRM_USER_TMPL = """\
-目标词：{nickname}
-
-上下文片段（目标词出现在其中）：
----
-{context}
----
-
-在这个上下文里，"{nickname}" 指的是 person 还是 non-person？\
-"""
-
-
-class ClaudeLeakConfirmer:
-    """Calls Claude to judge whether a nickname occurrence refers to a real person."""
-
-    def __init__(
-        self,
-        api_key: str | None = None,
-        client=None,
-        model: str | None = None,
-    ) -> None:
-        if client is None:
-            import anthropic
-            import httpx
-            client = anthropic.Anthropic(
-                api_key=api_key,
-                timeout=httpx.Timeout(60.0, connect=10.0),
-            )
-        self._client = client
-        if model is None:
-            from .config import LEAK_CONFIRM_MODEL
-            model = LEAK_CONFIRM_MODEL
-        self._model = model
-
-    def confirm_is_person(self, nickname: str, context: str) -> bool:
-        """Return True if the occurrence is a real person (= leak). Fail-closed on error."""
-        try:
-            resp = self._client.messages.create(
-                model=self._model,
-                max_tokens=16,
-                system=_CONFIRM_SYSTEM,
-                messages=[{
-                    "role": "user",
-                    "content": _CONFIRM_USER_TMPL.format(
-                        nickname=nickname, context=context,
-                    ),
-                }],
-            )
-            text = "".join(
-                b.text for b in resp.content if getattr(b, "type", "") == "text"
-            ).strip().lower()
-            return not text.startswith("non-person")
-        except Exception:
-            return True  # fail-closed: treat unknown as leak
-
-
-def _iter_contexts(text: str, needle: str, window: int = 100) -> Iterator[str]:
-    """Yield each occurrence of *needle* in *text* with up to *window* chars of context."""
-    start = 0
-    while True:
-        i = text.find(needle, start)
-        if i == -1:
-            return
-        lo = max(0, i - window)
-        hi = min(len(text), i + len(needle) + window)
-        yield text[lo:hi]
-        start = i + len(needle)
+LEAK_MARK_OPEN = '<mark class="leak-warn">'
+LEAK_MARK_CLOSE = '</mark>'
 
 
 def leak_check(
     markdown: str,
-    contact_map: "ContactMap",
     alias_db: "AliasDB",
-    confirmer: ClaudeLeakConfirmer,
 ) -> None:
-    """Raise LeakDetected if a real name or optout anon is found in *markdown*.
+    """Raise LeakDetected on the three hard-gate violations.
 
-    Optout anons and raw wxid strings are hard gates (always raise).
-    Real nicknames are confirmed via *confirmer*; only person-references raise.
-    Nicknames ≤ 4 codepoints are skipped (same threshold as tokenization).
+    Nickname leaks are no longer raised here — the group renderer wraps
+    suspect occurrences with ``<mark class="leak-warn">…</mark>`` so the
+    author can spot-check them visually before publishing.
     """
-    # Hard gate 1: optout users' default_anon must never appear
     for anon in alias_db.optout_anons():
         if anon in markdown:
             raise LeakDetected(f"Optout 用户默认匿名名泄漏: 「{anon}」")
 
-    # Hard gate 2: raw wxid strings must never appear
     if re.search(r'\bwxid_\w+', markdown):
         raise LeakDetected("检测到原始 wxid 字符串泄漏")
 
-    # Hard gate 3: token⟨原文⟩ disambiguation markers must never reach output.
-    # The system prompt instructs the model to choose one side of the marker;
-    # if any ⟨ or ⟩ slips through, treat it as a model failure rather than
-    # silently shipping malformed text.
+    # token⟨原文⟩ disambiguation markers must never reach output. The system
+    # prompt instructs the model to pick one side; any leftover ⟨ or ⟩ is a
+    # model failure, surface it rather than silently ship malformed text.
     if '⟨' in markdown or '⟩' in markdown:
         raise LeakDetected("输出残留 ⟨…⟩ 同名消歧标记")
 
-    # LLM-confirmed gate: real nicknames
-    for nickname in contact_map.all_nicknames():
-        if len(nickname) <= 4 or nickname not in markdown:
-            continue
-        for ctx in _iter_contexts(markdown, nickname):
-            try:
-                is_person = confirmer.confirm_is_person(nickname, ctx)
-            except Exception:
-                is_person = True  # fail-closed: confirmer error → treat as leak
-            if is_person:
-                raise LeakDetected(f"真实昵称泄漏: 「{nickname}」")
+
+def mark_leaks(markdown: str, contact_map: "ContactMap") -> str:
+    """Wrap occurrences of known real-name variants with a leak-warn mark.
+
+    Called by the group renderer only — the public renderer reads the same
+    ``report.markdown`` source (which never contains marks) so it doesn't
+    need a stripping step. The highlight is a review signal for the author
+    before the manual ``-y`` push; it isn't a hard block.
+
+    Names ≥ 2 codepoints are wrapped, longest-first to avoid substring
+    overlap. Tokens (default_anons / public aliases) are not wrapped —
+    only real-name variants from ``contact_map``.
+    """
+    pairs = _nickname_pairs(contact_map)
+    pattern = _compile_nickname_pattern(pairs)
+    if pattern is None:
+        return markdown
+    return pattern.sub(
+        lambda m: f"{LEAK_MARK_OPEN}{m.group(0)}{LEAK_MARK_CLOSE}",
+        markdown,
+    )

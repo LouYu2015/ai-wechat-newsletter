@@ -172,18 +172,10 @@ def test_public_no_instruction_log():
 # ── Leak detection ────────────────────────────────────────────────────────────
 
 
-class _NonPersonConfirmer:
-    """Stub that always says non-person — bypasses LLM-side blocking."""
-
-    def confirm_is_person(self, nickname, context):
-        return False
-
-
 def test_public_passes_leak_check():
     db = _make_db()
-    contacts = _make_contacts()
     out = render_public(_make_report(db), db)
-    leak_check(out, contacts, db, _NonPersonConfirmer())
+    leak_check(out, db)
 
 
 def test_public_no_real_names():

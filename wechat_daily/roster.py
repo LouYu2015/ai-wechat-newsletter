@@ -34,18 +34,13 @@ def build_roster(
         if not wxid or alias_db.is_optout(wxid):
             continue
 
-        variants: list[str] = []
-        seen: set[str] = set()
-        for candidate in (
-            contact_map.by_wxid(wxid),
-            alias_db.real_name_seen(wxid),
-        ):
-            if not candidate or candidate == wxid:
-                continue
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            variants.append(candidate)
+        variants = list(contact_map.variants(wxid))
+        # Splice in alias_db.real_name_seen as a tertiary source if it's a
+        # value the contact map didn't already cover (rare — kept so manually
+        # logged display names don't silently disappear).
+        seen_extra = alias_db.real_name_seen(wxid)
+        if seen_extra and seen_extra not in variants:
+            variants.append(seen_extra)
 
         if not variants:
             continue

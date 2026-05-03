@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
 from .models import DailyReport
+from .privacy import mark_leaks
 
 if TYPE_CHECKING:
     from .aliases import AliasDB
@@ -320,6 +321,7 @@ def render_group(
     """Render the internal version: real names, 🔒 markers, [TOC], command log."""
 
     body, tags = _strip_trailing_tags(report.markdown)
+    body = mark_leaks(body, contact_map)
     body = _annotate_hidden_for_group(body)
     body = _insert_toc(body)
 

@@ -481,6 +481,15 @@ def test_render_public_only_marker_section_removed_clean():
     assert "\n\n\n" not in out
 
 
+def test_render_group_marks_leaked_real_name():
+    """Real names that escape token-replacement (i.e. the LLM left them
+    in the markdown) get wrapped with ``<mark class="leak-warn">…</mark>``
+    so the author spots them on review."""
+    md = "## A\n\n### x\n直接写了 Alice 的名字。\n"
+    out = render_group(_wrap(md), _make_db(), _make_contacts(), command_log=[])
+    assert '<mark class="leak-warn">Alice</mark>' in out
+
+
 def test_render_group_command_log_with_real_user():
     log = [
         {"ts": 1700000000, "wxid": "wxid_alice", "cmd": "/alias Duckie",
