@@ -239,7 +239,7 @@ def extract_report(
                 model=CLAUDE_MODEL,
                 max_tokens=128000,
                 thinking={"type": "adaptive"},
-                output_config={"effort": "medium"},
+                output_config={"effort": "high"},
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_content}],
             ) as stream:
