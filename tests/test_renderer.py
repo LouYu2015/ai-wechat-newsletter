@@ -389,6 +389,11 @@ def test_render_public_front_matter_present():
     assert "toc: true" in out
 
 
+def test_render_public_front_matter_permalink():
+    out = render_public(_wrap(_sample_markdown()), _make_db())
+    assert "permalink: /daily/2026/04/30/daily/" in out
+
+
 def test_render_public_front_matter_tags():
     out = render_public(_wrap(_sample_markdown()), _make_db())
     assert "tags:" in out

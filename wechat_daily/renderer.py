@@ -417,11 +417,14 @@ def render_public(
     body = text_resolver(body)
 
     publish_dt = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    year, month, day = report.date.split("-")
+    permalink = f"/daily/{year}/{month}/{day}/daily/"
 
     front_matter_lines = [
         "---",
         f'title: "{report.date} 群聊日报"',
         f"date: {publish_dt}",
+        f"permalink: {permalink}",
         "categories:",
         "  - Daily",
     ]
