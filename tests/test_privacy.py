@@ -336,12 +336,20 @@ def test_mark_leaks_wraps_known_nickname():
     assert f"{LEAK_MARK_OPEN}AliceLongName{LEAK_MARK_CLOSE}" in out
 
 
-def test_mark_leaks_wraps_two_codepoint_chinese():
-    """The ≤ 4 codepoint filter that hid 「鸭哥」 in the old pipeline is gone:
-    a 2-codepoint nickname must now be wrapped."""
+def test_mark_leaks_skips_two_codepoint_cjk():
+    """``mark_leaks`` is a review signal — its CJK threshold is ≥ 3 codepoints
+    (stricter than ``_replace_names``'s ≥ 2). 2-char nicknames like 「鸭哥」
+    cause too many false positives, including collisions with token internals
+    such as 「企鹅」 inside 「开朗的企鹅」."""
     contacts = _contact_map({"wxid_a": "鸭哥"})
     out = mark_leaks("早 鸭哥 起来了", contacts)
-    assert f"{LEAK_MARK_OPEN}鸭哥{LEAK_MARK_CLOSE}" in out
+    assert LEAK_MARK_OPEN not in out
+
+
+def test_mark_leaks_wraps_three_codepoint_cjk():
+    contacts = _contact_map({"wxid_a": "小鸭哥"})
+    out = mark_leaks("早 小鸭哥 起来了", contacts)
+    assert f"{LEAK_MARK_OPEN}小鸭哥{LEAK_MARK_CLOSE}" in out
 
 
 def test_mark_leaks_skips_one_codepoint_names():
@@ -375,19 +383,73 @@ def test_mark_leaks_no_pairs_returns_input():
     assert out == "plain text"
 
 
+def test_mark_leaks_skips_short_ascii():
+    """ASCII threshold is ≥ 4. ``tea`` is below threshold even though it is
+    a plausible nickname — too many false positives in English-heavy content."""
+    contacts = _contact_map({"wxid_a": "tea", "wxid_b": "abc"})
+    out = mark_leaks("tea time and abc 都很好", contacts)
+    assert LEAK_MARK_OPEN not in out
+
+
 def test_mark_leaks_ascii_uses_word_boundary():
-    """Real users have 2-char ASCII WeChat nicknames like ``tea`` or ``ll``.
-    Without ``\\b`` they would match inside ``team``/``skills`` and flood
-    the group version with false positives."""
-    contacts = _contact_map({"wxid_a": "tea", "wxid_b": "ll"})
-    out = mark_leaks("我们的 team skills 都很好", contacts)
+    contacts = _contact_map({"wxid_a": "team"})
+    out = mark_leaks("teamwork 完成了", contacts)
     assert LEAK_MARK_OPEN not in out
 
 
 def test_mark_leaks_ascii_word_match_still_wraps():
-    contacts = _contact_map({"wxid_a": "tea"})
-    out = mark_leaks("我们的 tea 时间", contacts)
-    assert f"{LEAK_MARK_OPEN}tea{LEAK_MARK_CLOSE}" in out
+    contacts = _contact_map({"wxid_a": "team"})
+    out = mark_leaks("我们的 team 厉害", contacts)
+    assert f"{LEAK_MARK_OPEN}team{LEAK_MARK_CLOSE}" in out
+
+
+def test_mark_leaks_skips_u_tag_region():
+    """Token-resolved real names live inside ``<u>…</u>`` after ``text_resolver``.
+    Marking them again would double-wrap every legitimate reference."""
+    contacts = _contact_map({"wxid_a": "AliceLong"})
+    out = mark_leaks("<u>AliceLong</u> 说话", contacts)
+    assert LEAK_MARK_OPEN not in out
+
+
+def test_mark_leaks_skips_markdown_link_url():
+    """Inserting ``<mark>`` inside a link URL breaks the link
+    (saw ``wei<mark>xin.</mark>qq.com`` corrupt the 05-02 daily)."""
+    contacts = _contact_map({"wxid_a": "weixin"})
+    out = mark_leaks("[文章](https://weixin.qq.com/foo) 链接", contacts)
+    assert LEAK_MARK_OPEN not in out
+    assert "https://weixin.qq.com/foo" in out
+
+
+def test_mark_leaks_marks_link_text():
+    """Link text (the ``[…]`` half) is still scanned — only the URL is shielded."""
+    contacts = _contact_map({"wxid_a": "AliceLong"})
+    out = mark_leaks("[AliceLong](https://x.com/p) 写道", contacts)
+    assert f"{LEAK_MARK_OPEN}AliceLong{LEAK_MARK_CLOSE}" in out
+
+
+def test_mark_leaks_skips_inline_code():
+    contacts = _contact_map({"wxid_a": "config"})
+    out = mark_leaks("看 `config.py` 文件", contacts)
+    assert LEAK_MARK_OPEN not in out
+
+
+def test_mark_leaks_skips_autolink():
+    contacts = _contact_map({"wxid_a": "example"})
+    out = mark_leaks("访问 <https://example.com/foo>", contacts)
+    assert LEAK_MARK_OPEN not in out
+
+
+def test_mark_leaks_does_not_break_token_substring():
+    """Regression: with the old in-token CJK substring matching,
+    ``mark_leaks`` running before token replacement broke
+    ``开朗的企鹅`` into ``开朗的<mark>企鹅</mark>``. Now ``mark_leaks``
+    runs *after* token replacement, so token strings never reach it."""
+    # 「企鹅」 is 2 codepoints — below the new mark_leaks threshold anyway.
+    # This test guards against regressing the threshold.
+    contacts = _contact_map({"wxid_a": "企鹅"})
+    out = mark_leaks("开朗的企鹅 说", contacts)
+    assert "开朗的企鹅" in out
+    assert LEAK_MARK_OPEN not in out
 
 
 def test_replace_names_ascii_word_boundary():

@@ -321,7 +321,6 @@ def render_group(
     """Render the internal version: real names, 🔒 markers, [TOC], command log."""
 
     body, tags = _strip_trailing_tags(report.markdown)
-    body = mark_leaks(body, contact_map)
     body = _annotate_hidden_for_group(body)
     body = _insert_toc(body)
 
@@ -338,6 +337,11 @@ def render_group(
     extra = token_map.all_tokens() if token_map else None
     text_resolver = _build_token_replacer(alias_db, token_to_real, extra)
     body = text_resolver(body)
+    # mark_leaks runs after token replacement so CJK substrings (e.g. 「企鹅」
+    # inside the token 「开朗的企鹅」) don't get a <mark> inserted that breaks
+    # the subsequent token regex match. Token-resolved <u>…</u> regions are
+    # skipped inside mark_leaks.
+    body = mark_leaks(body, contact_map)
 
     parts = [
         f"# {report.date} 群聊日报",
