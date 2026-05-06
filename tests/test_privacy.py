@@ -3,7 +3,10 @@
 import pytest
 from unittest.mock import MagicMock
 
-from wechat_daily.message_parser import Message, MSG_TEXT, MSG_TAP, MSG_SYSTEM, MSG_QUOTE, QuotedMessage
+from wechat_daily.message_parser import (
+    LinkMeta, Message, MSG_LINK_OPEN, MSG_TEXT, MSG_TAP, MSG_SYSTEM, MSG_QUOTE,
+    QuotedMessage,
+)
 from wechat_daily.privacy import (
     tokenize_messages, format_tokenized_messages,
     leak_check, LeakDetected, TokenMap, _replace_names,
@@ -86,6 +89,22 @@ def test_tokenize_replaces_name_in_content():
     # Raw nickname only appears inside the ⟨…⟩ marker.
     assert "BobbyC" in result[0].content
     assert result[0].content.count("BobbyC") == result[0].content.count("⟨BobbyC⟩")
+
+
+def test_tokenize_preserves_markdown_link_url():
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    db = _alias_db()
+    messages = [
+        _msg(
+            1000,
+            MSG_TEXT,
+            "wxid_alice",
+            "[链接] [Article](https://mp.weixin.qq.com/s?name=Alice)",
+        )
+    ]
+    result, _ = tokenize_messages(messages, contacts, db)
+    assert "https://mp.weixin.qq.com/s?name=Alice" in result[0].content
+    assert "⟨Alice⟩" not in result[0].content
 
 
 def test_tokenize_replaces_non_sender_name_in_content():
@@ -219,6 +238,23 @@ def test_format_normal_message():
     assert token_map.token("wxid_alice") in output
     assert "Alice" not in output
     assert "[16:" in output or "[00:" in output  # has a timestamp
+
+
+def test_format_link_context_after_link_line():
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    db = _alias_db()
+    msg = Message(
+        create_time=1000,
+        local_type=MSG_LINK_OPEN,
+        sender_wxid="wxid_alice",
+        content="[链接] [Article](https://example.com)",
+        link=LinkMeta(title="Article", url="https://example.com"),
+        link_context="网页摘要内容",
+    )
+    tokenized, _ = tokenize_messages([msg], contacts, db)
+    output = format_tokenized_messages(tokenized)
+    assert "[链接] [Article](https://example.com)" in output
+    assert "\n  [网页摘要] 网页摘要内容" in output
 
 
 def test_format_optout_placeholder_no_double_timestamp():

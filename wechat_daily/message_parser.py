@@ -35,6 +35,13 @@ class QuotedMessage:
 
 
 @dataclass
+class LinkMeta:
+    title: str = ""
+    url: str = ""
+    description: str = ""
+
+
+@dataclass
 class Message:
     create_time: int
     local_type: int
@@ -43,6 +50,9 @@ class Message:
     quoted: Optional[QuotedMessage] = None
     raw: str = field(default="", repr=False)  # original decompressed blob
     image_md5: Optional[str] = None     # for MSG_IMAGE: <img md5="..."> in XML
+    link: Optional[LinkMeta] = None
+    inline_links: list[LinkMeta] = field(default_factory=list)
+    link_context: str = ""              # fetched/summarized public webpage context
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -156,6 +166,7 @@ def parse_row(create_time: int, local_type: int, message_content) -> Message | N
         sender_wxid, xml = parse_sender_content(raw)
         title = xml_text(xml, 'title')
         url = html.unescape(xml_text(xml, 'url'))
+        description = xml_text(xml, 'des')
         if title and url:
             # Markdown link form so the LLM can preserve it verbatim. Sanitize
             # `[]` in title since they would break the link syntax.
@@ -166,7 +177,8 @@ def parse_row(create_time: int, local_type: int, message_content) -> Message | N
         else:
             label = '[链接]'
         return Message(create_time=create_time, local_type=local_type,
-                       sender_wxid=sender_wxid, content=label, raw=raw)
+                       sender_wxid=sender_wxid, content=label, raw=raw,
+                       link=LinkMeta(title=title, url=url, description=description))
 
     elif local_type == MSG_FILE:
         sender_wxid, xml = parse_sender_content(raw)

@@ -160,7 +160,34 @@ def _replace_names(
     """
     if not pattern:
         return text
-    return pattern.sub(lambda m: f"{mapping[m.group(0)]}⟨{m.group(0)}⟩", text)
+    return _replace_unprotected(
+        text,
+        pattern,
+        lambda m: f"{mapping[m.group(0)]}⟨{m.group(0)}⟩",
+    )
+
+
+_TOKENIZE_PROTECT_RE = re.compile(
+    r'\]\([^)]*\)'
+    r'|<https?://[^>\s]+>'
+    r'|https?://[^\s)]+'
+)
+
+
+def _replace_unprotected(
+    text: str,
+    pattern: "re.Pattern[str]",
+    repl,
+) -> str:
+    """Apply *pattern* outside Markdown/autolink URL regions only."""
+    out: list[str] = []
+    pos = 0
+    for m in _TOKENIZE_PROTECT_RE.finditer(text):
+        out.append(pattern.sub(repl, text[pos:m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(pattern.sub(repl, text[pos:]))
+    return ''.join(out)
 
 
 def _tap_has_optout_party(
@@ -308,6 +335,9 @@ def tokenize_messages(
                 content=content,
                 quoted=quoted,
                 image_md5=msg.image_md5,
+                link=msg.link,
+                inline_links=msg.inline_links,
+                link_context=msg.link_context,
             ))
 
         if progress_cb:
@@ -338,6 +368,10 @@ def _format_one_line(msg: Message) -> str | None:
         return None
 
     line = f"[{ts}] {name}: {msg.content}"
+    if msg.link_context:
+        for context in msg.link_context.splitlines():
+            if context.strip():
+                line += f"\n  [网页摘要] {context.strip()}"
     if msg.quoted:
         line += f"\n  > 引用 {msg.quoted.content}"
     return line

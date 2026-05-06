@@ -99,6 +99,23 @@ def test_parse_row_link_card_with_url():
         "[链接] [Claude Opus 4.7 发布]"
         "(https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1)"
     )
+    assert msg.link is not None
+    assert msg.link.title == "Claude Opus 4.7 发布"
+    assert msg.link.url == "https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1"
+
+
+def test_parse_row_link_card_extracts_description():
+    raw = (
+        b"wxid_link:\n<msg><appmsg>"
+        b"<title>hello</title>"
+        b"<des>\xe8\xbf\x99\xe6\x98\xaf\xe6\x91\x98\xe8\xa6\x81</des>"
+        b"<url>https://example.com/a</url>"
+        b"</appmsg></msg>"
+    )
+    msg = parse_row(1000, MSG_LINK_OPEN, raw)
+    assert msg is not None
+    assert msg.link is not None
+    assert msg.link.description == "这是摘要"
 
 
 def test_parse_row_link_card_url_missing_falls_back_to_title():

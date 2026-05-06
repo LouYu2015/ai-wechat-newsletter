@@ -27,6 +27,7 @@ GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 
 # ── Models ──────────────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-opus-4-6"
+LINK_SUMMARY_MODEL = "claude-sonnet-4-6"
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_SUMMARY_MODEL = "gemini-3-flash"
 

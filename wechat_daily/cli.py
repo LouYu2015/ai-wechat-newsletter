@@ -20,7 +20,9 @@ from rich.progress import (
 from .aliases import AliasDB
 from .archiver import archive_old_files, get_pdf_path
 from .chat_extractor import extract_messages, find_missing_dates
-from .config import CLAUDE_MODEL, DEBUG_DIR, GEMINI_SUMMARY_MODEL, PROJECT_ROOT
+from .config import (
+    CLAUDE_MODEL, DEBUG_DIR, GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL, PROJECT_ROOT,
+)
 from .contacts import ContactMap
 from .llm_extractor import ExtractionError, extract_report, generate_markdown_with_gemini
 from .pdf import convert_to_pdf
@@ -32,6 +34,7 @@ from .privacy import (
 from .publisher import commit, preview, push_pending, write_post
 from .renderer import render_group, render_public
 from .roster import build_roster, format_roster
+from .url_enricher import count_link_targets, enrich_link_messages
 
 console = Console()
 
@@ -108,6 +111,48 @@ def _run_db_pipeline(
     if not messages:
         console.print(f"[yellow]  {date_str} 当天无消息，跳过[/yellow]")
         return
+
+    # ── A2: Fetch/summarize link-card targets before tokenization ───────────
+    link_count = count_link_targets(messages)
+    if link_count:
+        console.rule(
+            f"[bold]链接增强  [dim]({LINK_SUMMARY_MODEL}, no thinking)[/dim]"
+        )
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]处理链接..."),
+            TextColumn("[dim]{task.description}[/dim]"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task = progress.add_task(f"0/{link_count}", total=link_count)
+
+            def _link_progress(current: int, total: int, phase: str, label: str) -> None:
+                progress.update(
+                    task,
+                    completed=max(0, current - 1),
+                    description=f"{current}/{total} {phase}: {label}",
+                )
+
+            stats = enrich_link_messages(
+                messages,
+                anthropic_key,
+                progress_cb=_link_progress,
+            )
+            progress.update(
+                task,
+                completed=stats.total,
+                description=(
+                    f"完成：抓取 {stats.fetched}，摘要 {stats.summarized}，"
+                    f"兜底 {stats.fallback}，失败 {stats.failed}"
+                ),
+            )
+        console.print(
+            f"[green]链接增强完毕[/green] "
+            f"[dim]链接 {stats.total} 个；摘要 {stats.summarized} 个；"
+            f"兜底 {stats.fallback} 个；失败 {stats.failed} 个[/dim]\n"
+        )
 
     # ── B: Tokenize + optout masking ────────────────────────────────────────
     console.rule("[bold]隐私处理（token化 + optout遮蔽）")
