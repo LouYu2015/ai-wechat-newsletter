@@ -1,0 +1,167 @@
+"""Decode WeChat group-chat images for LLM consumption.
+
+Pipeline per `image_md5`:
+  1. find `<md5>.dat` under msg/attach/<group_hash>/YYYY-MM/Img/
+  2. decrypt via vendored chatlog-mac/decode_image.py (V2 AES+XOR or legacy XOR)
+  3. wxgf/HEVC → JPEG via ffmpeg first frame
+  4. resize long edge ≤ 1568, re-encode JPEG q=85 → write to caller-supplied tmpdir
+  5. on any failure, fall back to thumbnail `<md5>_t.dat` (usually plain JPEG)
+
+Outputs land in the TemporaryDirectory the caller passes in; this module never
+writes to a persistent location. Each `decode()` call is memoized within the
+instance so the same md5 isn't redecoded twice in one run.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+from PIL import Image
+
+from .config import CHATLOG_MAC_DIR, GROUP_CHAT_ID, WECHAT_DATA_DIR
+
+# Vendored upstream decoder (chatlog-mac/decode_image.py)
+sys.path.insert(0, str(CHATLOG_MAC_DIR))
+import decode_image as _vendor_decode  # noqa: E402
+
+_LONG_EDGE_LIMIT = 1568   # cap to avoid Anthropic's >20-image / 2000² rule
+_JPEG_QUALITY = 85
+
+
+class ImageDecoder:
+    """Decode V2 .dat → JPEG, scoped to one daily report run."""
+
+    def __init__(self, tmpdir: Path) -> None:
+        self._tmpdir = Path(tmpdir)
+        self._tmpdir.mkdir(parents=True, exist_ok=True)
+        self._cache: dict[str, Optional[Path]] = {}
+
+        keys_path = CHATLOG_MAC_DIR / "image_keys.json"
+        if keys_path.exists():
+            data = json.loads(keys_path.read_text(encoding="utf-8"))
+            self._aes_key = data.get("aes_key")
+            self._xor_key = data.get("xor_key", 0x88)
+        else:
+            self._aes_key = None
+            self._xor_key = 0x88
+
+        import hashlib
+        group_hash = hashlib.md5(GROUP_CHAT_ID.encode()).hexdigest()
+        # Find <wxid>/msg/attach/<group_hash>; pick the most recently modified wxid dir
+        self._attach_dir: Optional[Path] = None
+        if WECHAT_DATA_DIR.exists():
+            wxids = sorted(
+                (p for p in WECHAT_DATA_DIR.glob("wxid_*") if (p / "msg" / "attach").is_dir()),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )
+            for wx in wxids:
+                cand = wx / "msg" / "attach" / group_hash
+                if cand.is_dir():
+                    self._attach_dir = cand
+                    break
+
+    def decode(self, image_md5: str) -> Optional[Path]:
+        """Return path to a JPEG in tmpdir, or None if every fallback failed."""
+        if image_md5 in self._cache:
+            return self._cache[image_md5]
+        result = self._decode_uncached(image_md5)
+        self._cache[image_md5] = result
+        return result
+
+    def _decode_uncached(self, image_md5: str) -> Optional[Path]:
+        if not self._attach_dir or not self._aes_key:
+            return None
+
+        dats = sorted(self._attach_dir.glob(f"*/Img/{image_md5}*.dat"))
+        if not dats:
+            return None
+
+        # Try full image first; fall back to thumbnail (_t.dat)
+        full = next((d for d in dats if d.name == f"{image_md5}.dat"), None)
+        thumb = next((d for d in dats if d.name == f"{image_md5}_t.dat"), None)
+
+        for src in (full, thumb):
+            if src is None:
+                continue
+            jpeg = self._decode_one(src, image_md5)
+            if jpeg is not None:
+                return jpeg
+        return None
+
+    def _decode_one(self, dat_path: Path, image_md5: str) -> Optional[Path]:
+        decrypted_tmp = self._tmpdir / f"{image_md5}.raw.tmp"
+        result_path, fmt = _vendor_decode.decrypt_dat_file(
+            str(dat_path), str(decrypted_tmp),
+            aes_key=self._aes_key, xor_key=self._xor_key,
+        )
+        if not result_path:
+            return None
+
+        decrypted = Path(result_path)
+        try:
+            if fmt == "hevc":
+                jpeg_path = self._wxgf_to_jpeg(decrypted, image_md5)
+            else:
+                jpeg_path = self._reencode_jpeg(decrypted, image_md5)
+        finally:
+            try:
+                decrypted.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return jpeg_path
+
+    def _wxgf_to_jpeg(self, hevc_path: Path, image_md5: str) -> Optional[Path]:
+        """Strip wxgf header, take first HEVC frame via ffmpeg, then re-encode JPEG."""
+        data = hevc_path.read_bytes()
+        idx = data.find(b"\x00\x00\x00\x01")
+        if idx < 0:
+            return None
+        raw_hevc = self._tmpdir / f"{image_md5}.hevc"
+        raw_hevc.write_bytes(data[idx:])
+        first_frame = self._tmpdir / f"{image_md5}.frame.jpg"
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-i", str(raw_hevc), "-frames:v", "1", str(first_frame)],
+            capture_output=True,
+        )
+        try:
+            raw_hevc.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if proc.returncode != 0 or not first_frame.exists():
+            return None
+        try:
+            return self._reencode_jpeg(first_frame, image_md5, src_is_tmp=True)
+        finally:
+            try:
+                first_frame.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _reencode_jpeg(
+        self, src: Path, image_md5: str, src_is_tmp: bool = False,
+    ) -> Optional[Path]:
+        """Resize to long edge ≤ 1568, save as JPEG q=85."""
+        try:
+            im = Image.open(src)
+            im.load()
+        except Exception:
+            return None
+
+        # Animated GIF / multi-frame: PIL gives first frame on .convert
+        if im.mode not in ("RGB", "L"):
+            im = im.convert("RGB")
+
+        w, h = im.size
+        long_edge = max(w, h)
+        if long_edge > _LONG_EDGE_LIMIT:
+            scale = _LONG_EDGE_LIMIT / long_edge
+            im = im.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+        out = self._tmpdir / f"{image_md5}.jpg"
+        im.save(out, "JPEG", quality=_JPEG_QUALITY, optimize=True)
+        return out

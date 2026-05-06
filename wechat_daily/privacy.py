@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Callable
 
 from .message_parser import (
     Message, QuotedMessage,
-    MSG_TAP, MSG_SYSTEM, MSG_QUOTE, MSG_TEXT,
+    MSG_TAP, MSG_SYSTEM, MSG_QUOTE, MSG_TEXT, MSG_IMAGE,
 )
 
 if TYPE_CHECKING:
@@ -307,6 +307,7 @@ def tokenize_messages(
                 sender_wxid=token,
                 content=content,
                 quoted=quoted,
+                image_md5=msg.image_md5,
             ))
 
         if progress_cb:
@@ -316,42 +317,80 @@ def tokenize_messages(
     return result, token_map
 
 
+def _format_one_line(msg: Message) -> str | None:
+    """Render one Message as a chat-history line, or None to skip."""
+    ts = datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
+
+    if msg.local_type == MSG_TAP:
+        return f"[{ts}] {msg.content}"
+    if msg.local_type == MSG_SYSTEM:
+        return f"[{ts}] [系统] {msg.content}"
+
+    name = msg.sender_wxid  # already a token, or '' for placeholders
+    is_placeholder = not name and (
+        msg.content == '[此消息已隐藏]'
+        or msg.content.startswith('[')
+        and ('已隐藏]' in msg.content)
+    )
+    if is_placeholder:
+        return msg.content
+    if not name:
+        return None
+
+    line = f"[{ts}] {name}: {msg.content}"
+    if msg.quoted:
+        line += f"\n  > 引用 {msg.quoted.content}"
+    return line
+
+
 def format_tokenized_messages(messages: list[Message]) -> str:
     """Format tokenized messages into plain-text chat history for LLM consumption."""
-    lines: list[str] = []
-    for msg in messages:
-        ts = datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
-
-        if msg.local_type == MSG_TAP:
-            lines.append(f"[{ts}] {msg.content}")
-            continue
-
-        if msg.local_type == MSG_SYSTEM:
-            lines.append(f"[{ts}] [系统] {msg.content}")
-            continue
-
-        name = msg.sender_wxid  # already a token, or '' for placeholders
-
-        # Optout placeholders carry their own timestamp range in content;
-        # emit verbatim (the content already contains "[HH:MM] ..." prefix).
-        is_placeholder = not name and (
-            msg.content == '[此消息已隐藏]'
-            or msg.content.startswith('[')
-            and ('已隐藏]' in msg.content)
-        )
-        if is_placeholder:
-            lines.append(msg.content)
-            continue
-
-        if not name:
-            continue
-
-        line = f"[{ts}] {name}: {msg.content}"
-        if msg.quoted:
-            line += f"\n  > 引用 {msg.quoted.content}"
-        lines.append(line)
-
+    lines = [line for msg in messages if (line := _format_one_line(msg)) is not None]
     return '\n'.join(lines)
+
+
+def format_tokenized_messages_blocks(
+    messages: list[Message],
+    image_decoder,  # ImageDecoder; duck-typed `.decode(md5) -> Path | None`
+) -> list[dict]:
+    """Same content as `format_tokenized_messages`, but as Anthropic content blocks.
+
+    Inline image blocks are inserted **right after** the `[图片]` line they
+    correspond to. If the image can't be decoded, the text line is still
+    emitted so the LLM at least sees the placeholder.
+    """
+    import base64
+
+    blocks: list[dict] = []
+    text_buf: list[str] = []
+
+    def flush_text() -> None:
+        if text_buf:
+            blocks.append({"type": "text", "text": "\n".join(text_buf)})
+            text_buf.clear()
+
+    for msg in messages:
+        line = _format_one_line(msg)
+        if line is None:
+            continue
+        text_buf.append(line)
+
+        if msg.local_type == MSG_IMAGE and msg.image_md5:
+            jpeg = image_decoder.decode(msg.image_md5)
+            if jpeg is not None:
+                flush_text()
+                data = base64.standard_b64encode(jpeg.read_bytes()).decode("ascii")
+                blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": data,
+                    },
+                })
+
+    flush_text()
+    return blocks
 
 
 # ── Leak detection ───────────────────────────────────────────────────────────────

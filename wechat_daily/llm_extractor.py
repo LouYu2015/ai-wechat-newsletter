@@ -60,6 +60,10 @@ _SYSTEM_PROMPT = """\
 
 聊天记录里分享的网页/文章卡片会以 `[链接] [标题](URL)` 的 Markdown 形式出现。当某个 `### 子话题`涉及该资源时，**在简介或引用中以 `[标题](URL)` 形式给出超链接**，让读者能直接跳转到原文。URL **原样保留**，不要改写、缩短或删除查询参数（公众号链接删参数后会失效）。如果某条链接卡片只是被随手转发、并不构成话题，可以不引用。
 
+## 关于图片
+
+聊天记录里的图片消息会先以 `[图片]` 占位符出现，**紧随其后会附上对应的图片**（同一条用户消息里）。请基于图片内容理解事件、产品、文章截图等；引用时用自然语言描述（"分享了某文章截图"、"贴了一张产品演示"），不要把整张图当成发言原话。图片中若包含真实人名、微信昵称、手机号、二维码、私人证件信息等隐私要素，请省略或泛化，遵循与文本同等的隐私规则。无法清晰识别的图片可以不写。
+
 ## 关于内容完整性
 
 每段正文必须是**完整句子**，不要在句中截断。若遇到无法直接引用的内容（乱码、格式异常、示例片段），请用描述性语言代替：
@@ -173,6 +177,7 @@ def extract_report(
     thinking_cb=None,
     header_cb=None,
     attempt_cb=None,
+    chat_blocks: list[dict] | None = None,
 ) -> DailyReport:
     """Stream a markdown daily report from Claude; return DailyReport(date, markdown).
 
@@ -201,8 +206,19 @@ def extract_report(
     if client is None:
         client = _default_client(api_key)
 
-    chat_block = f"以下是 {date_str} 的匿名化群聊记录，请生成日报：\n\n{tokenized_chat}"
-    user_content = f"{roster_text}\n\n---\n\n{chat_block}" if roster_text else chat_block
+    chat_intro = f"以下是 {date_str} 的匿名化群聊记录，请生成日报：\n\n"
+    prefix = f"{roster_text}\n\n---\n\n{chat_intro}" if roster_text else chat_intro
+
+    user_content: str | list[dict]
+    if chat_blocks is not None:
+        user_content = [{"type": "text", "text": prefix}, *chat_blocks]
+        # Flat string only used for debug sidecar dump.
+        debug_text = prefix + "".join(
+            b["text"] for b in chat_blocks if b.get("type") == "text"
+        )
+    else:
+        user_content = prefix + tokenized_chat
+        debug_text = user_content
 
     max_retries = 3
     last_exc: Exception | None = None
@@ -276,11 +292,11 @@ def extract_report(
             thinking_text = "".join(thinking_parts)
 
             if response.stop_reason == "refusal":
-                _save_failure(date_str, user_content, markdown, "Claude 拒绝处理该内容")
+                _save_failure(date_str, debug_text, markdown, "Claude 拒绝处理该内容")
                 raise ExtractionError("Claude 拒绝处理该内容（stop_reason=refusal）")
 
             if response.stop_reason == "max_tokens":
-                _save_failure(date_str, user_content, markdown, "响应被 max_tokens 截断")
+                _save_failure(date_str, debug_text, markdown, "响应被 max_tokens 截断")
                 raise ExtractionError("响应被 max_tokens 截断，请增大 max_tokens 后重试")
 
             # Fallback: if the streamed buffer is empty but the final response
@@ -293,10 +309,10 @@ def extract_report(
                 )
 
             if not markdown.strip():
-                _save_failure(date_str, user_content, markdown, "响应为空")
+                _save_failure(date_str, debug_text, markdown, "响应为空")
                 raise ExtractionError("响应为空")
 
-            _save_extract(date_str, markdown, user_content, thinking_text)
+            _save_extract(date_str, markdown, debug_text, thinking_text)
             return DailyReport(date=date_str, markdown=markdown)
 
         except ExtractionError:
@@ -310,7 +326,7 @@ def extract_report(
             if attempt < max_retries:
                 time.sleep(30)
 
-    _save_failure(date_str, user_content, None, str(last_exc))
+    _save_failure(date_str, debug_text, None, str(last_exc))
     raise last_exc  # type: ignore[misc]
 
 

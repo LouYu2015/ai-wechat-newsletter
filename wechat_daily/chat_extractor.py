@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
+import sys
 from datetime import datetime, timedelta
 
-from .config import GROUP_TABLE, ARCHIVE_DIR, OUTPUT_DIR
+from .config import CHATLOG_MAC_DIR, GROUP_TABLE, ARCHIVE_DIR, OUTPUT_DIR
 from .contacts import ContactMap
-from .message_parser import Message, MSG_SYSTEM, MSG_TAP, parse_row
+from .message_parser import MSG_IMAGE, MSG_SYSTEM, MSG_TAP, Message, parse_row
 from .wechat_db import get_conn
 
 
@@ -35,7 +36,8 @@ def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> li
             if not cur.fetchone():
                 continue
             cur.execute(
-                f"SELECT create_time, local_type, message_content FROM {GROUP_TABLE} "
+                f"SELECT create_time, local_type, message_content, local_id, server_id "
+                f"FROM {GROUP_TABLE} "
                 f"WHERE create_time >= ? AND create_time < ? ORDER BY create_time",
                 (start_ts, end_ts),
             )
@@ -50,11 +52,51 @@ def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> li
     rows.sort(key=lambda x: x[0])
 
     messages: list[Message] = []
-    for create_time, local_type, message_content in rows:
+    image_keys: list[tuple[Message, int, int]] = []
+    for create_time, local_type, message_content, local_id, server_id in rows:
         msg = parse_row(create_time, local_type, message_content)
-        if msg is not None:
-            messages.append(msg)
+        if msg is None:
+            continue
+        if msg.local_type == MSG_IMAGE and local_id is not None and server_id is not None:
+            image_keys.append((msg, local_id, server_id))
+        messages.append(msg)
+
+    if image_keys:
+        _fill_image_md5s(image_keys)
     return messages
+
+
+def _fill_image_md5s(image_keys: list[tuple[Message, int, int]]) -> None:
+    """Resolve `image_md5` (= .dat filename) via message_resource.db.
+
+    Mutates each Message in-place. Silently skips on any DB error so a missing
+    `message_resource.db` just means no inline images.
+    """
+    sys.path.insert(0, str(CHATLOG_MAC_DIR))
+    try:
+        from decode_image import extract_md5_from_packed_info
+    except ImportError:
+        return
+
+    try:
+        conn = get_conn("message/message_resource.db")
+    except FileNotFoundError:
+        return
+
+    cur = conn.cursor()
+    for msg, local_id, server_id in image_keys:
+        try:
+            row = cur.execute(
+                "SELECT packed_info FROM MessageResourceInfo "
+                "WHERE message_local_id = ? AND message_svr_id = ?",
+                (local_id, server_id),
+            ).fetchone()
+        except Exception:
+            continue
+        if row and row[0]:
+            md5 = extract_md5_from_packed_info(row[0])
+            if md5:
+                msg.image_md5 = md5.lower()
 
 
 def format_messages(messages: list[Message], contact_map: ContactMap) -> str:

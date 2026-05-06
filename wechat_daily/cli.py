@@ -25,7 +25,10 @@ from .contacts import ContactMap
 from .llm_extractor import ExtractionError, extract_report, generate_markdown_with_gemini
 from .pdf import convert_to_pdf
 from .message_parser import MSG_TAP, MSG_SYSTEM
-from .privacy import LeakDetected, format_tokenized_messages, leak_check, tokenize_messages
+from .privacy import (
+    LeakDetected, format_tokenized_messages, format_tokenized_messages_blocks,
+    leak_check, tokenize_messages,
+)
 from .publisher import commit, preview, push_pending, write_post
 from .renderer import render_group, render_public
 from .roster import build_roster, format_roster
@@ -128,10 +131,11 @@ def _run_db_pipeline(
     chat_history = format_tokenized_messages(tokenized)
     roster_entries = build_roster(token_map, contact_map, alias_db)
     roster_text = format_roster(roster_entries)
+    n_images = sum(1 for m in tokenized if m.image_md5)
     console.print(
         f"[green]token化完毕[/green] "
         f"[dim]{len(chat_history):,} 字符，{chat_history.count(chr(10)) + 1} 行；"
-        f"花名册 {len(roster_entries)} 条[/dim]\n"
+        f"花名册 {len(roster_entries)} 条；图片 {n_images} 张[/dim]\n"
     )
 
     # ── C: Claude structured extraction ─────────────────────────────────────
@@ -187,14 +191,27 @@ def _run_db_pipeline(
             log_lines.append(Text(f"--- 第 {attempt}/3 次重试 ---", style="yellow"))
             refresh()
 
+        import tempfile
+        from .image_decoder import ImageDecoder
         try:
-            report = extract_report(
-                date_str, chat_history, anthropic_key, progress_cb,
-                roster_text=roster_text or None,
-                thinking_cb=thinking_cb,
-                header_cb=header_cb,
-                attempt_cb=attempt_cb,
-            )
+            with tempfile.TemporaryDirectory(prefix="wechat_daily_imgs_") as td:
+                decoder = ImageDecoder(Path(td))
+                chat_blocks = format_tokenized_messages_blocks(tokenized, decoder)
+                n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
+                if n_images:
+                    log_lines.append(Text(
+                        f"图片解码 {n_decoded}/{n_images} 张成功",
+                        style="dim",
+                    ))
+                    refresh()
+                report = extract_report(
+                    date_str, chat_history, anthropic_key, progress_cb,
+                    roster_text=roster_text or None,
+                    thinking_cb=thinking_cb,
+                    header_cb=header_cb,
+                    attempt_cb=attempt_cb,
+                    chat_blocks=chat_blocks,
+                )
         except ExtractionError as e:
             console.print(f"[bold red]结构化提取失败:[/bold red] {e}")
             return

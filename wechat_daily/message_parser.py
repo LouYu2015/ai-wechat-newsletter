@@ -42,6 +42,7 @@ class Message:
     content: str                        # human-readable text
     quoted: Optional[QuotedMessage] = None
     raw: str = field(default="", repr=False)  # original decompressed blob
+    image_md5: Optional[str] = None     # for MSG_IMAGE: <img md5="..."> in XML
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -190,6 +191,8 @@ def parse_row(create_time: int, local_type: int, message_content) -> Message | N
 
     elif local_type == MSG_IMAGE:
         sender_wxid, _ = parse_sender_content(raw)
+        # image_md5 (== .dat filename) lives in message_resource.MessageResourceInfo,
+        # not in this XML. chat_extractor fills it via a post-pass.
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content='[图片]', raw=raw)
 
