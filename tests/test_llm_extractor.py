@@ -177,7 +177,11 @@ def test_no_roster_when_none(monkeypatch, tmp_path):
 
     extract_report("2026-04-30", "chat history", api_key="fake", client=client)
     user_msg = client.messages.calls[0]["messages"][0]["content"]
-    assert "花名册" not in user_msg
+    # No <group_roster>...</group_roster> block emitted (the closing tag
+    # only appears when the roster is actually rendered; the literal
+    # `<group_roster>` token also appears inside the rules text, so we
+    # check the closing tag instead).
+    assert "</group_roster>" not in user_msg
 
 
 def test_progress_cb_monotonic(monkeypatch, tmp_path):

@@ -6,6 +6,7 @@ import html
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from html.parser import HTMLParser
 from typing import Callable
 from urllib.parse import urlparse
@@ -13,7 +14,9 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import LINK_SUMMARY_MODEL
-from .message_parser import MSG_LINK_CARD, MSG_LINK_OPEN, LinkMeta, Message
+from .message_parser import (
+    MSG_LINK_CARD, MSG_LINK_OPEN, MSG_SYSTEM, MSG_TAP, LinkMeta, Message,
+)
 
 
 ProgressCB = Callable[[int, int, str, str], None]
@@ -25,19 +28,68 @@ _USER_AGENT = (
 )
 
 _SUMMARY_PROMPT = """\
-请阅读下面的网页正文，为微信群日报生成一段中文补充上下文。
+你正在为「微信 AI 技术讨论群日报」准备链接摘要。这些摘要会用于让日报编辑生成群聊的总结。
+
+日报的读者有两类：
+
+1. **群友本人**——他们就是被引用的人，会回看自己说过什么，其他人有什么回应，想看到因为消息太多而错过的信息。
+2. **群外类似背景的中文程序员/AI 实战派**——日常写代码、用 agent、关心模型迭代，订阅科技博主的文章和新闻，对其他人的技术分享十分好奇。
+
+他们已知、不需要科普的概念：LLM、agent、RAG、context window、prompt cache、tool use、subagent、harness、skills、evals、MCP、Claude Code / Codex / Cursor 等常见工具。
+
+下面给你三段资料：
+1. `<surrounding_chat>`：链接前后约 10 条群聊消息，仅作"为什么群里要分享这条 / 在讨论哪个点"的背景。**不要把它写进摘要、不要引用群友发言。**
+2. `<webpage>` 里是网页标题、URL、正文。
+
+任务：写一段中文摘要，纯文本一段（无 Markdown 标题、无 bullet 列表、无小标题），长度 300–800 字。
 
 要求：
-- 只总结网页本身的关键信息，不要评价聊天记录。
-- 保留具体事实、数据、结论、作者核心观点和关键例子。
-- 不需要匿名化网页内容。
-- 输出 150 到 300 字，纯文本一段，不要 Markdown 标题。
+- 紧扣网页本身：保留具体事实、数据、版本号、结论、关键例子、作者核心判断。
+- 利用上下文：如果群里讨论的是网页中的某个具体点（一段提示、一个工具、一处争议），优先把那个点交代清楚，让日报作者能直接对接群聊。
+- 不评价聊天记录、不引用群友发言。
+- 禁用元描述句式：「本文/这篇文章介绍了……」「作者认为……」「文章指出……」。直接讲清网页里的事就好。
 
-标题：{title}
-URL：{url}
+<surrounding_chat>
+{surrounding}
+</surrounding_chat>
 
-正文：
+<webpage>
+<title>{title}</title>
+<url>{url}</url>
+<content>
 {text}
+</content>
+</webpage>
+
+直接输出摘要正文。
+"""
+
+_SUMMARY_PROMPT_NO_CONTEXT = """\
+你正在为「微信 AI 技术讨论群日报」准备链接摘要。
+
+读者两类：
+1. 群友本人——他们就是分享/讨论这条链接的人，会回看自己说过什么。
+2. 群外类似背景的中文程序员/AI 实战派——日常写代码、用 agent、关心模型迭代。
+
+他们已知、不需要科普的概念：LLM、agent、RAG、context window、prompt cache、tool use、subagent、harness、skills、evals、MCP、Claude Code / Codex / Cursor 等常见工具与模型版本号。
+
+任务：写一段中文摘要，纯文本一段（无 Markdown 标题、无 bullet 列表、无小标题），长度 300–800 字。
+
+要求：
+- 紧扣网页本身：保留具体事实、数据、版本号、结论、关键例子、作者核心判断。
+- 不需要匿名化网页内容。
+- 禁用元描述句式：「本文/这篇文章介绍了……」「作者认为……」「文章指出……」。直接讲清网页里的事就好。
+- 反 AI 味词：深入探讨、赋能、助力、重塑、范式、拥抱变化、值得注意的是、综上所述。
+
+<webpage>
+<title>{title}</title>
+<url>{url}</url>
+<content>
+{text}
+</content>
+</webpage>
+
+直接输出摘要正文。
 """
 
 
@@ -131,7 +183,7 @@ def enrich_link_messages(
         )
 
     try:
-        for idx, (msg, link) in enumerate(targets, start=1):
+        for idx, (host_idx, msg, link) in enumerate(targets, start=1):
             label = _short_label(link.title, link.url)
 
             text = ""
@@ -148,12 +200,14 @@ def enrich_link_messages(
                 try:
                     if progress_cb:
                         progress_cb(idx, stats.total, "摘要", label)
+                    surrounding = _build_surrounding(messages, host_idx)
                     summary = summarize_text(
                         title=link.title,
                         url=link.url,
                         text=text,
                         api_key=api_key,
                         client=anthropic_client,
+                        surrounding=surrounding,
                     )
                     _append_link_context(msg, summary)
                     stats.summarized += 1
@@ -188,11 +242,13 @@ def _append_link_context(msg: Message, context: str) -> None:
         msg.link_context = context
 
 
-def _collect_link_targets(messages: list[Message]) -> list[tuple[Message, LinkMeta]]:
-    targets: list[tuple[Message, LinkMeta]] = []
+def _collect_link_targets(
+    messages: list[Message],
+) -> list[tuple[int, Message, LinkMeta]]:
+    targets: list[tuple[int, Message, LinkMeta]] = []
     seen: set[str] = set()
 
-    for msg in messages:
+    for idx, msg in enumerate(messages):
         links: list[LinkMeta] = []
         if msg.local_type in (MSG_LINK_CARD, MSG_LINK_OPEN) and msg.link and msg.link.url:
             links.append(msg.link)
@@ -206,9 +262,50 @@ def _collect_link_targets(messages: list[Message]) -> list[tuple[Message, LinkMe
             if link.url in seen:
                 continue
             seen.add(link.url)
-            targets.append((msg, link))
+            targets.append((idx, msg, link))
 
     return targets
+
+
+def _build_surrounding(
+    messages: list[Message],
+    host_idx: int,
+    window: int = 10,
+) -> str:
+    """Format ±window non-system messages around messages[host_idx].
+
+    Senders are anonymized to letter codes (A, B, C, ...) assigned in order
+    of first appearance within the window. The host message is marked with
+    a `[本次要总结的链接]` prefix so the model knows which line is the link
+    being summarized. Hidden-message placeholders are kept verbatim.
+    """
+    start = max(0, host_idx - window)
+    end = min(len(messages), host_idx + window + 1)
+
+    sender_letter: dict[str, str] = {}
+    next_ord = ord("A")
+    lines: list[str] = []
+
+    for j in range(start, end):
+        m = messages[j]
+        if m.local_type in (MSG_SYSTEM, MSG_TAP):
+            continue
+        ts = datetime.fromtimestamp(m.create_time).strftime("%H:%M")
+        content = (m.content or "").strip()
+        if not content:
+            continue
+        marker = "[本次要总结的链接] " if j == host_idx else ""
+        if not m.sender_wxid:
+            # Hidden-message placeholder or system-style line without a sender.
+            lines.append(f"[{ts}] {marker}{content}")
+            continue
+        if m.sender_wxid not in sender_letter:
+            sender_letter[m.sender_wxid] = chr(next_ord)
+            next_ord += 1
+        label = sender_letter[m.sender_wxid]
+        lines.append(f"[{ts}] {label}: {marker}{content}")
+
+    return "\n".join(lines)
 
 
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
@@ -283,6 +380,7 @@ def summarize_text(
     text: str,
     api_key: str,
     client=None,
+    surrounding: str = "",
 ) -> str:
     if client is None:
         import anthropic
@@ -291,14 +389,22 @@ def summarize_text(
             timeout=httpx.Timeout(120.0, connect=15.0),
         )
 
-    prompt = _SUMMARY_PROMPT.format(
-        title=title or "(无标题)",
-        url=url,
-        text=text[:50000],
-    )
+    if surrounding.strip():
+        prompt = _SUMMARY_PROMPT.format(
+            title=title or "(无标题)",
+            url=url,
+            text=text[:50000],
+            surrounding=surrounding,
+        )
+    else:
+        prompt = _SUMMARY_PROMPT_NO_CONTEXT.format(
+            title=title or "(无标题)",
+            url=url,
+            text=text[:50000],
+        )
     response = client.messages.create(
         model=LINK_SUMMARY_MODEL,
-        max_tokens=1000,
+        max_tokens=2500,
         system="你是一个网页内容摘要器。直接输出摘要正文。",
         messages=[{"role": "user", "content": prompt}],
     )
