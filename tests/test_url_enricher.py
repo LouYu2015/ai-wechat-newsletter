@@ -82,15 +82,18 @@ def _link_msg(title="Title", url="https://example.com/a", des="card des"):
 def test_fetch_wechat_js_content():
     url = "https://mp.weixin.qq.com/s?mid=1"
     html = """
-    <html><body><div>nav</div><div id="js_content">
+    <html><head>
+      <meta property="og:description" content="og 摘要内容">
+    </head><body><div>nav</div><div id="js_content">
       <h1>标题</h1><p>第一段正文。</p><script>ignore()</script><p>第二段正文。</p>
     </div></body></html>
     """
     client = FakeHTTP({url: (html, "text/html")})
-    text = fetch_url_text(url, client)
+    text, og = fetch_url_text(url, client)
     assert "第一段正文" in text
     assert "第二段正文" in text
     assert "ignore" not in text
+    assert og == "og 摘要内容"
 
 
 def test_fetch_x_uses_fxtwitter():
@@ -102,16 +105,17 @@ def test_fetch_x_uses_fxtwitter():
             "application/json",
         )
     })
-    text = fetch_url_text(url, client)
+    text, og = fetch_url_text(url, client)
     assert client.urls == [api]
     assert text == "Theo: tweet body"
+    assert og == ""
 
 
 def test_fetch_github_blob_uses_raw_url():
     url = "https://github.com/acme/repo/blob/main/README.md"
     raw = "https://raw.githubusercontent.com/acme/repo/main/README.md"
     client = FakeHTTP({raw: ("# README\nbody", "text/plain")})
-    assert fetch_url_text(url, client) == "# README\nbody"
+    assert fetch_url_text(url, client) == ("# README\nbody", "")
     assert client.urls == [raw]
 
 
@@ -150,11 +154,12 @@ def test_fetch_superlinear_uses_circle_internal_api():
             "application/json",
         ),
     })
-    text = fetch_url_text(url, client)
+    text, og = fetch_url_text(url, client)
     assert client.urls == [url, spaces, post]
     assert "章节标题" in text
     assert "正文 @Person 内容" in text
     assert "引用内容" in text
+    assert og == ""
 
 
 def test_enrich_summarizes_fetched_text():
@@ -178,7 +183,7 @@ def test_enrich_summarizes_fetched_text():
     assert "thinking" not in call
 
 
-def test_enrich_falls_back_to_description_when_fetch_fails():
+def test_enrich_uses_short_path_when_fetch_returns_empty():
     msg = _link_msg(
         title="小红书标题",
         url="https://www.xiaohongshu.com/discovery/item/1",
@@ -190,8 +195,84 @@ def test_enrich_falls_back_to_description_when_fetch_fails():
         http_client=FakeHTTP({}),
         anthropic_client=FakeAnthropic(),
     )
-    assert stats.fallback == 1
-    assert msg.link_context == "链接卡片摘要：卡片摘要"
+    assert stats.short == 1
+    assert msg.link_context == "标题：小红书标题\n卡片预览：卡片摘要"
+
+
+def test_enrich_short_path_skips_llm_when_total_below_threshold():
+    url = "https://example.com/short"
+    html = (
+        '<html><head>'
+        '<meta property="og:description" content="只有 og 描述这一段">'
+        '</head><body><article><p>正文太短</p></article></body></html>'
+    )
+    msg = Message(
+        create_time=1000,
+        local_type=MSG_TEXT,
+        sender_wxid="wxid",
+        content=f"看看这个 {url}",
+    )
+    client = FakeHTTP({url: (html, "text/html")})
+    anthropic = FakeAnthropic("不应被调用")
+
+    stats = enrich_link_messages(
+        [msg],
+        api_key="fake",
+        http_client=client,
+        anthropic_client=anthropic,
+    )
+
+    assert stats.short == 1
+    assert stats.summarized == 0
+    assert anthropic.messages.calls == []  # LLM not invoked
+    assert "网页描述：只有 og 描述这一段" in msg.link_context
+    assert "正文：正文太短" in msg.link_context
+
+
+def test_enrich_failed_when_no_inputs():
+    url = "https://example.com/empty"
+    msg = Message(
+        create_time=1000,
+        local_type=MSG_TEXT,
+        sender_wxid="wxid",
+        content=f"参考 {url}",
+    )
+    # Empty HTML body → no main text, no og.
+    client = FakeHTTP({url: ("<html></html>", "text/html")})
+
+    stats = enrich_link_messages(
+        [msg],
+        api_key="fake",
+        http_client=client,
+        anthropic_client=FakeAnthropic(),
+    )
+
+    assert stats.failed == 1
+    assert stats.short == 0
+    assert stats.summarized == 0
+    assert msg.link_context == ""
+
+
+def test_summarize_prompt_includes_card_and_og_tags():
+    url = "https://example.com/long"
+    html = "<article><p>" + ("正文 " * 500) + "</p></article>"
+    msg = _link_msg(url=url, des="卡片描述内容")
+    client = FakeHTTP({url: (html, "text/html")})
+    anthropic = FakeAnthropic("摘要")
+
+    enrich_link_messages(
+        [msg],
+        api_key="fake",
+        http_client=client,
+        anthropic_client=anthropic,
+    )
+
+    call_messages = anthropic.messages.calls[0]["messages"]
+    prompt = call_messages[0]["content"]
+    assert "<card_preview>卡片描述内容</card_preview>" in prompt
+    # og missing in this fixture → tag should be omitted
+    assert "<meta_description>" not in prompt
+    assert "<content>" in prompt
 
 
 def test_enrich_extracts_inline_plain_url():

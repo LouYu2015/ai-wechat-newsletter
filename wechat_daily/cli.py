@@ -180,14 +180,14 @@ def _run_db_pipeline(
                 completed=stats.total,
                 description=(
                     f"完成：抓取 {stats.fetched}，摘要 {stats.summarized}，"
-                    f"兜底 {stats.fallback}，失败 {stats.failed}"
+                    f"太短 {stats.short}，失败 {stats.failed}"
                 ),
             )
             _refresh()
         console.print(
             f"[green]链接增强完毕[/green] "
             f"[dim]链接 {stats.total} 个；摘要 {stats.summarized} 个；"
-            f"兜底 {stats.fallback} 个；失败 {stats.failed} 个[/dim]\n"
+            f"太短 {stats.short} 个；失败 {stats.failed} 个[/dim]\n"
         )
 
     # ── B: Tokenize + optout masking ────────────────────────────────────────

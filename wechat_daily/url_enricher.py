@@ -37,9 +37,9 @@ _SUMMARY_PROMPT = """\
 
 他们已知、不需要科普的概念：LLM、agent、RAG、context window、prompt cache、tool use、subagent、harness、skills、evals、MCP、Claude Code / Codex / Cursor 等常见工具。
 
-下面给你三段资料：
+下面给你两段资料：
 1. `<surrounding_chat>`：链接前后约 10 条群聊消息，仅作"为什么群里要分享这条 / 在讨论哪个点"的背景。**不要把它写进摘要、不要引用群友发言。**
-2. `<webpage>` 里是网页标题、URL、正文。
+2. `<webpage>` 里是网页元数据与正文。其中 `content` 是抓取到的正文，`card_preview` 是微信卡片预览（分享者发出时看到的那段话），`meta_description` 是网页 og:description / meta description。**以 content 为主**，其他字段用于交叉印证、或在 content 不足时作为补充信息。
 
 任务：写一段中文摘要，纯文本一段（无 Markdown 标题、无 bullet 列表、无小标题），长度 300–800 字。
 
@@ -53,13 +53,7 @@ _SUMMARY_PROMPT = """\
 {surrounding}
 </surrounding_chat>
 
-<webpage>
-<title>{title}</title>
-<url>{url}</url>
-<content>
-{text}
-</content>
-</webpage>
+{webpage_block}
 
 直接输出摘要正文。
 """
@@ -73,6 +67,8 @@ _SUMMARY_PROMPT_NO_CONTEXT = """\
 
 他们已知、不需要科普的概念：LLM、agent、RAG、context window、prompt cache、tool use、subagent、harness、skills、evals、MCP、Claude Code / Codex / Cursor 等常见工具与模型版本号。
 
+`<webpage>` 里是网页元数据与正文：`content` 为抓取到的正文，`card_preview` 为微信卡片预览，`meta_description` 为 og:description / meta description。**以 content 为主**，其他字段用于交叉印证、或在 content 不足时作为补充信息。
+
 任务：写一段中文摘要，纯文本一段（无 Markdown 标题、无 bullet 列表、无小标题），长度 300–800 字。
 
 要求：
@@ -81,13 +77,7 @@ _SUMMARY_PROMPT_NO_CONTEXT = """\
 - 禁用元描述句式：「本文/这篇文章介绍了……」「作者认为……」「文章指出……」。直接讲清网页里的事就好。
 - 反 AI 味词：深入探讨、赋能、助力、重塑、范式、拥抱变化、值得注意的是、综上所述。
 
-<webpage>
-<title>{title}</title>
-<url>{url}</url>
-<content>
-{text}
-</content>
-</webpage>
+{webpage_block}
 
 直接输出摘要正文。
 """
@@ -96,10 +86,13 @@ _SUMMARY_PROMPT_NO_CONTEXT = """\
 @dataclass
 class EnrichStats:
     total: int = 0
-    fetched: int = 0
-    summarized: int = 0
-    fallback: int = 0
-    failed: int = 0
+    fetched: int = 0     # debug-only: URLs where http fetch returned non-empty text
+    summarized: int = 0  # total inputs ≥ SHORT_THRESHOLD, LLM produced summary
+    short: int = 0       # 0 < total inputs < SHORT_THRESHOLD, raw concat used
+    failed: int = 0      # no inputs at all (no title/desc/og/text)
+
+
+SHORT_THRESHOLD = 800
 
 
 class _TextExtractor(HTMLParser):
@@ -187,47 +180,93 @@ def enrich_link_messages(
         for idx, (host_idx, msg, link) in enumerate(targets, start=1):
             label = _short_label(link.title, link.url)
 
+            title = (link.title or "").strip()
+            card_desc = (link.description or "").strip()
+
             text = ""
+            og = ""
             try:
                 if progress_cb:
                     progress_cb(idx, stats.total, "抓取", label)
-                text = fetch_url_text(link.url, http_client)
+                text, og = fetch_url_text(link.url, http_client)
                 if text:
                     stats.fetched += 1
             except Exception:
                 text = ""
+                og = ""
+            text = text.strip()
+            og = og.strip()
 
-            if text and _usable_fetched_text(link.url, text):
-                try:
-                    if progress_cb:
-                        progress_cb(idx, stats.total, "摘要", label)
-                    surrounding = _build_surrounding(messages, host_idx)
-                    summary = summarize_text(
-                        title=link.title,
-                        url=link.url,
-                        text=text,
-                        api_key=api_key,
-                        client=anthropic_client,
-                        surrounding=surrounding,
-                        delta_cb=summary_delta_cb,
-                    )
+            total_chars = len(title) + len(card_desc) + len(og) + len(text)
+
+            if total_chars == 0:
+                stats.failed += 1
+                _log_failed(link.url, label)
+                continue
+
+            if total_chars < SHORT_THRESHOLD:
+                ctx = _build_short_context(title, card_desc, og, text)
+                if ctx:
+                    _append_link_context(msg, ctx)
+                    stats.short += 1
+                else:
+                    stats.failed += 1
+                    _log_failed(link.url, label)
+                continue
+
+            try:
+                if progress_cb:
+                    progress_cb(idx, stats.total, "摘要", label)
+                surrounding = _build_surrounding(messages, host_idx)
+                summary = summarize_text(
+                    title=link.title,
+                    url=link.url,
+                    text=text,
+                    card_description=card_desc,
+                    og_description=og,
+                    api_key=api_key,
+                    client=anthropic_client,
+                    surrounding=surrounding,
+                    delta_cb=summary_delta_cb,
+                )
+                if summary.strip():
                     _append_link_context(msg, summary)
                     stats.summarized += 1
                     continue
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
-            fallback = _fallback_context(link.title, link.description)
-            if fallback:
-                _append_link_context(msg, fallback)
-                stats.fallback += 1
+            # Summarize raised or returned empty: fall back to short-style raw concat.
+            ctx = _build_short_context(title, card_desc, og, text)
+            if ctx:
+                _append_link_context(msg, ctx)
+                stats.short += 1
             else:
                 stats.failed += 1
+                _log_failed(link.url, label)
     finally:
         if own_http:
             http_client.close()
 
     return stats
+
+
+def _build_short_context(title: str, card_desc: str, og: str, text: str) -> str:
+    rows: list[str] = []
+    if title:
+        rows.append(f"标题：{title}")
+    if card_desc:
+        rows.append(f"卡片预览：{card_desc}")
+    if og:
+        rows.append(f"网页描述：{og}")
+    if text:
+        rows.append(f"正文：{text}")
+    return "\n".join(rows)
+
+
+def _log_failed(url: str, label: str) -> None:
+    import sys
+    print(f"[link-enrich] FAILED url={url} label={label}", file=sys.stderr)
 
 
 def count_link_targets(messages: list[Message]) -> int:
@@ -342,37 +381,48 @@ def _trim_url(url: str) -> str:
     return html.unescape(url).rstrip(".,，。；;：:!?！？\"'）】》")
 
 
-def fetch_url_text(url: str, client: httpx.Client) -> str:
+def fetch_url_text(url: str, client: httpx.Client) -> tuple[str, str]:
+    """Fetch a URL and return (main_text, og_description).
+
+    `og_description` is non-empty only for HTML responses where
+    `<meta property="og:description">` or `<meta name="description">` is set.
+    Specialized paths (twitter via fxtwitter, github raw, circle JSON) return
+    `og=""`.
+    """
     host = _host(url)
 
     if "xiaohongshu.com" in host:
-        return ""
+        return "", ""
 
     if "superlinear.academy" in host:
         text = _fetch_circle_post_text(url, client)
         if text:
-            return text
+            return text, ""
 
     if host in {"x.com", "twitter.com"}:
-        return _fetch_tweet(url, client)
+        return _fetch_tweet(url, client), ""
 
     raw_url = _github_raw_url(url)
     if raw_url:
         response = client.get(raw_url)
         response.raise_for_status()
-        return _clean_text(response.text)
+        return _clean_text(response.text), ""
 
     response = client.get(url)
     response.raise_for_status()
     content_type = response.headers.get("content-type", "")
 
     if "mp.weixin.qq.com" in host:
-        return _extract_html_text(response.text, target_id="js_content")
+        body = _extract_html_text(response.text, target_id="js_content")
+        og = _extract_og_description(response.text)
+        return body, og
 
     if "text/plain" in content_type:
-        return _clean_text(response.text)
+        return _clean_text(response.text), ""
 
-    return _extract_readable_text(response.text)
+    body = _extract_readable_text(response.text)
+    og = _extract_og_description(response.text)
+    return body, og
 
 
 def summarize_text(
@@ -383,6 +433,8 @@ def summarize_text(
     api_key: str,
     client=None,
     surrounding: str = "",
+    card_description: str = "",
+    og_description: str = "",
     delta_cb: Callable[[str], None] | None = None,
 ) -> str:
     if client is None:
@@ -392,19 +444,20 @@ def summarize_text(
             timeout=httpx.Timeout(120.0, connect=15.0),
         )
 
+    webpage_block = _build_webpage_block(
+        title=title,
+        url=url,
+        text=text,
+        card_description=card_description,
+        og_description=og_description,
+    )
     if surrounding.strip():
         prompt = _SUMMARY_PROMPT.format(
-            title=title or "(无标题)",
-            url=url,
-            text=text[:50000],
             surrounding=surrounding,
+            webpage_block=webpage_block,
         )
     else:
-        prompt = _SUMMARY_PROMPT_NO_CONTEXT.format(
-            title=title or "(无标题)",
-            url=url,
-            text=text[:50000],
-        )
+        prompt = _SUMMARY_PROMPT_NO_CONTEXT.format(webpage_block=webpage_block)
     parts: list[str] = []
     with client.messages.stream(
         model=LINK_SUMMARY_MODEL,
@@ -546,21 +599,52 @@ def _extract_html_text(source: str, target_id: str | None = None) -> str:
     return parser.text()
 
 
-def _fallback_context(title: str, description: str) -> str:
-    description = _clean_text(description)
-    title = _clean_text(title)
-    if description:
-        return f"链接卡片摘要：{description}"
-    if title:
-        return f"链接标题：{title}"
-    return ""
+def _build_webpage_block(
+    *,
+    title: str,
+    url: str,
+    text: str,
+    card_description: str,
+    og_description: str,
+) -> str:
+    parts = [
+        f"<title>{(title or '(无标题)').strip()}</title>",
+        f"<url>{url}</url>",
+    ]
+    if card_description.strip():
+        parts.append(f"<card_preview>{card_description.strip()}</card_preview>")
+    if og_description.strip():
+        parts.append(f"<meta_description>{og_description.strip()}</meta_description>")
+    parts.append(f"<content>\n{text[:50000]}\n</content>")
+    return "<webpage>\n" + "\n".join(parts) + "\n</webpage>"
 
 
-def _usable_fetched_text(url: str, text: str) -> bool:
-    host = _host(url)
-    if host in {"x.com", "twitter.com"}:
-        return len(text) >= 20
-    return len(text) >= 800
+class _MetaCollector(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.og_description = ""
+        self.description = ""
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag != "meta":
+            return
+        d = {k: (v or "") for k, v in attrs}
+        prop = d.get("property", "").lower()
+        name = d.get("name", "").lower()
+        content = d.get("content", "")
+        if prop == "og:description" and not self.og_description:
+            self.og_description = content
+        elif name == "description" and not self.description:
+            self.description = content
+
+
+def _extract_og_description(html_text: str) -> str:
+    parser = _MetaCollector()
+    try:
+        parser.feed(html_text[:300_000])
+    except Exception:
+        pass
+    return _clean_text(parser.og_description or parser.description)
 
 
 def _clean_text(text: str) -> str:
