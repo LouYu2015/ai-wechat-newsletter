@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections import deque
 from datetime import datetime, timedelta, date as date_type
 from pathlib import Path
 
@@ -118,36 +119,71 @@ def _run_db_pipeline(
         console.rule(
             f"[bold]链接增强  [dim]({LINK_SUMMARY_MODEL}, no thinking)[/dim]"
         )
-        with Progress(
+        link_progress = Progress(
             SpinnerColumn(),
             TextColumn("[bold blue]处理链接..."),
             TextColumn("[dim]{task.description}[/dim]"),
             TimeElapsedColumn(),
             console=console,
-            transient=False,
-        ) as progress:
-            task = progress.add_task(f"0/{link_count}", total=link_count)
+        )
+        link_task = link_progress.add_task(f"0/{link_count}", total=link_count)
+        link_lines: deque[str] = deque(maxlen=8)
+        link_state = {"partial": "", "current": 0}
 
-            def _link_progress(current: int, total: int, phase: str, label: str) -> None:
-                progress.update(
-                    task,
+        def _link_render() -> Group:
+            parts: list = []
+            visible = list(link_lines)
+            if link_state["partial"]:
+                visible.append(link_state["partial"])
+            visible = visible[-8:]
+            if visible:
+                parts.append(Text("─ 摘要 ─", style="cyan"))
+                parts.extend(Text(s) for s in visible)
+            parts.append(link_progress)
+            return Group(*parts)
+
+        with Live(_link_render(), console=console, refresh_per_second=10, transient=False) as live:
+            def _refresh() -> None:
+                live.update(_link_render())
+
+            def _link_progress_cb(current: int, total: int, phase: str, label: str) -> None:
+                if current != link_state["current"]:
+                    link_state["current"] = current
+                    link_lines.clear()
+                    link_state["partial"] = ""
+                link_progress.update(
+                    link_task,
                     completed=max(0, current - 1),
                     description=f"{current}/{total} {phase}: {label}",
                 )
+                _refresh()
+
+            def _link_delta_cb(delta: str) -> None:
+                combined = link_state["partial"] + delta
+                if "\n" in combined:
+                    *complete, remainder = combined.split("\n")
+                    for line in complete:
+                        link_lines.append(line)
+                    link_state["partial"] = remainder
+                else:
+                    link_state["partial"] = combined
+                _refresh()
 
             stats = enrich_link_messages(
                 messages,
                 anthropic_key,
-                progress_cb=_link_progress,
+                progress_cb=_link_progress_cb,
+                summary_delta_cb=_link_delta_cb,
             )
-            progress.update(
-                task,
+            link_progress.update(
+                link_task,
                 completed=stats.total,
                 description=(
                     f"完成：抓取 {stats.fetched}，摘要 {stats.summarized}，"
                     f"兜底 {stats.fallback}，失败 {stats.failed}"
                 ),
             )
+            _refresh()
         console.print(
             f"[green]链接增强完毕[/green] "
             f"[dim]链接 {stats.total} 个；摘要 {stats.summarized} 个；"
@@ -185,7 +221,9 @@ def _run_db_pipeline(
 
     # ── C: Claude structured extraction ─────────────────────────────────────
     console.rule(f"[bold]Claude 结构化提取  [dim]({CLAUDE_MODEL})[/dim]")
-    log_lines: list[Text] = []
+    headers: list[Text] = []  # permanent header / status lines
+    thinking_lines: deque[str] = deque(maxlen=8)
+    body_lines: deque[str] = deque(maxlen=3)
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]Claude 正在分析群聊..."),
@@ -194,10 +232,31 @@ def _run_db_pipeline(
         console=console,
     )
     task = progress.add_task("连接中...", total=None)
-    state = {"text": 0, "thinking": 0}
+    state = {
+        "text": 0,
+        "thinking": 0,
+        "thinking_partial": "",
+        "body_partial": "",
+    }
+
+    def _tail_texts(lines: deque[str], partial: str, n: int, style: str) -> list[Text]:
+        visible = list(lines)
+        if partial:
+            visible.append(partial)
+        return [Text(s, style=style) for s in visible[-n:]]
 
     def render() -> Group:
-        return Group(*log_lines, progress)
+        parts: list = list(headers)
+        th = _tail_texts(thinking_lines, state["thinking_partial"], 8, "dim italic")
+        bd = _tail_texts(body_lines, state["body_partial"], 3, "")
+        if th:
+            parts.append(Text("─ thinking ─", style="dim cyan"))
+            parts.extend(th)
+        if bd:
+            parts.append(Text("─ 正文 ─", style="cyan"))
+            parts.extend(bd)
+        parts.append(progress)
+        return Group(*parts)
 
     with Live(render(), console=console, refresh_per_second=10, transient=False) as live:
         def refresh() -> None:
@@ -223,17 +282,30 @@ def _run_db_pipeline(
             state["thinking"] = received
             _update_progress(attempt)
 
-        def header_cb(kind: str, level: int, title: str, attempt: int) -> None:
-            if kind == "thinking":
-                log_lines.append(Text(title, style="dim"))
+        def text_cb(kind: str, delta: str, attempt: int) -> None:
+            partial_key = "thinking_partial" if kind == "thinking" else "body_partial"
+            target = thinking_lines if kind == "thinking" else body_lines
+            combined = state[partial_key] + delta
+            if "\n" in combined:
+                *complete, remainder = combined.split("\n")
+                for line in complete:
+                    target.append(line)
+                state[partial_key] = remainder
             else:
-                indent = "  " * level
-                marker = "###" if level >= 1 else "##"
-                log_lines.append(Text(f"{indent}{marker} {title}", style="bold"))
+                state[partial_key] = combined
+            refresh()
+
+        def header_cb(kind: str, level: int, title: str, attempt: int) -> None:
+            indent = "  " * level
+            headers.append(Text(f"{indent}{title}", style="bold"))
             refresh()
 
         def attempt_cb(attempt: int) -> None:
-            log_lines.append(Text(f"--- 第 {attempt}/3 次重试 ---", style="yellow"))
+            headers.append(Text(f"--- 第 {attempt}/3 次重试 ---", style="yellow"))
+            thinking_lines.clear()
+            body_lines.clear()
+            state["thinking_partial"] = ""
+            state["body_partial"] = ""
             refresh()
 
         import tempfile
@@ -244,7 +316,7 @@ def _run_db_pipeline(
                 chat_blocks = format_tokenized_messages_blocks(tokenized, decoder)
                 n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
                 if n_images:
-                    log_lines.append(Text(
+                    headers.append(Text(
                         f"图片解码 {n_decoded}/{n_images} 张成功",
                         style="dim",
                     ))
@@ -255,6 +327,7 @@ def _run_db_pipeline(
                     thinking_cb=thinking_cb,
                     header_cb=header_cb,
                     attempt_cb=attempt_cb,
+                    text_cb=text_cb,
                     chat_blocks=chat_blocks,
                 )
         except ExtractionError as e:

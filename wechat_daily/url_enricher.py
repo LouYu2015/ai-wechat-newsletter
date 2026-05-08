@@ -163,6 +163,7 @@ def enrich_link_messages(
     progress_cb: ProgressCB | None = None,
     http_client: httpx.Client | None = None,
     anthropic_client=None,
+    summary_delta_cb: Callable[[str], None] | None = None,
 ) -> EnrichStats:
     """Mutate link-card messages with short webpage summaries.
 
@@ -208,6 +209,7 @@ def enrich_link_messages(
                         api_key=api_key,
                         client=anthropic_client,
                         surrounding=surrounding,
+                        delta_cb=summary_delta_cb,
                     )
                     _append_link_context(msg, summary)
                     stats.summarized += 1
@@ -381,6 +383,7 @@ def summarize_text(
     api_key: str,
     client=None,
     surrounding: str = "",
+    delta_cb: Callable[[str], None] | None = None,
 ) -> str:
     if client is None:
         import anthropic
@@ -402,14 +405,21 @@ def summarize_text(
             url=url,
             text=text[:50000],
         )
-    response = client.messages.create(
+    parts: list[str] = []
+    with client.messages.stream(
         model=LINK_SUMMARY_MODEL,
         max_tokens=2500,
         system="你是一个网页内容摘要器。直接输出摘要正文。",
         messages=[{"role": "user", "content": prompt}],
-    )
-    summary = _response_text(response)
-    return _clean_text(summary)
+    ) as stream:
+        for event in stream:
+            etype = getattr(event, "type", None)
+            delta = getattr(event, "text", None)
+            if isinstance(delta, str) and etype == "text":
+                parts.append(delta)
+                if delta_cb:
+                    delta_cb(delta)
+    return _clean_text("".join(parts))
 
 
 def _fetch_tweet(url: str, client: httpx.Client) -> str:
@@ -534,16 +544,6 @@ def _extract_html_text(source: str, target_id: str | None = None) -> str:
     parser = _TextExtractor(target_id=target_id)
     parser.feed(source[:3_000_000])
     return parser.text()
-
-
-def _response_text(response) -> str:
-    parts: list[str] = []
-    for block in getattr(response, "content", []) or []:
-        if getattr(block, "type", None) == "text":
-            parts.append(getattr(block, "text", ""))
-        elif isinstance(block, dict) and block.get("type") == "text":
-            parts.append(block.get("text", ""))
-    return "".join(parts)
 
 
 def _fallback_context(title: str, description: str) -> str:

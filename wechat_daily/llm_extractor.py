@@ -13,8 +13,6 @@ import time
 
 import httpx
 
-# Bold-wrapped line in summarized thinking, e.g. "**Analyzing the chat**".
-_THINKING_HEADER_RE = re.compile(r"^\s*\*\*(.+?)\*\*\s*$")
 # Body markdown ## / ### header line.
 _BODY_HEADER_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
 
@@ -213,6 +211,7 @@ def extract_report(
     thinking_cb=None,
     header_cb=None,
     attempt_cb=None,
+    text_cb=None,
     chat_blocks: list[dict] | None = None,
 ) -> DailyReport:
     """Stream a markdown daily report from Claude; return DailyReport(date, markdown).
@@ -228,11 +227,13 @@ def extract_report(
     *thinking_cb(received_bytes, attempt)* is invoked as adaptive-thinking
     content streams in (separate from the visible text body).
 
-    *header_cb(kind, level, title, attempt)* fires when a structural header
-    is detected in the stream: ``kind="thinking"`` for ``**bold**``-wrapped
-    lines in summarized thinking (level=0); ``kind="body"`` for ``##`` /
-    ``###`` markdown lines in the visible body (level 0 for ``##``, 1 for
-    ``###``).
+    *header_cb(kind, level, title, attempt)* fires when a ``##`` / ``###``
+    markdown header is detected in the visible body (kind always ``"body"``;
+    level 0 for ``##``, 1 for ``###``).
+
+    *text_cb(kind, delta, attempt)* fires for every streamed delta with the
+    raw text — ``kind="thinking"`` for adaptive-thinking deltas,
+    ``kind="body"`` for visible body text.
 
     *attempt_cb(attempt)* fires when a retry begins (attempt >= 2), so
     front-ends can render a separator in their log.
@@ -289,23 +290,17 @@ def extract_report(
             received = 0
             thinking_received = 0
             text_line_buf = ""
-            thinking_line_buf = ""
 
-            def _flush_lines(buf: str, kind: str) -> str:
-                """Emit headers for any complete lines in *buf*; return remainder."""
+            def _flush_body_headers(buf: str) -> str:
+                """Emit body headers for any complete lines in *buf*; return remainder."""
                 if "\n" not in buf or not header_cb:
                     return buf
                 *complete, remainder = buf.split("\n")
                 for line in complete:
-                    if kind == "thinking":
-                        m = _THINKING_HEADER_RE.match(line)
-                        if m:
-                            header_cb("thinking", 0, m.group(1).strip(), attempt)
-                    else:
-                        m = _BODY_HEADER_RE.match(line)
-                        if m:
-                            level = len(m.group(1)) - 2  # ## → 0, ### → 1
-                            header_cb("body", level, m.group(2).strip(), attempt)
+                    m = _BODY_HEADER_RE.match(line)
+                    if m:
+                        level = len(m.group(1)) - 2  # ## → 0, ### → 1
+                        header_cb("body", level, m.group(2).strip(), attempt)
                 return remainder
 
             with client.messages.stream(
@@ -324,7 +319,9 @@ def extract_report(
                     if isinstance(delta, str) and etype == "text":
                         buffer_parts.append(delta)
                         received += len(delta)
-                        text_line_buf = _flush_lines(text_line_buf + delta, "body")
+                        text_line_buf = _flush_body_headers(text_line_buf + delta)
+                        if text_cb:
+                            text_cb("body", delta, attempt)
                         if progress_cb:
                             progress_cb(received, attempt)
                         continue
@@ -338,9 +335,8 @@ def extract_report(
                             if isinstance(t, str) and t:
                                 thinking_parts.append(t)
                                 thinking_received += len(t)
-                                thinking_line_buf = _flush_lines(
-                                    thinking_line_buf + t, "thinking",
-                                )
+                                if text_cb:
+                                    text_cb("thinking", t, attempt)
                                 if thinking_cb:
                                     thinking_cb(thinking_received, attempt)
                 response = stream.get_final_message()

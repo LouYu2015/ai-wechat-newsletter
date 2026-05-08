@@ -29,6 +29,27 @@ class TextBlock:
         self.text = text
 
 
+class _TextEvent:
+    type = "text"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _FakeStream:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        yield _TextEvent(self._text)
+
+
 class FakeMessages:
     def __init__(self, text: str) -> None:
         self.text = text
@@ -37,6 +58,10 @@ class FakeMessages:
     def create(self, **kwargs):
         self.calls.append(kwargs)
         return type("Response", (), {"content": [TextBlock(self.text)]})()
+
+    def stream(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeStream(self.text)
 
 
 class FakeAnthropic:
