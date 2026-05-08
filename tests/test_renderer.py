@@ -81,6 +81,12 @@ def test_tags_empty_value():
     assert tags == []
 
 
+def test_tags_normalize_dots_and_dedupe():
+    """Jekyll slugifies ``.`` to ``-``; merge variants so URLs don't collide."""
+    _, tags = _strip_trailing_tags("x\ntags: GPT-5.5, gpt-5-5, gpt 5.5, foo_bar\n")
+    assert tags == ["gpt-5-5", "foo-bar"]
+
+
 def test_tags_inline_dashes_in_body_preserved():
     """A '---' inside the body is not the separator — only the one right above tags."""
     body, tags = _strip_trailing_tags(

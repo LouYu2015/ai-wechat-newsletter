@@ -46,6 +46,20 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 # Match the trailing ``tags: ...`` line (after last meaningful content).
 _TAGS_LINE_RE = re.compile(r"^tags\s*:\s*(.*)$", re.IGNORECASE)
 
+_TAG_INVALID_RE = re.compile(r"[^a-z0-9-]+")
+_TAG_DASHES_RE = re.compile(r"-{2,}")
+
+
+def _normalize_tag(raw: str) -> str:
+    """Normalize a tag to ``[a-z0-9-]+`` so Jekyll slug collisions disappear.
+
+    LLM occasionally emits ``gpt-5.5`` and ``gpt-5-5`` for the same concept;
+    Jekyll slugifies ``.`` to ``-``, so both collide on the same tag URL.
+    """
+    s = _TAG_INVALID_RE.sub("-", raw.strip().lower())
+    s = _TAG_DASHES_RE.sub("-", s).strip("-")
+    return s
+
 
 # ── Common helpers ──────────────────────────────────────────────────────────────
 
@@ -80,7 +94,8 @@ def _strip_trailing_tags(markdown: str) -> tuple[str, list[str]]:
         return markdown, []
 
     raw = m.group(1)
-    tags = [t.strip() for t in raw.split(",") if t.strip()]
+    tags = [_normalize_tag(t) for t in raw.split(",") if t.strip()]
+    tags = list(dict.fromkeys(t for t in tags if t))
     lines.pop()
 
     # Drop blank lines between '---' separator and the tags line
