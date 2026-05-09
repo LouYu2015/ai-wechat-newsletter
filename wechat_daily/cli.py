@@ -135,10 +135,14 @@ def _run_db_pipeline(
             visible = list(link_lines)
             if link_state["partial"]:
                 visible.append(link_state["partial"])
-            visible = visible[-8:]
-            if visible:
+            width = max(1, console.width)
+            rows: list[Text] = []
+            for s in visible:
+                rows.extend(Text(s).wrap(console, width))
+            rows = rows[-8:]
+            if rows:
                 parts.append(Text("─ 摘要 ─", style="cyan"))
-                parts.extend(Text(s) for s in visible)
+                parts.extend(rows)
             parts.append(link_progress)
             return Group(*parts)
 
@@ -148,9 +152,10 @@ def _run_db_pipeline(
 
             def _link_progress_cb(current: int, total: int, phase: str, label: str) -> None:
                 if current != link_state["current"]:
+                    if link_state["partial"]:
+                        link_lines.append(link_state["partial"])
+                        link_state["partial"] = ""
                     link_state["current"] = current
-                    link_lines.clear()
-                    link_state["partial"] = ""
                 link_progress.update(
                     link_task,
                     completed=max(0, current - 1),
@@ -223,7 +228,7 @@ def _run_db_pipeline(
     console.rule(f"[bold]Claude 结构化提取  [dim]({CLAUDE_MODEL})[/dim]")
     headers: list[Text] = []  # permanent header / status lines
     thinking_lines: deque[str] = deque(maxlen=8)
-    body_lines: deque[str] = deque(maxlen=3)
+    body_lines: deque[str] = deque(maxlen=8)
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]Claude 正在分析群聊..."),
@@ -243,12 +248,17 @@ def _run_db_pipeline(
         visible = list(lines)
         if partial:
             visible.append(partial)
-        return [Text(s, style=style) for s in visible[-n:]]
+        width = max(1, console.width)
+        rows: list[Text] = []
+        for s in visible:
+            wrapped = Text(s, style=style).wrap(console, width)
+            rows.extend(wrapped)
+        return rows[-n:]
 
     def render() -> Group:
         parts: list = list(headers)
         th = _tail_texts(thinking_lines, state["thinking_partial"], 8, "dim italic")
-        bd = _tail_texts(body_lines, state["body_partial"], 3, "")
+        bd = _tail_texts(body_lines, state["body_partial"], 8, "")
         if th:
             parts.append(Text("─ thinking ─", style="dim cyan"))
             parts.extend(th)
