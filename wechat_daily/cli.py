@@ -28,6 +28,7 @@ from .contacts import ContactMap
 from .llm_extractor import ExtractionError, extract_report, generate_markdown_with_gemini
 from .pdf import convert_to_pdf
 from .message_parser import MSG_TAP, MSG_SYSTEM
+from .prior_report import load_prior_reports, missing_prior_dates
 from .privacy import (
     LeakDetected, format_tokenized_messages, format_tokenized_messages_blocks,
     leak_check, tokenize_messages,
@@ -101,8 +102,17 @@ def _run_db_pipeline(
     anthropic_key: str,
     alias_db: AliasDB,
     contact_map: ContactMap,
+    prior_days: int = 3,
+    prompt_on_missing_prior: bool = True,
 ) -> None:
-    """Full pipeline for one date: extract → tokenize → LLM → render → PDF + public."""
+    """Full pipeline for one date: extract → tokenize → LLM → render → PDF + public.
+
+    *prior_days* — how many prior daily reports to feed the model for cross-day
+    de-dup / continuation. ``0`` disables the feature.
+    *prompt_on_missing_prior* — when *some* of the last *prior_days* are
+    available but others aren't (suggesting a recent gap, not a fresh start),
+    ask the user whether to proceed.
+    """
 
     target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
 
@@ -224,6 +234,37 @@ def _run_db_pipeline(
         f"花名册 {len(roster_entries)} 条；图片 {n_images} 张[/dim]\n"
     )
 
+    # ── B2: Load prior days' reports for cross-day de-dup / continuation ────
+    prior_reports: list[tuple[str, str]] = []
+    if prior_days > 0:
+        prior_reports = load_prior_reports(date_str, n_days=prior_days)
+        gaps = missing_prior_dates(date_str, n_days=prior_days)
+        if prior_reports:
+            console.print(
+                f"[dim]载入前 {len(prior_reports)} 天日报作为跨日上下文："
+                f"{', '.join(d for d, _ in prior_reports)}[/dim]"
+            )
+        if gaps and prior_reports and prompt_on_missing_prior:
+            # Partial gap (some prior days available, some not) — likely a
+            # missed run or genuinely empty day. Ask before continuing.
+            console.print(
+                f"[yellow]最近 {prior_days} 天里 {len(gaps)} 天缺日报：{', '.join(gaps)}[/yellow]"
+            )
+            choice = console.input(
+                "[bold]继续生成今日日报？[c]ontinue / [s]kip 此日 / [a]bort 全部退出 (默认 c): [/bold]"
+            ).strip().lower()
+            if choice == "s":
+                console.print(f"[yellow]按用户要求跳过 {date_str}。[/yellow]\n")
+                return
+            if choice == "a":
+                raise KeyboardInterrupt("用户中止")
+        elif gaps and not prior_reports:
+            # All prior days missing — first-run / long pause; silent continue.
+            console.print(
+                f"[dim]最近 {prior_days} 天均无历史日报，按独立日报生成。[/dim]"
+            )
+        console.print()
+
     # ── C: Claude structured extraction ─────────────────────────────────────
     console.rule(f"[bold]Claude 结构化提取  [dim]({CLAUDE_MODEL})[/dim]")
     headers: list[Text] = []  # permanent header / status lines
@@ -339,6 +380,7 @@ def _run_db_pipeline(
                     attempt_cb=attempt_cb,
                     text_cb=text_cb,
                     chat_blocks=chat_blocks,
+                    prior_reports=prior_reports or None,
                 )
         except ExtractionError as e:
             console.print(f"[bold red]结构化提取失败:[/bold red] {e}")
@@ -494,6 +536,14 @@ def main() -> None:
         "-y", action="store_true",
         help="推送上次生成的公开版到 GitHub Pages（不影响本次生成流程）",
     )
+    parser.add_argument(
+        "--prior-days", type=int, default=3,
+        help="喂给模型的过往日报天数（用于跨日去重 / 续写）；0 关闭。默认 3。",
+    )
+    parser.add_argument(
+        "--no-prior-prompt", action="store_true",
+        help="最近若干天日报有缺失时不交互询问，按现有材料继续（适合自动化场景）。",
+    )
     args = parser.parse_args()
 
     console.print(Panel.fit(
@@ -555,7 +605,11 @@ def main() -> None:
         # Step 6: Generate reports
         for date_str in missing:
             if args.summary == "claude":
-                _run_db_pipeline(date_str, anthropic_key, alias_db, contact_map)
+                _run_db_pipeline(
+                    date_str, anthropic_key, alias_db, contact_map,
+                    prior_days=args.prior_days,
+                    prompt_on_missing_prior=not args.no_prior_prompt,
+                )
             else:
                 _run_gemini_pipeline(date_str, gemini_key, contact_map, alias_db)
             # Persist any tokens lazily allocated during this date's pipeline
