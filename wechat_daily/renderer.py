@@ -274,7 +274,12 @@ def _expand_refs_public(
     text: str,
     posts_dir: Path | None = None,
 ) -> str:
-    """Public version: expand to ``[「title」](/daily/Y/M/D/daily/#slug)``.
+    """Public version: expand to ``[「title」]({{ '/daily/Y/M/D/daily/#slug' | relative_url }})``.
+
+    Wrapping the path in Jekyll's ``relative_url`` Liquid filter is what lets
+    the link resolve under the site's ``baseurl`` (``/AI-chatgroup-daily``).
+    Emitting a bare ``/daily/...`` path here yields a link that 404s on the
+    deployed site and trips htmlproofer in CI.
 
     If the target ``_posts/YYYY/MM/YYYY-MM-DD-daily.md`` does not exist (the
     post hasn't been published yet), gracefully degrade to plain text so we
@@ -289,7 +294,8 @@ def _expand_refs_public(
             return f"「{raw_title}」"
         slug = _slugify_heading(raw_title)
         anchor = f"#{slug}" if slug else ""
-        return f"[「{raw_title}」](/daily/{y}/{mo}/{d}/daily/{anchor})"
+        url = f"/daily/{y}/{mo}/{d}/daily/{anchor}"
+        return f"[「{raw_title}」]({{{{ '{url}' | relative_url }}}})"
 
     return _REF_RE.sub(sub, text)
 

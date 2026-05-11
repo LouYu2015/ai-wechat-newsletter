@@ -555,7 +555,10 @@ def test_expand_refs_public_with_existing_post(tmp_path):
     text = "上一期写过 [[ref:2026-05-09|Claude Opus 4.7 发布]] 那一节。"
     out = _expand_refs_public(text, posts_dir=tmp_path / "_posts")
     assert "[「Claude Opus 4.7 发布」]" in out
-    assert "(/daily/2026/05/09/daily/" in out
+    # URL must be wrapped in Jekyll's relative_url filter so it picks up the
+    # site baseurl (/AI-chatgroup-daily); bare /daily/... 404s on deployment.
+    assert "({{ '/daily/2026/05/09/daily/" in out
+    assert "| relative_url }})" in out
     assert "claude-opus-47-发布" in out
 
 
@@ -575,9 +578,9 @@ def test_expand_refs_public_handles_multiple_mixed_existence(tmp_path):
     text = "[[ref:2026-05-08|旧话题]] 与 [[ref:2026-05-09|新话题]]"
     out = _expand_refs_public(text, posts_dir=tmp_path / "_posts")
     assert "「旧话题」" in out
-    assert "(/daily/2026/05/08/" not in out  # missing → plain
+    assert "/daily/2026/05/08/" not in out  # missing → plain, no URL at all
     assert "[「新话题」]" in out
-    assert "(/daily/2026/05/09/daily/" in out
+    assert "({{ '/daily/2026/05/09/daily/" in out
 
 
 def test_expand_refs_public_no_match_unchanged(tmp_path):
@@ -624,4 +627,7 @@ def test_render_public_expands_ref_to_link_when_post_exists(monkeypatch, tmp_pat
         f"## A\n\n### x\nbody\n"
     )
     out = render_public(_wrap(md), _make_db())
-    assert "[「某话题」](/daily/2026/05/09/daily/#某话题)" in out
+    assert (
+        "[「某话题」]({{ '/daily/2026/05/09/daily/#某话题' | relative_url }})"
+        in out
+    )
