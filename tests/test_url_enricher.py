@@ -342,6 +342,98 @@ def test_enrich_deduplicates_card_and_inline_url():
     assert text.link_context == ""
 
 
+def test_inline_url_stops_at_chinese_punctuation_and_text():
+    """Regression: a URL followed directly by Chinese punctuation/text without
+    whitespace used to be swallowed whole (e.g. the trailing 「，关键是…」 ended
+    up inside the URL), which then 404'd in fetch and logged FAILED."""
+    url = "https://github.com/zarazhangrui/beautiful-html-templates"
+    msg = Message(
+        create_time=1000,
+        local_type=MSG_TEXT,
+        sender_wxid="wxid",
+        content=f"{url}，关键是贼方便。昨天我碰巧看到，写材料的时候就用了。",
+    )
+    client = FakeHTTP({
+        "https://raw.githubusercontent.com/zarazhangrui/beautiful-html-templates/main/README.md":
+        ("# README\n" + ("body " * 200), "text/plain"),
+    })
+    # Without the regex fix this would request the URL+Chinese-tail and fail.
+    enrich_link_messages(
+        [msg],
+        api_key="fake",
+        http_client=client,
+        anthropic_client=FakeAnthropic("摘要"),
+    )
+    assert msg.inline_links[0].url == url
+
+
+def test_douyin_is_skipped_like_xiaohongshu():
+    msg = _link_msg(
+        title="抖音标题",
+        url="https://www.douyin.com/video/7636968103511816817",
+        des="抖音卡片摘要",
+    )
+    client = FakeHTTP({})  # No routes — fetch must not be attempted.
+    stats = enrich_link_messages(
+        [msg],
+        api_key="fake",
+        http_client=client,
+        anthropic_client=FakeAnthropic(),
+    )
+    assert client.urls == []  # douyin was short-circuited, no HTTP call made
+    assert stats.short == 1
+    assert msg.link_context == "标题：抖音标题\n卡片预览：抖音卡片摘要"
+
+
+def test_default_client_sends_browser_like_headers():
+    """Regression: openai.com (and other Cloudflare/Vercel-fronted sites)
+    return 403 challenge pages when only User-Agent is set. The default
+    httpx.Client should ship full browser-like headers."""
+    import httpx as _httpx
+    from wechat_daily.url_enricher import _DEFAULT_HEADERS
+
+    captured: dict[str, str] = {}
+
+    def handler(request: _httpx.Request) -> _httpx.Response:
+        captured.update({k: v for k, v in request.headers.items()})
+        return _httpx.Response(
+            200,
+            text=(
+                "<html><head>"
+                '<meta property="og:description" content="OpenAI launches DeployCo.">'
+                "<title>OpenAI launches the Deployment Company</title>"
+                "</head><body><article>" + ("正文 " * 500) + "</article></body></html>"
+            ),
+            headers={"content-type": "text/html; charset=utf-8"},
+        )
+
+    transport = _httpx.MockTransport(handler)
+    msg = Message(
+        create_time=1000,
+        local_type=MSG_TEXT,
+        sender_wxid="wxid",
+        content="https://openai.com/index/openai-launches-the-deployment-company/",
+    )
+    with _httpx.Client(
+        transport=transport,
+        timeout=5.0,
+        follow_redirects=True,
+        headers=_DEFAULT_HEADERS,
+    ) as client:
+        enrich_link_messages(
+            [msg],
+            api_key="fake",
+            http_client=client,
+            anthropic_client=FakeAnthropic("摘要"),
+        )
+    assert "sec-fetch-mode" in captured
+    assert captured["sec-fetch-mode"] == "navigate"
+    assert "accept-language" in captured
+    # br must NOT be advertised — httpx can't decode brotli without the
+    # optional `brotli` package, which would give us a binary blob.
+    assert "br" not in captured.get("accept-encoding", "")
+
+
 def test_enrich_appends_multiple_inline_link_contexts():
     url1 = "https://example.com/one"
     url2 = "https://example.com/two"
