@@ -10,7 +10,10 @@ from wechat_daily.models import DailyReport
 from wechat_daily.renderer import (
     _annotate_hidden_for_group,
     _drop_empty_h2,
+    _expand_refs_group,
+    _expand_refs_public,
     _insert_toc,
+    _slugify_heading,
     _strip_hidden_for_public,
     _strip_trailing_tags,
     render_group,
@@ -505,3 +508,126 @@ def test_render_group_command_log_with_real_user():
     assert "Alice" in out
     assert "已设置别名" in out
     assert "✓" in out
+
+
+# ── Cross-day reference placeholders ───────────────────────────────────────────
+
+
+def test_slugify_basic_ascii():
+    assert _slugify_heading("Hello World") == "hello-world"
+
+
+def test_slugify_strips_punctuation():
+    assert _slugify_heading("Claude Opus 4.7 发布!") == "claude-opus-47-发布"
+
+
+def test_slugify_collapses_whitespace_and_dashes():
+    assert _slugify_heading("  multi   space  ") == "multi-space"
+    assert _slugify_heading("a---b") == "a-b"
+
+
+def test_slugify_strips_chinese_punctuation():
+    assert _slugify_heading("话题：副标题") == "话题副标题"
+
+
+def test_expand_refs_group_keeps_only_title():
+    """Group/PDF version drops the date — model writes natural-language date in prose."""
+    text = "昨天 [[ref:2026-05-09|Claude Opus 4.7 发布]] 已经写过要点。"
+    assert _expand_refs_group(text) == "昨天 「Claude Opus 4.7 发布」 已经写过要点。"
+
+
+def test_expand_refs_group_handles_multiple():
+    text = "[[ref:2026-05-08|话题 A]] 与 [[ref:2026-05-09|话题 B]]"
+    assert _expand_refs_group(text) == "「话题 A」 与 「话题 B」"
+
+
+def test_expand_refs_group_no_match_unchanged():
+    text = "no refs here"
+    assert _expand_refs_group(text) == text
+
+
+def test_expand_refs_public_with_existing_post(tmp_path):
+    """When the target _posts file exists, emit a clickable Markdown link."""
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    (posts / "2026-05-09-daily.md").write_text("dummy", encoding="utf-8")
+
+    text = "上一期写过 [[ref:2026-05-09|Claude Opus 4.7 发布]] 那一节。"
+    out = _expand_refs_public(text, posts_dir=tmp_path / "_posts")
+    assert "[「Claude Opus 4.7 发布」]" in out
+    # URL must be wrapped in Jekyll's relative_url filter so it picks up the
+    # site baseurl (/AI-chatgroup-daily); bare /daily/... 404s on deployment.
+    assert "({{ '/daily/2026/05/09/daily/" in out
+    assert "| relative_url }})" in out
+    assert "claude-opus-47-发布" in out
+
+
+def test_expand_refs_public_missing_post_degrades_to_plain_text(tmp_path):
+    """When the target post hasn't been published, drop the URL — no broken links."""
+    text = "之前 [[ref:2026-05-09|某话题]] 提过"
+    out = _expand_refs_public(text, posts_dir=tmp_path / "_posts")
+    assert out == "之前 「某话题」 提过"
+
+
+def test_expand_refs_public_handles_multiple_mixed_existence(tmp_path):
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    (posts / "2026-05-09-daily.md").write_text("x", encoding="utf-8")
+    # 2026-05-08 absent
+
+    text = "[[ref:2026-05-08|旧话题]] 与 [[ref:2026-05-09|新话题]]"
+    out = _expand_refs_public(text, posts_dir=tmp_path / "_posts")
+    assert "「旧话题」" in out
+    assert "/daily/2026/05/08/" not in out  # missing → plain, no URL at all
+    assert "[「新话题」]" in out
+    assert "({{ '/daily/2026/05/09/daily/" in out
+
+
+def test_expand_refs_public_no_match_unchanged(tmp_path):
+    text = "plain text"
+    assert _expand_refs_public(text, posts_dir=tmp_path) == text
+
+
+def test_render_group_expands_ref_placeholder():
+    md = (
+        f"intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
+        f"## A\n\n### x\nbody\n"
+    )
+    out = render_group(_wrap(md), _make_db(), _make_contacts(), command_log=[])
+    assert "「某话题」" in out
+    assert "[[ref:" not in out
+
+
+def test_render_public_expands_ref_placeholder_degraded(monkeypatch, tmp_path):
+    """In tests there's no published post; expansion should degrade to plain text."""
+    import wechat_daily.renderer as mod
+    monkeypatch.setattr(mod, "PUBLIC_REPO_DIR", tmp_path)
+
+    md = (
+        f"intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
+        f"## A\n\n### x\nbody\n"
+    )
+    out = render_public(_wrap(md), _make_db())
+    assert "「某话题」" in out
+    assert "[[ref:" not in out
+    # No URL emitted because target post doesn't exist in tmp_path
+    assert "/daily/2026/05/09/" not in out
+
+
+def test_render_public_expands_ref_to_link_when_post_exists(monkeypatch, tmp_path):
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    (posts / "2026-05-09-daily.md").write_text("x", encoding="utf-8")
+
+    import wechat_daily.renderer as mod
+    monkeypatch.setattr(mod, "PUBLIC_REPO_DIR", tmp_path)
+
+    md = (
+        f"intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
+        f"## A\n\n### x\nbody\n"
+    )
+    out = render_public(_wrap(md), _make_db())
+    assert (
+        "[「某话题」]({{ '/daily/2026/05/09/daily/#某话题' | relative_url }})"
+        in out
+    )

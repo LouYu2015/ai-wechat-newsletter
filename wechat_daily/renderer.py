@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from .config import PUBLIC_REPO_DIR
 from .models import DailyReport
 from .privacy import mark_leaks
 
@@ -45,6 +47,15 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 
 # Match the trailing ``tags: ...`` line (after last meaningful content).
 _TAGS_LINE_RE = re.compile(r"^tags\s*:\s*(.*)$", re.IGNORECASE)
+
+# Cross-day section reference placeholder emitted by the LLM:
+# ``[[ref:YYYY-MM-DD|章节标题]]`` → expanded by render_public/render_group.
+_REF_RE = re.compile(r"\[\[ref:(\d{4})-(\d{2})-(\d{2})\|([^\]\n]+?)\]\]")
+
+# ASCII punctuation we strip from kramdown-style slugs. CJK characters are
+# preserved as-is; modern browsers handle them in URL fragments.
+_SLUG_PUNCT_RE = re.compile(r"[!\"#$%&'()*+,./:;<=>?@\[\\\]^_`{|}~。！？，、；：『』「」（）【】《》——]")
+_SLUG_DASHES_RE = re.compile(r"-+")
 
 _TAG_INVALID_RE = re.compile(r"[^a-z0-9-]+")
 _TAG_DASHES_RE = re.compile(r"-{2,}")
@@ -233,6 +244,62 @@ def _collapse_blanks(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip("\n") + "\n"
 
 
+# ── Cross-day reference expansion ───────────────────────────────────────────────
+
+def _slugify_heading(title: str) -> str:
+    """Best-effort kramdown-compatible slug for a Chinese/English heading.
+
+    Mirrors the common kramdown auto-id behaviour: lowercase, ASCII punctuation
+    stripped, whitespace collapsed to dashes, CJK characters preserved.
+    Anchors generated this way work for typical Jekyll posts; mismatches just
+    degrade to page-level navigation (browser ignores unknown fragments).
+    """
+    s = title.strip().lower()
+    s = re.sub(r"\s+", "-", s)
+    s = _SLUG_PUNCT_RE.sub("", s)
+    s = _SLUG_DASHES_RE.sub("-", s).strip("-")
+    return s
+
+
+def _expand_refs_group(text: str) -> str:
+    """Group/PDF version: keep only the section title in 「…」.
+
+    Date is intentionally dropped; the model is instructed to write a natural-
+    language date marker in surrounding prose ("昨天", "上周三" 等).
+    """
+    return _REF_RE.sub(lambda m: f"「{m.group(4).strip()}」", text)
+
+
+def _expand_refs_public(
+    text: str,
+    posts_dir: Path | None = None,
+) -> str:
+    """Public version: expand to ``[「title」]({{ '/daily/Y/M/D/daily/#slug' | relative_url }})``.
+
+    Wrapping the path in Jekyll's ``relative_url`` Liquid filter is what lets
+    the link resolve under the site's ``baseurl`` (``/AI-chatgroup-daily``).
+    Emitting a bare ``/daily/...`` path here yields a link that 404s on the
+    deployed site and trips htmlproofer in CI.
+
+    If the target ``_posts/YYYY/MM/YYYY-MM-DD-daily.md`` does not exist (the
+    post hasn't been published yet), gracefully degrade to plain text so we
+    don't ship dangling links.
+    """
+    base = posts_dir if posts_dir is not None else (PUBLIC_REPO_DIR / "_posts")
+
+    def sub(m: re.Match[str]) -> str:
+        y, mo, d, raw_title = m.group(1), m.group(2), m.group(3), m.group(4).strip()
+        post = base / y / mo / f"{y}-{mo}-{d}-daily.md"
+        if not post.exists():
+            return f"「{raw_title}」"
+        slug = _slugify_heading(raw_title)
+        anchor = f"#{slug}" if slug else ""
+        url = f"/daily/{y}/{mo}/{d}/daily/{anchor}"
+        return f"[「{raw_title}」]({{{{ '{url}' | relative_url }}}})"
+
+    return _REF_RE.sub(sub, text)
+
+
 # ── Group-version annotation ────────────────────────────────────────────────────
 
 def _annotate_hidden_for_group(markdown: str) -> str:
@@ -337,6 +404,7 @@ def render_group(
 
     body, tags = _strip_trailing_tags(report.markdown)
     body = _annotate_hidden_for_group(body)
+    body = _expand_refs_group(body)
     body = _insert_toc(body)
 
     def token_to_real(token: str) -> str:
@@ -423,6 +491,7 @@ def render_public(
 
     body, tags = _strip_trailing_tags(report.markdown)
     body = _strip_hidden_for_public(body)
+    body = _expand_refs_public(body)
 
     def token_to_public(token: str) -> str:
         wxid = (token_map.wxid(token) if token_map else None) \

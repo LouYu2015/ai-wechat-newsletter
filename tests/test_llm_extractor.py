@@ -209,3 +209,101 @@ def test_debug_md_contents_match(monkeypatch, tmp_path):
     extract_report("2026-04-30", "chat", api_key="fake", client=client)
     saved = (tmp_path / "extract-2026-04-30.md").read_text(encoding="utf-8")
     assert saved == "hello\nworld\n"
+
+
+# ── prior_reports injection ────────────────────────────────────────────────────
+
+
+def test_prior_reports_injected_before_chat_log(monkeypatch, tmp_path):
+    """Long context order: roster → previous_reports → chat_log → instructions."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    roster = "## 群友花名册\n- 沉稳的狐狸：鸭哥"
+    priors = [
+        ("2026-04-28", "## 行业新闻\n\n### 老话题\nold body\n"),
+        ("2026-04-29", "## 工具\n\n### 另一话题\nbody\n"),
+    ]
+    extract_report(
+        "2026-04-30", "today's chat", api_key="fake", client=client,
+        roster_text=roster,
+        prior_reports=priors,
+    )
+
+    user_msg = client.messages.calls[0]["messages"][0]["content"]
+    # The data block uses a closing </previous_reports> tag; the instructions
+    # only mention <previous_reports> as inline code prose. Closing tag appears
+    # only when the block is actually emitted.
+    assert "</previous_reports>" in user_msg
+    assert '<report date="2026-04-28">' in user_msg
+    assert '<report date="2026-04-29">' in user_msg
+    assert "老话题" in user_msg
+    # Order: roster < previous_reports < chat_log
+    assert user_msg.index("</group_roster>") < user_msg.index("</previous_reports>")
+    assert user_msg.index("</previous_reports>") < user_msg.index("<chat_log")
+    assert user_msg.index("today's chat") > user_msg.index("</previous_reports>")
+
+
+def test_prior_reports_omitted_when_none(monkeypatch, tmp_path):
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    extract_report(
+        "2026-04-30", "chat history", api_key="fake", client=client,
+    )
+
+    user_msg = client.messages.calls[0]["messages"][0]["content"]
+    # The closing tag is the unique signal that the data block was emitted.
+    # The opening tag also appears in the instructions text as inline code.
+    assert "</previous_reports>" not in user_msg
+
+
+def test_prior_reports_empty_list_omits_block(monkeypatch, tmp_path):
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    extract_report(
+        "2026-04-30", "chat history", api_key="fake", client=client,
+        prior_reports=[],
+    )
+
+    user_msg = client.messages.calls[0]["messages"][0]["content"]
+    assert "</previous_reports>" not in user_msg
+
+
+def test_prior_reports_with_chat_blocks(monkeypatch, tmp_path):
+    """When chat_blocks (multimodal) is used, prior reports go into the prefix block."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    priors = [("2026-04-29", "yesterday's body")]
+    chat_blocks = [{"type": "text", "text": "[14:00] alice: hi\n"}]
+    extract_report(
+        "2026-04-30", "ignored", api_key="fake", client=client,
+        prior_reports=priors,
+        chat_blocks=chat_blocks,
+    )
+
+    user_content = client.messages.calls[0]["messages"][0]["content"]
+    assert isinstance(user_content, list)
+    # Prefix is the first text block
+    prefix = user_content[0]["text"]
+    assert "</previous_reports>" in prefix
+    assert "yesterday's body" in prefix
+    assert "<chat_log" in prefix
+
+
+def test_system_prompt_documents_ref_placeholder(monkeypatch, tmp_path):
+    """Sanity check: the [[ref:...]] syntax is taught in the system prompt."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+
+    system = client.messages.calls[0]["system"]
+    assert "[[ref:" in system
+    assert "YYYY-MM-DD" in system
