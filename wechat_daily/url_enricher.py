@@ -27,6 +27,28 @@ _USER_AGENT = (
     "Chrome/124.0 Safari/537.36"
 )
 
+# Browser-like headers. openai.com and other Cloudflare/Vercel-fronted sites
+# return 403 challenge pages when the request has only User-Agent. `br` is
+# omitted from Accept-Encoding because httpx doesn't decode brotli without
+# the optional `brotli` package.
+_DEFAULT_HEADERS = {
+    "User-Agent": _USER_AGENT,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+    "Accept-Encoding": "gzip, deflate",
+    "Sec-Ch-Ua": '"Chromium";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
 _SUMMARY_PROMPT = """\
 你正在为「微信 AI 技术讨论群日报」准备链接摘要。这些摘要会用于让日报编辑生成群聊的总结。
 
@@ -173,7 +195,7 @@ def enrich_link_messages(
         http_client = httpx.Client(
             timeout=httpx.Timeout(12.0, connect=5.0),
             follow_redirects=True,
-            headers={"User-Agent": _USER_AGENT},
+            headers=_DEFAULT_HEADERS,
         )
 
     try:
@@ -350,7 +372,12 @@ def _build_surrounding(
 
 
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
-_URL_RE = re.compile(r"https?://[^\s<>()]+")
+# Inline URLs must stop at non-URL characters. The previous `[^\s<>()]+` was
+# too permissive — it greedily swallowed trailing Chinese punctuation/text
+# (e.g. "https://github.com/x/y，关键是…"), producing un-fetchable garbage.
+# This class is the RFC 3986 unreserved + sub-delim + gen-delim set minus
+# `()` (kept as terminators for markdown-wrapped URLs).
+_URL_RE = re.compile(r"https?://[A-Za-z0-9\-._~:/?#@!$&'*+,;=%\[\]]+")
 
 
 def _extract_inline_links(text: str) -> list[LinkMeta]:
@@ -391,7 +418,9 @@ def fetch_url_text(url: str, client: httpx.Client) -> tuple[str, str]:
     """
     host = _host(url)
 
-    if "xiaohongshu.com" in host:
+    # Domains that gate content behind JS / device fingerprinting / login.
+    # Plain HTTP GETs only ever return a shell, so skip them outright.
+    if "xiaohongshu.com" in host or "douyin.com" in host:
         return "", ""
 
     if "superlinear.academy" in host:
