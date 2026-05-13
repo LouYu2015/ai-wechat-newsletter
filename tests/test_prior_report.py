@@ -6,7 +6,10 @@ import pytest
 
 from wechat_daily.prior_report import (
     expected_dates,
+    extract_titles_outline,
+    format_prior_report_titles_block,
     format_prior_reports_block,
+    load_prior_report_titles,
     load_prior_reports,
     missing_prior_dates,
 )
@@ -126,3 +129,144 @@ def test_format_strips_trailing_newlines_within_reports():
     block = format_prior_reports_block([("2026-05-09", "x\n\n\n")])
     # No "x\n\n\n</report>" — trailing \n stripped before close tag.
     assert "x\n</report>" in block
+
+
+# ── extract_titles_outline ─────────────────────────────────────────────────────
+
+
+def test_extract_titles_preserves_h2_h3_hierarchy_in_order():
+    md = (
+        "intro paragraph\n\n"
+        "## 行业新闻\n"
+        "blurb\n\n"
+        "### Claude 4.7 发布\n"
+        "body body body\n"
+        "> 沉稳的大象：略\n\n"
+        "### Anthropic 调价\n"
+        "more body\n\n"
+        "## 方法论\n"
+        "### 用 sub-agent 做并行搜索的小技巧\n"
+        "body\n\n"
+        "---\n"
+        "tags: model-release, agent\n"
+    )
+    assert extract_titles_outline(md) == (
+        "## 行业新闻\n"
+        "### Claude 4.7 发布\n"
+        "### Anthropic 调价\n"
+        "## 方法论\n"
+        "### 用 sub-agent 做并行搜索的小技巧"
+    )
+
+
+def test_extract_titles_includes_hidden_section_titles():
+    """`[章节不公开]` markers shouldn't filter out the surrounding ### title."""
+    md = (
+        "## 行业新闻\n"
+        "### 某客户案例\n"
+        "body\n\n"
+        "[章节不公开：涉及保密客户的敏感信息]\n\n"
+        "### Claude 4.7 发布\n"
+        "body\n"
+    )
+    assert extract_titles_outline(md) == (
+        "## 行业新闻\n"
+        "### 某客户案例\n"
+        "### Claude 4.7 发布"
+    )
+
+
+def test_extract_titles_ignores_h1_and_h4():
+    md = (
+        "# top\n"
+        "## keep me\n"
+        "#### too deep\n"
+        "### keep me too\n"
+    )
+    assert extract_titles_outline(md) == "## keep me\n### keep me too"
+
+
+def test_extract_titles_ignores_hash_inside_blockquote_body():
+    """Headers must be at start of line, not inside a `> ` blockquote."""
+    md = (
+        "## real\n"
+        "> ## not a header (inside blockquote)\n"
+        "### also real\n"
+    )
+    assert extract_titles_outline(md) == "## real\n### also real"
+
+
+def test_extract_titles_empty_when_no_headers():
+    assert extract_titles_outline("just a body paragraph, no headers\n") == ""
+    assert extract_titles_outline("") == ""
+
+
+# ── load_prior_report_titles ───────────────────────────────────────────────────
+
+
+def _write_with_titles(debug_dir, date_str: str, h3_titles: list[str]) -> None:
+    body = "## 行业新闻\n" + "\n".join(f"### {t}\nbody\n" for t in h3_titles)
+    _write_extract(debug_dir, date_str, body)
+
+
+def test_load_titles_returns_outline_per_day(tmp_path):
+    debug = tmp_path / "debug"
+    _write_with_titles(debug, "2026-05-04", ["A1", "A2"])
+    _write_with_titles(debug, "2026-05-05", ["B1"])
+
+    out = load_prior_report_titles("2026-05-10", n_days=7, debug_dir=debug)
+    assert out == [
+        ("2026-05-04", "## 行业新闻\n### A1\n### A2"),
+        ("2026-05-05", "## 行业新闻\n### B1"),
+    ]
+
+
+def test_load_titles_skips_dates_already_covered(tmp_path):
+    debug = tmp_path / "debug"
+    for d in ["2026-05-04", "2026-05-08", "2026-05-09"]:
+        _write_with_titles(debug, d, ["x"])
+
+    # Pretend full-body load already grabbed the last 3 days.
+    out = load_prior_report_titles(
+        "2026-05-10", n_days=7, debug_dir=debug,
+        skip_dates={"2026-05-07", "2026-05-08", "2026-05-09"},
+    )
+    assert out == [("2026-05-04", "## 行业新闻\n### x")]
+
+
+def test_load_titles_skips_missing_and_empty(tmp_path):
+    debug = tmp_path / "debug"
+    _write_with_titles(debug, "2026-05-04", ["only one"])
+    _write_extract(debug, "2026-05-05", "")  # empty file
+    _write_extract(debug, "2026-05-06", "no headers at all\n")  # no ##/### lines
+
+    out = load_prior_report_titles("2026-05-10", n_days=7, debug_dir=debug)
+    assert out == [("2026-05-04", "## 行业新闻\n### only one")]
+
+
+def test_load_titles_returns_empty_when_no_dir(tmp_path):
+    out = load_prior_report_titles(
+        "2026-05-10", n_days=7, debug_dir=tmp_path / "nope",
+    )
+    assert out == []
+
+
+# ── format_prior_report_titles_block ───────────────────────────────────────────
+
+
+def test_format_titles_empty_returns_empty_string():
+    assert format_prior_report_titles_block([]) == ""
+
+
+def test_format_titles_wraps_each_day():
+    block = format_prior_report_titles_block([
+        ("2026-05-04", "## 行业新闻\n### A"),
+        ("2026-05-05", "## 方法论\n### B"),
+    ])
+    assert block.startswith("<previous_report_titles>\n")
+    assert block.rstrip("\n").endswith("</previous_report_titles>")
+    assert '<report date="2026-05-04">' in block
+    assert '<report date="2026-05-05">' in block
+    assert "### A" in block
+    assert "### B" in block
+    assert block.count("</report>") == 2

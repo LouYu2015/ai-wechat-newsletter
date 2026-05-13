@@ -78,7 +78,12 @@ _SYSTEM_PROMPT = """\
 
 ## 关于跨日章节引用（特殊占位符）
 
-如果用户消息里出现 `<previous_reports>` 块，里面是最近几天已发布的日报，可用来跨日去重和续写。需要引用过去某日日报的某个章节时，写：
+用户消息里可能出现两种历史日报上下文块（顺序：先老后新）：
+
+- `<previous_report_titles>`：更早几天（通常 4–7 天前）每篇日报的 `##` / `###` **标题大纲**，没有正文。仅用于去重判断和 `[[ref:]]` 引用目标，**不要尝试推测或复述这些章节的正文**。
+- `<previous_reports>`：最近 1–3 天的完整 Markdown 正文。既是去重 / 续写素材，也是 `[[ref:]]` 引用目标。
+
+两种块里出现过的 `### 标题`都可作为跨日引用目标。引用语法：
 
     [[ref:YYYY-MM-DD|章节标题]]
 
@@ -88,7 +93,7 @@ _SYSTEM_PROMPT = """\
 - `章节标题` 原样照抄过去日报里的 `### 标题` 文本（不带 `###`、不要改写、不要翻译）。
 - `|` 是 ASCII 竖线，不要写成 `丨`、全角或别的符号。`YYYY-MM-DD` 是 ASCII 数字与连字符。
 - **不要在占位符里塞 URL**——程序会自动渲染为公开版的可点链接，PDF 版只显示「章节标题」。
-- 必须在占位符外用自然语言指明日期（"昨天 / 前天 / 5 月 3 日 / 上周三"等），方便 PDF 读者定位旧期。
+- 必须在占位符外用自然语言指明日期（"昨天 / 前天 / 5 月 3 日 / 上周三 / 上周 X"等），方便 PDF 读者定位旧期。
 - 如果引用的是过去**多个**章节，每个都用单独的 `[[ref:…]]`，不要合并。
 
 ## 关于「章节不公开」标记
@@ -189,17 +194,22 @@ intro 中提到的话题，下方都要有对应章节；信息不足可简短�
 
 ## 关于跨日延续与去重
 
-如果用户消息里有 `<previous_reports>`（最近 1–3 天已发布的日报），处理今天的内容时按下面规则：
+用户消息里可能出现两种历史上下文块：
 
-1. **重叠时段去重**：今天聊天记录的开头和结尾各有约 1 小时与相邻天重叠。如果某条话题已在前一天日报中**完整**写过，今天直接跳过，不要重复报道——尤其是深夜（00:00 前后）冒出的资讯/链接。
-2. **同话题、无新进展 → 不写**：今天群里只是简单回提前一天的话题（"对啊我也觉得"、"+1"、"昨天那个我看了"），不构成续写素材，跳过整个话题。
+- `<previous_reports>`：最近 1–3 天的**完整**日报正文。
+- `<previous_report_titles>`：更早几天（通常 4–7 天前）的日报**标题大纲**，只有 `##` / `###` 行，没有正文。
+
+处理今天的内容时按下面规则：
+
+1. **重叠时段去重**（仅对 `<previous_reports>` 适用）：今天聊天记录的开头和结尾各有约 1 小时与相邻天重叠。如果某条话题已在前一天日报中**完整**写过，今天直接跳过，不要重复报道——尤其是深夜（00:00 前后）冒出的资讯/链接。
+2. **同话题、无新进展 → 不写**：今天群里只是简单回提前几天的话题（"对啊我也觉得"、"+1"、"昨天那个我看了"），不构成续写素材，跳过整个话题。对 `<previous_report_titles>` 里的旧话题同样适用——如果今天只是顺嘴一提某个 4–7 天前已经写过的事，跳过即可。
 3. **同话题、有新进展 → 续写**：今天有新观点、新数据、新发言人加入，或者讨论走向了新分支。处理方式：
-   - 章节标题可以与昨天**不同**（突出今日新角度），但在简介里用 [[ref:YYYY-MM-DD|原章节标题]] 引导读者先读旧章节。
-   - 视情况用 1–2 句话回顾要点，让读者不必翻旧报也能理解今天，但**不要逐句复述**昨日内容。
+   - 章节标题可以与旧报**不同**（突出今日新角度），但在简介里用 [[ref:YYYY-MM-DD|原章节标题]] 引导读者先读旧章节。引用 `<previous_report_titles>` 里的标题同样合法。
+   - 视情况用 1–2 句话回顾要点，让读者不必翻旧报也能理解今天。**只能基于今天的聊天记录回顾**——`<previous_report_titles>` 里没有正文，**不要凭标题揣测旧章节细节**；对前 3 天的内容也**不要逐句复述**。
    - 然后续写今天的新进展。
-4. **跨日金句不再重引**：前一天已 blockquote 的发言，今天即使再次被提起也不要再 blockquote 同一句；可改为行内摘抄 + 「之前那句被 [[ref:…|XX]] 引过」。
-5. **日期措辞**：占位符外要用自然中文描述日期（"昨天"、"前天"、"5 月 3 日"、"上周三"），PDF 读者据此定位旧期。
-6. **无 `<previous_reports>` 块时**：忽略本节，按当日内容独立成报。
+4. **跨日金句不再重引**：前 3 天已 blockquote 的发言，今天即使再次被提起也不要再 blockquote 同一句；可改为行内摘抄 + 「之前那句被 [[ref:…|XX]] 引过」。（对 `<previous_report_titles>` 里的天数无此约束——只有标题，无从判断是否引过哪一句。）
+5. **日期措辞**：占位符外要用自然中文描述日期（"昨天"、"前天"、"5 月 3 日"、"上周三 / 上周五"），PDF 读者据此定位旧期。
+6. **两个块都没有时**：忽略本节，按当日内容独立成报。
 
 ---
 
@@ -264,6 +274,7 @@ def extract_report(
     text_cb=None,
     chat_blocks: list[dict] | None = None,
     prior_reports: list[tuple[str, str]] | None = None,
+    prior_report_titles: list[tuple[str, str]] | None = None,
 ) -> DailyReport:
     """Stream a markdown daily report from Claude; return DailyReport(date, markdown).
 
@@ -295,15 +306,23 @@ def extract_report(
         client = _default_client(api_key)
 
     # Long input first (Anthropic best practice for multi-doc prompts):
-    # roster → previous_reports → chat_log are wrapped in XML tags at the top
-    # of the user message; processing rules / audience profile / 导读
-    # requirements follow the chat log so the model reads them with the data
-    # fresh.
-    from .prior_report import format_prior_reports_block
+    # roster → previous_report_titles → previous_reports → chat_log are
+    # wrapped in XML tags at the top of the user message; processing rules /
+    # audience profile / 导读 requirements follow the chat log so the model
+    # reads them with the data fresh.
+    #
+    # Title-only block goes before full-body block: it covers the older days
+    # (e.g. 4–7 back), so the model reads "old → new" as it scans down.
+    from .prior_report import (
+        format_prior_report_titles_block,
+        format_prior_reports_block,
+    )
 
     parts: list[str] = []
     if roster_text:
         parts.append(f"<group_roster>\n{roster_text}\n</group_roster>\n\n")
+    if prior_report_titles:
+        parts.append(format_prior_report_titles_block(prior_report_titles) + "\n")
     if prior_reports:
         parts.append(format_prior_reports_block(prior_reports) + "\n")
     parts.append(f'<chat_log date="{date_str}">\n')

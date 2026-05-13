@@ -307,3 +307,89 @@ def test_system_prompt_documents_ref_placeholder(monkeypatch, tmp_path):
     system = client.messages.calls[0]["system"]
     assert "[[ref:" in system
     assert "YYYY-MM-DD" in system
+
+
+# ── prior_report_titles injection ──────────────────────────────────────────────
+
+
+def test_prior_report_titles_injected_before_prior_reports(monkeypatch, tmp_path):
+    """Long context order: roster → titles → full reports → chat_log."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    titles = [
+        ("2026-04-24", "## 行业新闻\n### 旧的旧话题"),
+        ("2026-04-25", "## 方法论\n### 旧话题"),
+    ]
+    priors = [("2026-04-29", "## 工具\n\n### 近话题\nbody")]
+    extract_report(
+        "2026-04-30", "today's chat", api_key="fake", client=client,
+        prior_reports=priors,
+        prior_report_titles=titles,
+    )
+
+    user_msg = client.messages.calls[0]["messages"][0]["content"]
+    # Both data blocks present (use closing tags as canonical signal).
+    assert "</previous_report_titles>" in user_msg
+    assert "</previous_reports>" in user_msg
+    assert "旧话题" in user_msg
+    assert "近话题" in user_msg
+    # Order: titles block (older days) before full-body block (newer days).
+    assert user_msg.index("</previous_report_titles>") < user_msg.index("</previous_reports>")
+    assert user_msg.index("</previous_reports>") < user_msg.index("<chat_log")
+
+
+def test_prior_report_titles_alone_emitted(monkeypatch, tmp_path):
+    """Titles can be passed without full prior_reports."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    extract_report(
+        "2026-04-30", "today's chat", api_key="fake", client=client,
+        prior_report_titles=[("2026-04-24", "## A\n### B")],
+    )
+
+    user_msg = client.messages.calls[0]["messages"][0]["content"]
+    assert "</previous_report_titles>" in user_msg
+    assert "### B" in user_msg
+    # No full-body block.
+    assert "</previous_reports>" not in user_msg
+
+
+def test_prior_report_titles_omitted_when_none(monkeypatch, tmp_path):
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+
+    user_msg = client.messages.calls[0]["messages"][0]["content"]
+    assert "</previous_report_titles>" not in user_msg
+
+
+def test_prior_report_titles_empty_list_omits_block(monkeypatch, tmp_path):
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    extract_report(
+        "2026-04-30", "chat", api_key="fake", client=client,
+        prior_report_titles=[],
+    )
+
+    user_msg = client.messages.calls[0]["messages"][0]["content"]
+    assert "</previous_report_titles>" not in user_msg
+
+
+def test_system_prompt_documents_title_block(monkeypatch, tmp_path):
+    """System prompt should mention <previous_report_titles> so the model
+    knows what to do when it appears."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+
+    system = client.messages.calls[0]["system"]
+    assert "previous_report_titles" in system

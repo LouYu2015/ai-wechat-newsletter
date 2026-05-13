@@ -5,14 +5,27 @@ place) to ``debug/extract-{YYYY-MM-DD}.md``. That file is the right input to
 re-feed: it uses the same tokens the next run will use, and it contains the
 section structure that today's report may want to cross-reference via the
 ``[[ref:YYYY-MM-DD|章节标题]]`` placeholder.
+
+Two granularities are exposed:
+
+* :func:`load_prior_reports` returns the **full** markdown body for the most
+  recent N days (default 3). The body is the primary continuation context.
+* :func:`load_prior_report_titles` returns just the ``##`` / ``###`` outline
+  for older days (e.g. 4–7 days back). The outline is far cheaper on tokens
+  but still lets the model de-dup against and ``[[ref:…]]`` into older
+  reports.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import DEBUG_DIR
+
+# Match ``## title`` and ``### title`` lines. Anchored to start of line.
+_TITLE_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$", re.MULTILINE)
 
 
 def _extract_path(date_str: str, debug_dir: Path | None = None) -> Path:
@@ -75,4 +88,71 @@ def format_prior_reports_block(reports: list[tuple[str, str]]) -> str:
         parts.append(md.rstrip("\n"))
         parts.append("</report>")
     parts.append("</previous_reports>")
+    return "\n".join(parts) + "\n"
+
+
+def extract_titles_outline(markdown: str) -> str:
+    """Return the ``##`` / ``###`` outline of *markdown* with hierarchy preserved.
+
+    Each matched header is emitted on its own line as ``## title`` /
+    ``### title`` in source order. Other content (intro paragraphs, body text,
+    blockquotes, ``[章节不公开]`` markers, ``---`` / tags footer) is dropped.
+
+    Returns the empty string if no headers are found.
+    """
+    lines = [f"{hashes} {title.strip()}" for hashes, title in _TITLE_RE.findall(markdown)]
+    return "\n".join(lines)
+
+
+def load_prior_report_titles(
+    date_str: str,
+    n_days: int,
+    debug_dir: Path | None = None,
+    skip_dates: set[str] | frozenset[str] | None = None,
+) -> list[tuple[str, str]]:
+    """Return ``[(YYYY-MM-DD, outline), …]`` for the *n_days* preceding *date_str*.
+
+    Like :func:`load_prior_reports` but each value is the ``##`` / ``###``
+    outline (see :func:`extract_titles_outline`) rather than the full body.
+
+    *skip_dates* — dates already covered by a full-body load; they're skipped
+    so the caller can stack a wider title window on top of a narrower body
+    window without duplication.
+
+    Ascending date order. Days with no extract on disk, no headers, or in
+    *skip_dates* are silently omitted.
+    """
+    skip = skip_dates or frozenset()
+    out: list[tuple[str, str]] = []
+    for d in expected_dates(date_str, n_days):
+        if d in skip:
+            continue
+        p = _extract_path(d, debug_dir)
+        if not p.exists():
+            continue
+        try:
+            md = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        outline = extract_titles_outline(md)
+        if outline:
+            out.append((d, outline))
+    return out
+
+
+def format_prior_report_titles_block(reports: list[tuple[str, str]]) -> str:
+    """Wrap title outlines in a single ``<previous_report_titles>`` XML block.
+
+    Same shape as :func:`format_prior_reports_block` but the inner content is
+    the ``##`` / ``###`` outline of each day, not the full body. Empty list →
+    empty string.
+    """
+    if not reports:
+        return ""
+    parts = ["<previous_report_titles>"]
+    for d, outline in reports:
+        parts.append(f'<report date="{d}">')
+        parts.append(outline.rstrip("\n"))
+        parts.append("</report>")
+    parts.append("</previous_report_titles>")
     return "\n".join(parts) + "\n"

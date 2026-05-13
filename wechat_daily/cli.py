@@ -28,7 +28,11 @@ from .contacts import ContactMap
 from .llm_extractor import ExtractionError, extract_report, generate_markdown_with_gemini
 from .pdf import convert_to_pdf
 from .message_parser import MSG_TAP, MSG_SYSTEM
-from .prior_report import load_prior_reports, missing_prior_dates
+from .prior_report import (
+    load_prior_report_titles,
+    load_prior_reports,
+    missing_prior_dates,
+)
 from .privacy import (
     LeakDetected, format_tokenized_messages, format_tokenized_messages_blocks,
     leak_check, tokenize_messages,
@@ -103,12 +107,17 @@ def _run_db_pipeline(
     alias_db: AliasDB,
     contact_map: ContactMap,
     prior_days: int = 3,
+    prior_title_days: int = 7,
     prompt_on_missing_prior: bool = True,
 ) -> None:
     """Full pipeline for one date: extract → tokenize → LLM → render → PDF + public.
 
-    *prior_days* — how many prior daily reports to feed the model for cross-day
-    de-dup / continuation. ``0`` disables the feature.
+    *prior_days* — how many prior daily reports to feed the model **in full**
+    for cross-day de-dup / continuation. ``0`` disables the feature.
+    *prior_title_days* — how many prior days to feed as a **titles-only**
+    outline (``##`` / ``###`` headers, no body). The titles window is clamped
+    to ``>= prior_days``; the extra days (those beyond *prior_days*) extend
+    the de-dup / ``[[ref:]]`` window cheaply. ``0`` disables it.
     *prompt_on_missing_prior* — when *some* of the last *prior_days* are
     available but others aren't (suggesting a recent gap, not a fresh start),
     ask the user whether to proceed.
@@ -236,12 +245,13 @@ def _run_db_pipeline(
 
     # ── B2: Load prior days' reports for cross-day de-dup / continuation ────
     prior_reports: list[tuple[str, str]] = []
+    prior_report_titles: list[tuple[str, str]] = []
     if prior_days > 0:
         prior_reports = load_prior_reports(date_str, n_days=prior_days)
         gaps = missing_prior_dates(date_str, n_days=prior_days)
         if prior_reports:
             console.print(
-                f"[dim]载入前 {len(prior_reports)} 天日报作为跨日上下文："
+                f"[dim]载入前 {len(prior_reports)} 天完整日报："
                 f"{', '.join(d for d, _ in prior_reports)}[/dim]"
             )
         if gaps and prior_reports and prompt_on_missing_prior:
@@ -263,6 +273,22 @@ def _run_db_pipeline(
             console.print(
                 f"[dim]最近 {prior_days} 天均无历史日报，按独立日报生成。[/dim]"
             )
+
+    # Titles-only window covers older days (e.g. 4–7 back) on top of the
+    # full-body window. Clamp to >= prior_days so we never narrow it; skip
+    # dates already loaded with full bodies to avoid duplication.
+    title_window = max(prior_title_days, prior_days)
+    if title_window > prior_days:
+        covered = {d for d, _ in prior_reports}
+        prior_report_titles = load_prior_report_titles(
+            date_str, n_days=title_window, skip_dates=covered,
+        )
+        if prior_report_titles:
+            console.print(
+                f"[dim]载入额外 {len(prior_report_titles)} 天标题大纲："
+                f"{', '.join(d for d, _ in prior_report_titles)}[/dim]"
+            )
+    if prior_days > 0 or prior_report_titles:
         console.print()
 
     # ── C: Claude structured extraction ─────────────────────────────────────
@@ -381,6 +407,7 @@ def _run_db_pipeline(
                     text_cb=text_cb,
                     chat_blocks=chat_blocks,
                     prior_reports=prior_reports or None,
+                    prior_report_titles=prior_report_titles or None,
                 )
         except ExtractionError as e:
             console.print(f"[bold red]结构化提取失败:[/bold red] {e}")
@@ -538,7 +565,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--prior-days", type=int, default=3,
-        help="喂给模型的过往日报天数（用于跨日去重 / 续写）；0 关闭。默认 3。",
+        help="喂给模型的过往日报**完整正文**天数（用于跨日去重 / 续写）；0 关闭。默认 3。",
+    )
+    parser.add_argument(
+        "--prior-title-days", type=int, default=7,
+        help=(
+            "喂给模型的过往日报**标题大纲**总天数（前 --prior-days 天用完整正文，"
+            "再往前的天数仅传 ## / ### 标题，便于扩大跨日去重 / [[ref:]] 窗口而不爆 token）；"
+            "小于 --prior-days 会被静默上调。默认 7。"
+        ),
     )
     parser.add_argument(
         "--no-prior-prompt", action="store_true",
@@ -608,6 +643,7 @@ def main() -> None:
                 _run_db_pipeline(
                     date_str, anthropic_key, alias_db, contact_map,
                     prior_days=args.prior_days,
+                    prior_title_days=args.prior_title_days,
                     prompt_on_missing_prior=not args.no_prior_prompt,
                 )
             else:
