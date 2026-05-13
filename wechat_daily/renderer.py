@@ -23,7 +23,9 @@ caught by manual review of the group version before publishing.
 from __future__ import annotations
 
 import re
+import sys
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -270,6 +272,31 @@ def _expand_refs_group(text: str) -> str:
     return _REF_RE.sub(lambda m: f"「{m.group(4).strip()}」", text)
 
 
+@lru_cache(maxsize=None)
+def _post_heading_slugs(post_path: Path) -> frozenset[str]:
+    """Slug set for every ``##``/``###`` heading in *post_path*.
+
+    The check matters because htmlproofer validates hash fragments against the
+    deployed HTML — a slug that doesn't correspond to a real heading 404s the
+    anchor even when the page itself loads. Reading is cached so repeated refs
+    to the same prior post don't re-parse it.
+    """
+    try:
+        text = post_path.read_text(encoding="utf-8")
+    except OSError:
+        return frozenset()
+    slugs: set[str] = set()
+    for line in text.split("\n"):
+        h = _heading_at(line)
+        if h is None:
+            continue
+        level, title = h
+        if level < 2:
+            continue
+        slugs.add(_slugify_heading(title))
+    return frozenset(slugs)
+
+
 def _expand_refs_public(
     text: str,
     posts_dir: Path | None = None,
@@ -281,9 +308,13 @@ def _expand_refs_public(
     Emitting a bare ``/daily/...`` path here yields a link that 404s on the
     deployed site and trips htmlproofer in CI.
 
-    If the target ``_posts/YYYY/MM/YYYY-MM-DD-daily.md`` does not exist (the
-    post hasn't been published yet), gracefully degrade to plain text so we
-    don't ship dangling links.
+    Degrades to plain ``「title」`` text (no URL) when either:
+    - the target ``_posts/YYYY/MM/YYYY-MM-DD-daily.md`` does not exist, or
+    - it exists but contains no heading whose slug matches the ref's title.
+
+    The second case catches the common LLM mistake of attributing a section to
+    the wrong date — better to drop the URL silently than ship a dangling hash
+    that htmlproofer rejects.
     """
     base = posts_dir if posts_dir is not None else (PUBLIC_REPO_DIR / "_posts")
 
@@ -293,6 +324,13 @@ def _expand_refs_public(
         if not post.exists():
             return f"「{raw_title}」"
         slug = _slugify_heading(raw_title)
+        if slug and slug not in _post_heading_slugs(post):
+            print(
+                f"[warn] cross-day ref to {y}-{mo}-{d}#{slug} "
+                f"({raw_title!r}) not found in target post; dropping URL",
+                file=sys.stderr,
+            )
+            return f"「{raw_title}」"
         anchor = f"#{slug}" if slug else ""
         url = f"/daily/{y}/{mo}/{d}/daily/{anchor}"
         return f"[「{raw_title}」]({{{{ '{url}' | relative_url }}}})"
