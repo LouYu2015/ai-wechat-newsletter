@@ -547,10 +547,12 @@ def test_expand_refs_group_no_match_unchanged():
 
 
 def test_expand_refs_public_with_existing_post(tmp_path):
-    """When the target _posts file exists, emit a clickable Markdown link."""
+    """When the target post exists and contains the heading, emit a link."""
     posts = tmp_path / "_posts" / "2026" / "05"
     posts.mkdir(parents=True)
-    (posts / "2026-05-09-daily.md").write_text("dummy", encoding="utf-8")
+    (posts / "2026-05-09-daily.md").write_text(
+        "## 行业新闻\n\n### Claude Opus 4.7 发布\nbody\n", encoding="utf-8"
+    )
 
     text = "上一期写过 [[ref:2026-05-09|Claude Opus 4.7 发布]] 那一节。"
     out = _expand_refs_public(text, posts_dir=tmp_path / "_posts")
@@ -569,10 +571,32 @@ def test_expand_refs_public_missing_post_degrades_to_plain_text(tmp_path):
     assert out == "之前 「某话题」 提过"
 
 
+def test_expand_refs_public_heading_not_in_post_degrades(tmp_path, capsys):
+    """When the post exists but lacks the heading, drop URL and warn.
+
+    Catches the LLM mistake of attributing a section to the wrong date — the
+    file exists so the file-level check passes, but the hash would 404.
+    """
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    (posts / "2026-05-10-daily.md").write_text(
+        "## 行业新闻\n\n### 别的话题\nbody\n", encoding="utf-8"
+    )
+
+    text = "前天 [[ref:2026-05-10|Multi-agent 通过 handoff file 通信]] 提到过"
+    out = _expand_refs_public(text, posts_dir=tmp_path / "_posts")
+    assert "「Multi-agent 通过 handoff file 通信」" in out
+    assert "/daily/2026/05/10/" not in out  # no URL emitted
+    captured = capsys.readouterr()
+    assert "not found in target post" in captured.err
+
+
 def test_expand_refs_public_handles_multiple_mixed_existence(tmp_path):
     posts = tmp_path / "_posts" / "2026" / "05"
     posts.mkdir(parents=True)
-    (posts / "2026-05-09-daily.md").write_text("x", encoding="utf-8")
+    (posts / "2026-05-09-daily.md").write_text(
+        "### 新话题\nbody\n", encoding="utf-8"
+    )
     # 2026-05-08 absent
 
     text = "[[ref:2026-05-08|旧话题]] 与 [[ref:2026-05-09|新话题]]"
@@ -617,7 +641,9 @@ def test_render_public_expands_ref_placeholder_degraded(monkeypatch, tmp_path):
 def test_render_public_expands_ref_to_link_when_post_exists(monkeypatch, tmp_path):
     posts = tmp_path / "_posts" / "2026" / "05"
     posts.mkdir(parents=True)
-    (posts / "2026-05-09-daily.md").write_text("x", encoding="utf-8")
+    (posts / "2026-05-09-daily.md").write_text(
+        "### 某话题\nbody\n", encoding="utf-8"
+    )
 
     import wechat_daily.renderer as mod
     monkeypatch.setattr(mod, "PUBLIC_REPO_DIR", tmp_path)
