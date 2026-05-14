@@ -17,12 +17,19 @@ def _setup_fake_remote(tmp_path: Path) -> tuple[Path, Path]:
     """Create a bare remote and a local clone; return (remote_path, local_path)."""
     remote = tmp_path / "remote.git"
     remote.mkdir()
-    _git(['init', '--bare', str(remote)], cwd=tmp_path)
+    # Force initial branch to `main` regardless of system default — the
+    # publisher hard-codes pushes to origin/main.
+    _git(['init', '--bare', '--initial-branch=main', str(remote)], cwd=tmp_path)
 
     local = tmp_path / "local"
     _git(['clone', str(remote), str(local)], cwd=tmp_path)
+    # Fresh clone with no commits doesn't have a HEAD checkout; set it
+    # explicitly so the upcoming init commit lands on `main`.
+    _git(['symbolic-ref', 'HEAD', 'refs/heads/main'], cwd=local)
 
-    # Need at least one commit so origin/main exists
+    # Need at least one commit so origin/main exists. (The session-wide
+    # conftest fixture isolates git from host global/system config, so
+    # signing / proxy quirks won't leak in.)
     _git(['config', 'user.email', 'test@test.com'], cwd=local)
     _git(['config', 'user.name', 'Test'], cwd=local)
     (local / "README.md").write_text("# Test\n")
@@ -44,7 +51,9 @@ def _patch_publisher(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(cfg, 'PUBLIC_REPO_URL', str(remote))
     monkeypatch.setattr(cfg, 'PUBLIC_REPO_DIR', local)
 
-    # Also configure git identity in local repo
+    # Also configure git identity in local repo (redundant with
+    # _setup_fake_remote but defensive if this fn is ever called against a
+    # pre-existing repo).
     _git(['config', 'user.email', 'test@test.com'], cwd=local)
     _git(['config', 'user.name', 'Test'], cwd=local)
 
