@@ -27,6 +27,31 @@ from .config import DEBUG_DIR
 # Match ``## title`` and ``### title`` lines. Anchored to start of line.
 _TITLE_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$", re.MULTILINE)
 
+# Final-form cross-day link the public renderer emits (mirrors renderer._FINAL_REF_RE).
+# Kept local so prior_report has no import dep on renderer's regex internals.
+_EXPANDED_REF_RE = re.compile(
+    r"\[「(?P<title>[^」\n]+?)」\]"
+    r"\(\{\{\s*'/daily/(?P<y>\d{4})/(?P<mo>\d{2})/(?P<d>\d{2})/daily/"
+    r"(?:#[^']*)?'\s*\|\s*relative_url\s*\}\}\)"
+)
+
+
+def _normalize_to_ref_placeholders(markdown: str) -> str:
+    """Rewrite expanded ``[「…」]({{ '…' | relative_url }})`` back to ``[[ref:…|…]]``.
+
+    The extract files we re-feed as ``<previous_reports>`` carry whatever
+    shape the LLM emitted. When a previous run bypassed the placeholder and
+    wrote the final Liquid link inline, that shape persists across days —
+    the next run sees it in the previous report and copies the same
+    anti-pattern, keeping the bug alive. Normalizing on the way in shows the
+    model a single uniform reference syntax to imitate.
+    """
+    def sub(m: re.Match[str]) -> str:
+        title = m.group("title").strip()
+        return f"[[ref:{m.group('y')}-{m.group('mo')}-{m.group('d')}|{title}]]"
+
+    return _EXPANDED_REF_RE.sub(sub, markdown)
+
 
 def _extract_path(date_str: str, debug_dir: Path | None = None) -> Path:
     return (debug_dir or DEBUG_DIR) / f"extract-{date_str}.md"
@@ -61,7 +86,7 @@ def load_prior_reports(
         except OSError:
             continue
         if md.strip():
-            out.append((d, md))
+            out.append((d, _normalize_to_ref_placeholders(md)))
     return out
 
 
