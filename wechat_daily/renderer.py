@@ -54,6 +54,15 @@ _TAGS_LINE_RE = re.compile(r"^tags\s*:\s*(.*)$", re.IGNORECASE)
 # ``[[ref:YYYY-MM-DD|章节标题]]`` → expanded by render_public/render_group.
 _REF_RE = re.compile(r"\[\[ref:(\d{4})-(\d{2})-(\d{2})\|([^\]\n]+?)\]\]")
 
+# Final-form cross-day link the public renderer emits (and which the LLM
+# occasionally writes directly, bypassing the placeholder):
+#   [「title」]({{ '/daily/Y/M/D/daily/#slug' | relative_url }})
+_FINAL_REF_RE = re.compile(
+    r"\[「(?P<title>[^」\n]+?)」\]"
+    r"\(\{\{\s*'/daily/(?P<y>\d{4})/(?P<mo>\d{2})/(?P<d>\d{2})/daily/"
+    r"(?:#(?P<slug>[^']*))?'\s*\|\s*relative_url\s*\}\}\)"
+)
+
 # ASCII punctuation we strip from kramdown-style slugs. CJK characters are
 # preserved as-is; modern browsers handle them in URL fragments.
 _SLUG_PUNCT_RE = re.compile(r"[!\"#$%&'()*+,./:;<=>?@\[\\\]^_`{|}~。！？，、；：『』「」（）【】《》——]")
@@ -338,6 +347,47 @@ def _expand_refs_public(
     return _REF_RE.sub(sub, text)
 
 
+def _validate_final_refs_public(
+    text: str,
+    posts_dir: Path | None = None,
+) -> str:
+    """Second pass: re-check every final-form cross-day link against headings.
+
+    `_expand_refs_public` only inspects `[[ref:…]]` placeholders. When the LLM
+    skips that syntax and writes the expanded Liquid link inline — copying
+    the pattern it sees in `<previous_reports>` — the placeholder-side
+    validation never runs and a wrong-date URL ships unchecked (this is how
+    the 2026-05-13 → 2026-05-12 "AI 正在吞掉哪些 SaaS" deadlink slipped past
+    b622e1487b52). This pass walks every emitted link, validates the slug
+    against the target post's headings, and degrades mismatches to plain
+    `「title」` with the same warning.
+    """
+    base = posts_dir if posts_dir is not None else (PUBLIC_REPO_DIR / "_posts")
+
+    def sub(m: re.Match[str]) -> str:
+        title = m.group("title").strip()
+        y, mo, d = m.group("y"), m.group("mo"), m.group("d")
+        slug = (m.group("slug") or "").strip()
+        post = base / y / mo / f"{y}-{mo}-{d}-daily.md"
+        if not post.exists():
+            print(
+                f"[warn] cross-day link to {y}-{mo}-{d} "
+                f"({title!r}) — target post missing; dropping URL",
+                file=sys.stderr,
+            )
+            return f"「{title}」"
+        if slug and slug not in _post_heading_slugs(post):
+            print(
+                f"[warn] cross-day link to {y}-{mo}-{d}#{slug} "
+                f"({title!r}) not found in target post; dropping URL",
+                file=sys.stderr,
+            )
+            return f"「{title}」"
+        return m.group(0)
+
+    return _FINAL_REF_RE.sub(sub, text)
+
+
 # ── Group-version annotation ────────────────────────────────────────────────────
 
 def _annotate_hidden_for_group(markdown: str) -> str:
@@ -530,6 +580,7 @@ def render_public(
     body, tags = _strip_trailing_tags(report.markdown)
     body = _strip_hidden_for_public(body)
     body = _expand_refs_public(body)
+    body = _validate_final_refs_public(body)
 
     def token_to_public(token: str) -> str:
         wxid = (token_map.wxid(token) if token_map else None) \

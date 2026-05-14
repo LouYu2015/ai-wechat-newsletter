@@ -16,6 +16,7 @@ from wechat_daily.renderer import (
     _slugify_heading,
     _strip_hidden_for_public,
     _strip_trailing_tags,
+    _validate_final_refs_public,
     render_group,
     render_public,
 )
@@ -610,6 +611,90 @@ def test_expand_refs_public_handles_multiple_mixed_existence(tmp_path):
 def test_expand_refs_public_no_match_unchanged(tmp_path):
     text = "plain text"
     assert _expand_refs_public(text, posts_dir=tmp_path) == text
+
+
+def test_validate_final_refs_public_keeps_valid_link(tmp_path):
+    """Final-form link with a real heading slug passes through unchanged."""
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    (posts / "2026-05-11-daily.md").write_text(
+        "## 行业新闻\n\n### AI 正在吞掉哪些 SaaS\nbody\n", encoding="utf-8"
+    )
+
+    text = (
+        "前天 [「AI 正在吞掉哪些 SaaS」]"
+        "({{ '/daily/2026/05/11/daily/#ai-正在吞掉哪些-saas' | relative_url }}) 说了"
+    )
+    out = _validate_final_refs_public(text, posts_dir=tmp_path / "_posts")
+    assert out == text
+
+
+def test_validate_final_refs_public_wrong_date_degrades(tmp_path, capsys):
+    """LLM bypassed the placeholder and wrote the final link with the wrong date.
+
+    This is the exact 2026-05-13 bug: target post exists but doesn't contain
+    the heading slug. b622e1487b52 only validates `[[ref:…]]` placeholders,
+    so this final-form path needs its own check.
+    """
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    # 05-12 exists but never had the SaaS heading (it's in 05-11, not here).
+    (posts / "2026-05-12-daily.md").write_text(
+        "## 方法论\n\n### 别的话题\nbody\n", encoding="utf-8"
+    )
+
+    text = (
+        "前天 [「AI 正在吞掉哪些 SaaS」]"
+        "({{ '/daily/2026/05/12/daily/#ai-正在吞掉哪些-saas' | relative_url }}) 说了"
+    )
+    out = _validate_final_refs_public(text, posts_dir=tmp_path / "_posts")
+    assert out == "前天 「AI 正在吞掉哪些 SaaS」 说了"
+    captured = capsys.readouterr()
+    assert "not found in target post" in captured.err
+    assert "ai-正在吞掉哪些-saas" in captured.err
+
+
+def test_validate_final_refs_public_missing_post_degrades(tmp_path, capsys):
+    """Target post file doesn't exist at all — drop URL, warn."""
+    text = (
+        "上周 [「某话题」]"
+        "({{ '/daily/2026/05/01/daily/#某话题' | relative_url }}) 提到过"
+    )
+    out = _validate_final_refs_public(text, posts_dir=tmp_path / "_posts")
+    assert out == "上周 「某话题」 提到过"
+    captured = capsys.readouterr()
+    assert "target post missing" in captured.err
+
+
+def test_validate_final_refs_public_no_match_unchanged(tmp_path):
+    """Text without final-form links passes through untouched."""
+    text = "plain text with no daily links"
+    assert _validate_final_refs_public(text, posts_dir=tmp_path / "_posts") == text
+
+
+def test_render_public_catches_inline_final_form_wrong_date(monkeypatch, tmp_path):
+    """End-to-end: render_public must drop the URL when the LLM writes the
+    final-form link directly (no `[[ref:…]]`) with a heading that doesn't
+    live at the named date — even though `_expand_refs_public` never sees it.
+    """
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    # 05-12 exists, but the SaaS section actually lives in 05-11 (not created here).
+    (posts / "2026-05-12-daily.md").write_text(
+        "## 方法论\n\n### 别的话题\nbody\n", encoding="utf-8"
+    )
+
+    import wechat_daily.renderer as mod
+    monkeypatch.setattr(mod, "PUBLIC_REPO_DIR", tmp_path)
+
+    md = (
+        "intro 前天 [「AI 正在吞掉哪些 SaaS」]"
+        "({{ '/daily/2026/05/12/daily/#ai-正在吞掉哪些-saas' | relative_url }}) 说\n\n"
+        "## A\n\n### x\nbody\n"
+    )
+    out = render_public(_wrap(md), _make_db())
+    assert "「AI 正在吞掉哪些 SaaS」" in out
+    assert "/daily/2026/05/12/" not in out
 
 
 def test_render_group_expands_ref_placeholder():

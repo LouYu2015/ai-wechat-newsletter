@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from wechat_daily.prior_report import (
+    _normalize_to_ref_placeholders,
     expected_dates,
     extract_titles_outline,
     format_prior_report_titles_block,
@@ -76,6 +77,23 @@ def test_load_skips_empty_files(tmp_path):
 
     out = load_prior_reports("2026-05-10", n_days=3, debug_dir=debug)
     assert out == []
+
+
+def test_load_rewrites_expanded_refs_back_to_placeholders(tmp_path):
+    """Final-form ``[「title」]({{ '…' | relative_url }})`` from a previous
+    LLM run gets re-folded into ``[[ref:…]]`` before being fed back as
+    ``<previous_reports>``. Otherwise the model copies the expanded shape
+    and bypasses today's placeholder validation.
+    """
+    debug = tmp_path / "debug"
+    _write_extract(
+        debug,
+        "2026-05-09",
+        "intro [「话题 A」]({{ '/daily/2026/05/07/daily/#话题-a' | relative_url }}) 提过\n",
+    )
+
+    out = load_prior_reports("2026-05-10", n_days=3, debug_dir=debug)
+    assert out == [("2026-05-09", "intro [[ref:2026-05-07|话题 A]] 提过\n")]
 
 
 # ── missing_prior_dates ────────────────────────────────────────────────────────
@@ -270,3 +288,47 @@ def test_format_titles_wraps_each_day():
     assert "### A" in block
     assert "### B" in block
     assert block.count("</report>") == 2
+
+
+# ── _normalize_to_ref_placeholders ─────────────────────────────────────────────
+
+
+def test_normalize_rewrites_expanded_link_with_hash():
+    src = (
+        "前天 [「AI 正在吞掉哪些 SaaS」]"
+        "({{ '/daily/2026/05/11/daily/#ai-正在吞掉哪些-saas' | relative_url }}) 说"
+    )
+    assert _normalize_to_ref_placeholders(src) == (
+        "前天 [[ref:2026-05-11|AI 正在吞掉哪些 SaaS]] 说"
+    )
+
+
+def test_normalize_rewrites_expanded_link_without_hash():
+    """Page-level link (no `#slug`) — still collapse to placeholder so the
+    LLM sees uniform syntax."""
+    src = "去年 [「某话题」]({{ '/daily/2026/01/01/daily/' | relative_url }}) 提过"
+    assert _normalize_to_ref_placeholders(src) == (
+        "去年 [[ref:2026-01-01|某话题]] 提过"
+    )
+
+
+def test_normalize_leaves_existing_placeholders_alone():
+    """Already-placeholder text shouldn't be double-rewritten or otherwise touched."""
+    src = "intro [[ref:2026-05-09|话题 A]] body"
+    assert _normalize_to_ref_placeholders(src) == src
+
+
+def test_normalize_handles_multiple_links_in_one_text():
+    src = (
+        "[「A」]({{ '/daily/2026/05/07/daily/#a' | relative_url }}) 与 "
+        "[「B」]({{ '/daily/2026/05/08/daily/#b' | relative_url }})"
+    )
+    assert _normalize_to_ref_placeholders(src) == (
+        "[[ref:2026-05-07|A]] 与 [[ref:2026-05-08|B]]"
+    )
+
+
+def test_normalize_noop_on_plain_text():
+    assert _normalize_to_ref_placeholders("just prose, no refs.") == (
+        "just prose, no refs."
+    )
