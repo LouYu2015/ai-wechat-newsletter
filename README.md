@@ -86,6 +86,30 @@ python3 main.py --summary gemini
 | `debug/extract-YYYY-MM-DD.input.txt` | 喂给 Claude 的输入（花名册 + 匿名化聊天记录）便于事后审计 |
 | `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
 
+## 测试
+
+```bash
+.venv/bin/python -m pytest tests/ -q
+```
+
+测试是 hermetic 的：不读 `.env`、不连数据库、不调 API；`tests/conftest.py` 把 git 子进程从宿主全局配置里隔离开。本地或 CI 都按上面这条命令跑即可。
+
+### Claude Code 云端环境备注
+
+云端 sandbox 启动时**没有 venv**，系统 Python 也**只有标准库**。直接 `python3 -m pytest tests/` 会在 collect 阶段炸：`test_llm_extractor.py` 和 `test_url_enricher.py` 都需要 `httpx`，没装就 `ModuleNotFoundError`（这两个文件之外的纯 Python 测试 collect 不到 httpx，看着像能跑，但等于跳过了 1/4 的覆盖）。
+
+跑全套的标准动作：
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt pytest
+.venv/bin/python -m pytest tests/ -q
+```
+
+`pytest` 不在 `requirements.txt` 里（它是 dev-only），所以要单独追加。`weasyprint` 会拖一堆系统级字体/lxml 依赖、`sqlcipher3` 会编 C 扩展，首次安装 ~1–2 分钟，之后 `.venv/` 复用即可。装完 285 个测试 ~2s 跑完。
+
+不要用系统 Python `pip install`——sandbox 里它会落到 `/usr/local`，下次重启 sandbox 就丢了，而且会污染全局环境。venv 装在工作目录下，下次进同一个工作目录直接复用。
+
 ## 公开版隐私模型
 
 群友在微信群内发送以下指令（单独成行，下次跑日报时生效）：
