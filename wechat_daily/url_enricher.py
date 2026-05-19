@@ -179,11 +179,17 @@ def enrich_link_messages(
     http_client: httpx.Client | None = None,
     anthropic_client=None,
     summary_delta_cb: Callable[[str], None] | None = None,
+    usage_cb: Callable[[object, float, int], None] | None = None,
 ) -> EnrichStats:
     """Mutate link-card messages with short webpage summaries.
 
     Failures are contained per URL. If fetching or summarization fails, the
     original link-card description/title is used as a weak fallback.
+
+    *usage_cb(usage, duration_s, input_chars)* fires once per successful
+    LLM summary with the response's usage object, wall-clock seconds spent,
+    and the prompt's character count — wired into ``cost_tracker.log_call``
+    by the CLI.
     """
     targets = _collect_link_targets(messages)
     stats = EnrichStats(total=len(targets))
@@ -240,7 +246,7 @@ def enrich_link_messages(
                 if progress_cb:
                     progress_cb(idx, stats.total, "摘要", label)
                 surrounding = _build_surrounding(messages, host_idx)
-                summary = summarize_text(
+                summary, summary_usage, summary_duration, summary_chars = summarize_text(
                     title=link.title,
                     url=link.url,
                     text=text,
@@ -254,6 +260,8 @@ def enrich_link_messages(
                 if summary.strip():
                     _append_link_context(msg, summary)
                     stats.summarized += 1
+                    if usage_cb:
+                        usage_cb(summary_usage, summary_duration, summary_chars)
                     continue
             except Exception:
                 pass
@@ -465,7 +473,17 @@ def summarize_text(
     card_description: str = "",
     og_description: str = "",
     delta_cb: Callable[[str], None] | None = None,
-) -> str:
+) -> tuple[str, object, float, int]:
+    """Stream a webpage summary from the link-summary model.
+
+    Returns ``(summary_text, usage, duration_s, prompt_chars)``. ``usage``
+    is whatever the SDK returns from ``stream.get_final_message().usage``
+    (or ``None`` if the test stub doesn't implement it). ``prompt_chars`` is
+    the length of the rendered user prompt, used by the CLI to compute a
+    tok/char ratio in the cost summary.
+    """
+    import time
+
     if client is None:
         import anthropic
         client = anthropic.Anthropic(
@@ -488,6 +506,8 @@ def summarize_text(
     else:
         prompt = _SUMMARY_PROMPT_NO_CONTEXT.format(webpage_block=webpage_block)
     parts: list[str] = []
+    usage = None
+    t0 = time.perf_counter()
     with client.messages.stream(
         model=LINK_SUMMARY_MODEL,
         max_tokens=2500,
@@ -501,7 +521,15 @@ def summarize_text(
                 parts.append(delta)
                 if delta_cb:
                     delta_cb(delta)
-    return _clean_text("".join(parts))
+        # get_final_message is the documented way to read usage off a
+        # finished stream. Test stubs that only implement __iter__ will
+        # raise AttributeError here — leave usage=None and move on.
+        try:
+            usage = getattr(stream.get_final_message(), "usage", None)
+        except AttributeError:
+            usage = None
+    duration_s = time.perf_counter() - t0
+    return _clean_text("".join(parts)), usage, duration_s, len(prompt)
 
 
 def _fetch_tweet(url: str, client: httpx.Client) -> str:

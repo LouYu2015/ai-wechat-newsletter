@@ -30,9 +30,15 @@ class _TextBlock:
 
 
 class _Response:
-    def __init__(self, stop_reason: str, content: list | None = None) -> None:
+    def __init__(
+        self,
+        stop_reason: str,
+        content: list | None = None,
+        usage: object | None = None,
+    ) -> None:
         self.stop_reason = stop_reason
         self.content = content or []
+        self.usage = usage
 
 
 class _FakeStream:
@@ -70,9 +76,10 @@ class _FakeClient:
         text_chunks: list[str] | None = None,
         stop_reason: str = "end_turn",
         fallback_blocks: list[_TextBlock] | None = None,
+        usage: object | None = None,
     ) -> None:
         events = [_TextEvent(t) for t in (text_chunks or [])]
-        response = _Response(stop_reason, fallback_blocks or [])
+        response = _Response(stop_reason, fallback_blocks or [], usage=usage)
         self.messages = _FakeMessages(events, response)
 
 
@@ -209,6 +216,45 @@ def test_debug_md_contents_match(monkeypatch, tmp_path):
     extract_report("2026-04-30", "chat", api_key="fake", client=client)
     saved = (tmp_path / "extract-2026-04-30.md").read_text(encoding="utf-8")
     assert saved == "hello\nworld\n"
+
+
+def test_usage_cb_receives_response_usage_and_input_chars(monkeypatch, tmp_path):
+    """Cost tracking hook: callback fires once on success with (usage, chars)."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+
+    class _Usage:
+        input_tokens = 42
+        output_tokens = 7
+
+    client = _FakeClient(text_chunks=["x"], usage=_Usage())
+    seen: list[tuple[object, int]] = []
+
+    extract_report(
+        "2026-04-30", "chat history", api_key="fake", client=client,
+        usage_cb=lambda usage, chars: seen.append((usage, chars)),
+    )
+
+    assert len(seen) == 1
+    usage, chars = seen[0]
+    assert usage.input_tokens == 42
+    assert usage.output_tokens == 7
+    assert chars > 0  # prompt has at least roster/instructions/chat in it
+
+
+def test_usage_cb_not_called_on_failure(monkeypatch, tmp_path):
+    """On refusal/max_tokens/empty, the usage hook must not fire."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=[], stop_reason="refusal")
+    seen = []
+
+    with pytest.raises(ExtractionError):
+        extract_report(
+            "2026-04-30", "chat", api_key="fake", client=client,
+            usage_cb=lambda usage, chars: seen.append((usage, chars)),
+        )
+    assert seen == []
 
 
 # ── prior_reports injection ────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ from .config import (
     CLAUDE_MODEL, DEBUG_DIR, GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL, PROJECT_ROOT,
 )
 from .contacts import ContactMap
+from . import cost_tracker
 from .llm_extractor import ExtractionError, extract_report, generate_markdown_with_gemini
 from .pdf import convert_to_pdf
 from .message_parser import MSG_TAP, MSG_SYSTEM
@@ -109,6 +110,7 @@ def _run_db_pipeline(
     prior_days: int = 3,
     prior_title_days: int = 7,
     prompt_on_missing_prior: bool = True,
+    cost_records: list[cost_tracker.CostRecord] | None = None,
 ) -> None:
     """Full pipeline for one date: extract → tokenize → LLM → render → PDF + public.
 
@@ -193,11 +195,20 @@ def _run_db_pipeline(
                     link_state["partial"] = combined
                 _refresh()
 
+            def _link_usage_cb(usage, duration_s: float, input_chars: int) -> None:
+                record = cost_tracker.log_call(
+                    date=date_str, stage="link", model=LINK_SUMMARY_MODEL,
+                    usage=usage, duration_s=duration_s, input_chars=input_chars,
+                )
+                if cost_records is not None:
+                    cost_records.append(record)
+
             stats = enrich_link_messages(
                 messages,
                 anthropic_key,
                 progress_cb=_link_progress_cb,
                 summary_delta_cb=_link_delta_cb,
+                usage_cb=_link_usage_cb,
             )
             link_progress.update(
                 link_task,
@@ -385,8 +396,23 @@ def _run_db_pipeline(
             state["body_partial"] = ""
             refresh()
 
-        import tempfile
+        import tempfile, time as _time
         from .image_decoder import ImageDecoder
+
+        # Closure for cost logging: extract_report calls usage_cb at the end
+        # with (usage, input_chars). We measure duration around the call.
+        t_extract_start = _time.perf_counter()
+
+        def _extract_usage_cb(usage, input_chars: int) -> None:
+            record = cost_tracker.log_call(
+                date=date_str, stage="extract", model=CLAUDE_MODEL,
+                usage=usage,
+                duration_s=_time.perf_counter() - t_extract_start,
+                input_chars=input_chars,
+            )
+            if cost_records is not None:
+                cost_records.append(record)
+
         try:
             with tempfile.TemporaryDirectory(prefix="wechat_daily_imgs_") as td:
                 decoder = ImageDecoder(Path(td))
@@ -405,6 +431,7 @@ def _run_db_pipeline(
                     header_cb=header_cb,
                     attempt_cb=attempt_cb,
                     text_cb=text_cb,
+                    usage_cb=_extract_usage_cb,
                     chat_blocks=chat_blocks,
                     prior_reports=prior_reports or None,
                     prior_report_titles=prior_report_titles or None,
@@ -638,6 +665,7 @@ def main() -> None:
         )
 
         # Step 6: Generate reports
+        cost_records: list[cost_tracker.CostRecord] = []
         for date_str in missing:
             if args.summary == "claude":
                 _run_db_pipeline(
@@ -645,12 +673,17 @@ def main() -> None:
                     prior_days=args.prior_days,
                     prior_title_days=args.prior_title_days,
                     prompt_on_missing_prior=not args.no_prior_prompt,
+                    cost_records=cost_records,
                 )
             else:
                 _run_gemini_pipeline(date_str, gemini_key, contact_map, alias_db)
             # Persist any tokens lazily allocated during this date's pipeline
             # so subsequent runs keep the same names.
             alias_db.save()
+
+        if cost_records:
+            console.print()
+            console.print(cost_tracker.summarize(cost_records))
 
         console.print(Panel.fit(
             f"[bold green]完成！[/bold green]\n共生成 [cyan]{len(missing)}[/cyan] 份日报",

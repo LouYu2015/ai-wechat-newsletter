@@ -272,6 +272,7 @@ def extract_report(
     header_cb=None,
     attempt_cb=None,
     text_cb=None,
+    usage_cb=None,
     chat_blocks: list[dict] | None = None,
     prior_reports: list[tuple[str, str]] | None = None,
     prior_report_titles: list[tuple[str, str]] | None = None,
@@ -299,6 +300,12 @@ def extract_report(
 
     *attempt_cb(attempt)* fires when a retry begins (attempt >= 2), so
     front-ends can render a separator in their log.
+
+    *usage_cb(usage, input_chars)* fires once on successful completion with
+    the response's ``usage`` object (Anthropic SDK shape — has
+    ``input_tokens``, ``output_tokens``, etc.) and the prompt's character
+    count. Used by the CLI to log token usage and estimate cost without this
+    module having to know about :mod:`wechat_daily.cost_tracker`.
     """
     import anthropic  # for APIStatusError below
 
@@ -439,6 +446,8 @@ def extract_report(
                 raise ExtractionError("响应为空")
 
             _save_extract(date_str, markdown, debug_text, thinking_text)
+            if usage_cb:
+                usage_cb(getattr(response, "usage", None), len(debug_text))
             return DailyReport(date=date_str, markdown=markdown)
 
         except ExtractionError:

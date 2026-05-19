@@ -37,8 +37,9 @@ class _TextEvent:
 
 
 class _FakeStream:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, usage: object | None = None) -> None:
         self._text = text
+        self._usage = usage
 
     def __enter__(self):
         return self
@@ -49,10 +50,18 @@ class _FakeStream:
     def __iter__(self):
         yield _TextEvent(self._text)
 
+    def get_final_message(self):
+        # Only present when constructed with a usage object — otherwise the
+        # production code's try/except AttributeError path is exercised.
+        if self._usage is None:
+            raise AttributeError("test stub: no final message")
+        return type("Response", (), {"content": [], "usage": self._usage})()
+
 
 class FakeMessages:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, usage: object | None = None) -> None:
         self.text = text
+        self.usage = usage
         self.calls: list[dict] = []
 
     def create(self, **kwargs):
@@ -61,12 +70,14 @@ class FakeMessages:
 
     def stream(self, **kwargs):
         self.calls.append(kwargs)
-        return _FakeStream(self.text)
+        return _FakeStream(self.text, self.usage)
 
 
 class FakeAnthropic:
-    def __init__(self, text: str = "这是网页摘要") -> None:
-        self.messages = FakeMessages(text)
+    def __init__(
+        self, text: str = "这是网页摘要", usage: object | None = None,
+    ) -> None:
+        self.messages = FakeMessages(text, usage=usage)
 
 
 def _link_msg(title="Title", url="https://example.com/a", des="card des"):
@@ -181,6 +192,53 @@ def test_enrich_summarizes_fetched_text():
     call = anthropic.messages.calls[0]
     assert call["model"] == "claude-sonnet-4-6"
     assert "thinking" not in call
+
+
+def test_enrich_usage_cb_called_per_summary():
+    """Each successful LLM summary triggers usage_cb(usage, duration, chars)."""
+    class _Usage:
+        input_tokens = 1234
+        output_tokens = 567
+
+    url = "https://example.com/a"
+    html = "<article><p>" + ("正文 " * 500) + "</p></article>"
+    msg = _link_msg(url=url)
+    client = FakeHTTP({url: (html, "text/html")})
+    anthropic = FakeAnthropic("摘要结果", usage=_Usage())
+
+    seen: list[tuple] = []
+    stats = enrich_link_messages(
+        [msg],
+        api_key="fake",
+        http_client=client,
+        anthropic_client=anthropic,
+        usage_cb=lambda u, d, c: seen.append((u, d, c)),
+    )
+
+    assert stats.summarized == 1
+    assert len(seen) == 1
+    usage, duration_s, input_chars = seen[0]
+    assert usage.input_tokens == 1234
+    assert duration_s >= 0
+    assert input_chars > 0
+
+
+def test_enrich_usage_cb_not_called_on_short_path():
+    """The short-path (no LLM) shouldn't emit a usage record."""
+    msg = _link_msg(
+        title="小红书标题",
+        url="https://www.xiaohongshu.com/discovery/item/1",
+        des="卡片摘要",
+    )
+    seen = []
+    stats = enrich_link_messages(
+        [msg], api_key="fake",
+        http_client=FakeHTTP({}),
+        anthropic_client=FakeAnthropic(),
+        usage_cb=lambda u, d, c: seen.append((u, d, c)),
+    )
+    assert stats.short == 1
+    assert seen == []
 
 
 def test_enrich_uses_short_path_when_fetch_returns_empty():
