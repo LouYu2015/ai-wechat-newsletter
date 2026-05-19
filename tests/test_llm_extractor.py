@@ -257,6 +257,80 @@ def test_usage_cb_not_called_on_failure(monkeypatch, tmp_path):
     assert seen == []
 
 
+# ── compare mode: explicit model + debug_suffix ────────────────────────────────
+
+
+def test_default_model_is_primary(monkeypatch, tmp_path):
+    """Without an explicit model param, the canonical CLAUDE_MODEL is used."""
+    import wechat_daily.llm_extractor as mod
+    from wechat_daily.config import CLAUDE_MODEL
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    assert client.messages.calls[0]["model"] == CLAUDE_MODEL
+
+
+def test_explicit_model_overrides_default(monkeypatch, tmp_path):
+    """Compare-mode plumbing: explicit model param drives the API call."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+
+    extract_report(
+        "2026-04-30", "chat", api_key="fake", client=client,
+        model="claude-opus-4-7",
+    )
+    assert client.messages.calls[0]["model"] == "claude-opus-4-7"
+
+
+def test_debug_suffix_renames_sidecar_files(monkeypatch, tmp_path):
+    """Compare run mustn't clobber canonical debug/extract-{date}.md."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["compare body"])
+
+    extract_report(
+        "2026-04-30", "chat", api_key="fake", client=client,
+        debug_suffix=".opus-4-7",
+    )
+
+    # Suffixed files exist
+    assert (tmp_path / "extract-2026-04-30.opus-4-7.md").exists()
+    assert (tmp_path / "extract-2026-04-30.opus-4-7.input.txt").exists()
+    # Canonical files do NOT — compare run cleanly side-channels.
+    assert not (tmp_path / "extract-2026-04-30.md").exists()
+    assert not (tmp_path / "extract-2026-04-30.input.txt").exists()
+
+
+def test_debug_suffix_on_failure_writes_suffixed_failed_json(monkeypatch, tmp_path):
+    """Compare-mode refusal/max_tokens routes failure JSON to its own filename."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=[], stop_reason="refusal")
+
+    with pytest.raises(ExtractionError):
+        extract_report(
+            "2026-04-30", "chat", api_key="fake", client=client,
+            debug_suffix=".opus-4-7",
+        )
+
+    assert (tmp_path / "extract-2026-04-30.opus-4-7.FAILED.json").exists()
+    assert not (tmp_path / "extract-2026-04-30.FAILED.json").exists()
+
+
+def test_canonical_run_unchanged_when_no_suffix(monkeypatch, tmp_path):
+    """Sanity check: the default (no suffix) path keeps the original filenames
+    that prior_report.load_prior_reports reads from."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["canonical"])
+
+    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    assert (tmp_path / "extract-2026-04-30.md").exists()
+    assert not list(tmp_path.glob("extract-2026-04-30.opus-4-7*"))
+
+
 # ── prior_reports injection ────────────────────────────────────────────────────
 
 

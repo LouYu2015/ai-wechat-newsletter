@@ -78,13 +78,18 @@ python3 main.py --summary gemini
 
 ## 输出文件
 
-| 路径 | 说明 |
-|------|------|
-| `archive/YYYY-MM-DD 群聊日报.pdf` | 群内版 PDF（真实昵称） |
-| `debug/YYYY-MM-DD.md` | 群内版 Markdown 原文 |
-| `debug/extract-YYYY-MM-DD.md` | Claude 流式生成的原始 Markdown 日报 |
-| `debug/extract-YYYY-MM-DD.input.txt` | 喂给 Claude 的输入（花名册 + 匿名化聊天记录）便于事后审计 |
-| `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
+| 路径 | 模型 | 说明 |
+|------|------|------|
+| `archive/YYYY-MM-DD 群聊日报.pdf` | 4.6 | 群内版 PDF（真实昵称，主路径） |
+| `archive/YYYY-MM-DD 群聊日报 (opus-4-7).pdf` | 4.7 | 群内版 PDF（对比版，仅本地） |
+| `debug/YYYY-MM-DD.md` / `.opus-4-7.md` | 4.6 / 4.7 | 群内版 Markdown 原文 |
+| `debug/extract-YYYY-MM-DD.md` | 4.6 | 原始 Markdown 日报（用作下日续写素材） |
+| `debug/extract-YYYY-MM-DD.input.txt` | 4.6 | 喂给 Claude 的输入快照 |
+| `debug/extract-YYYY-MM-DD.opus-4-7.{md,input.txt,thinking.md}` | 4.7 | 对比版同上 |
+| `debug/costs.jsonl` | 全部 | 每次 Anthropic 调用的 token 用量 + 价格估算（JSON Lines） |
+| `data/public_repo/_posts/` | **仅 4.6** | 公开版 Jekyll Markdown（本地 commit，待推送） |
+
+每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表，含 `tok/char` 一列——Opus 4.7 用了新 tokenizer，对相同文本 token 数最高可涨 35%，这列让分词效率差异直观可见。临时省钱可用 `python3 main.py --no-compare` 跳过 4.7。
 
 ## 测试
 

@@ -276,6 +276,8 @@ def extract_report(
     chat_blocks: list[dict] | None = None,
     prior_reports: list[tuple[str, str]] | None = None,
     prior_report_titles: list[tuple[str, str]] | None = None,
+    model: str | None = None,
+    debug_suffix: str = "",
 ) -> DailyReport:
     """Stream a markdown daily report from Claude; return DailyReport(date, markdown).
 
@@ -306,7 +308,17 @@ def extract_report(
     ``input_tokens``, ``output_tokens``, etc.) and the prompt's character
     count. Used by the CLI to log token usage and estimate cost without this
     module having to know about :mod:`wechat_daily.cost_tracker`.
+
+    *model* overrides :data:`CLAUDE_MODEL` for this call — used by the
+    compare-mode pipeline to drive both Opus 4.6 and 4.7 through the same
+    extractor. *debug_suffix* (e.g. ``".opus-4-7"``) is interpolated into
+    the ``debug/extract-{date}{suffix}.md`` / ``.input.txt`` / ``.thinking.md``
+    sidecar filenames so the secondary run doesn't clobber the canonical
+    run's files. Default ``""`` preserves the historical filenames that
+    :func:`prior_report.load_prior_reports` reads from.
     """
+    if model is None:
+        model = CLAUDE_MODEL
     import anthropic  # for APIStatusError below
 
     if client is None:
@@ -384,7 +396,7 @@ def extract_report(
                 return remainder
 
             with client.messages.stream(
-                model=CLAUDE_MODEL,
+                model=model,
                 max_tokens=128000,
                 thinking={"type": "adaptive"},
                 output_config={"effort": "high"},
@@ -425,11 +437,11 @@ def extract_report(
             thinking_text = "".join(thinking_parts)
 
             if response.stop_reason == "refusal":
-                _save_failure(date_str, debug_text, markdown, "Claude 拒绝处理该内容")
+                _save_failure(date_str, debug_text, markdown, "Claude 拒绝处理该内容", debug_suffix)
                 raise ExtractionError("Claude 拒绝处理该内容（stop_reason=refusal）")
 
             if response.stop_reason == "max_tokens":
-                _save_failure(date_str, debug_text, markdown, "响应被 max_tokens 截断")
+                _save_failure(date_str, debug_text, markdown, "响应被 max_tokens 截断", debug_suffix)
                 raise ExtractionError("响应被 max_tokens 截断，请增大 max_tokens 后重试")
 
             # Fallback: if the streamed buffer is empty but the final response
@@ -442,10 +454,10 @@ def extract_report(
                 )
 
             if not markdown.strip():
-                _save_failure(date_str, debug_text, markdown, "响应为空")
+                _save_failure(date_str, debug_text, markdown, "响应为空", debug_suffix)
                 raise ExtractionError("响应为空")
 
-            _save_extract(date_str, markdown, debug_text, thinking_text)
+            _save_extract(date_str, markdown, debug_text, thinking_text, debug_suffix)
             if usage_cb:
                 usage_cb(getattr(response, "usage", None), len(debug_text))
             return DailyReport(date=date_str, markdown=markdown)
@@ -461,7 +473,7 @@ def extract_report(
             if attempt < max_retries:
                 time.sleep(30)
 
-    _save_failure(date_str, debug_text, None, str(last_exc))
+    _save_failure(date_str, debug_text, None, str(last_exc), debug_suffix)
     raise last_exc  # type: ignore[misc]
 
 
@@ -470,16 +482,22 @@ def _save_extract(
     markdown: str,
     user_content: str,
     thinking_text: str = "",
+    debug_suffix: str = "",
 ) -> None:
-    """Save successful extraction to debug/."""
+    """Save successful extraction to debug/.
+
+    *debug_suffix* (e.g. ``".opus-4-7"``) is appended after the date so a
+    compare-mode run can write alongside the canonical run without
+    clobbering the files that ``prior_report`` reads next day.
+    """
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    (DEBUG_DIR / f"extract-{date_str}.md").write_text(markdown, encoding="utf-8")
+    (DEBUG_DIR / f"extract-{date_str}{debug_suffix}.md").write_text(markdown, encoding="utf-8")
     # Sidecar: full LLM input (roster + tokenized chat) for post-mortem audit.
-    (DEBUG_DIR / f"extract-{date_str}.input.txt").write_text(
+    (DEBUG_DIR / f"extract-{date_str}{debug_suffix}.input.txt").write_text(
         user_content[:50000], encoding="utf-8",
     )
     if thinking_text:
-        (DEBUG_DIR / f"extract-{date_str}.thinking.md").write_text(
+        (DEBUG_DIR / f"extract-{date_str}{debug_suffix}.thinking.md").write_text(
             thinking_text, encoding="utf-8",
         )
 
@@ -489,11 +507,12 @@ def _save_failure(
     user_content: str,
     partial_markdown: str | None,
     reason: str,
+    debug_suffix: str = "",
 ) -> None:
     """Persist failure details to debug/ for post-mortem inspection."""
     import json
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    path = DEBUG_DIR / f"extract-{date_str}.FAILED.json"
+    path = DEBUG_DIR / f"extract-{date_str}{debug_suffix}.FAILED.json"
     payload = {
         "reason": reason,
         "partial_markdown": partial_markdown,

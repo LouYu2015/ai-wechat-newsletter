@@ -22,7 +22,8 @@ from .aliases import AliasDB
 from .archiver import archive_old_files, get_pdf_path
 from .chat_extractor import extract_messages, find_missing_dates
 from .config import (
-    CLAUDE_MODEL, DEBUG_DIR, GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL, PROJECT_ROOT,
+    ARCHIVE_DIR, CLAUDE_MODEL, CLAUDE_MODEL_COMPARE, DEBUG_DIR,
+    GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL, PROJECT_ROOT,
 )
 from .contacts import ContactMap
 from . import cost_tracker
@@ -111,6 +112,7 @@ def _run_db_pipeline(
     prior_title_days: int = 7,
     prompt_on_missing_prior: bool = True,
     cost_records: list[cost_tracker.CostRecord] | None = None,
+    compare: bool = True,
 ) -> None:
     """Full pipeline for one date: extract → tokenize → LLM → render → PDF + public.
 
@@ -302,6 +304,18 @@ def _run_db_pipeline(
     if prior_days > 0 or prior_report_titles:
         console.print()
 
+    # ── B3: Decode images + build chat_blocks (shared with optional compare run)
+    # Image bytes are base64-inlined into chat_blocks, so the temp dir only
+    # needs to live for the duration of decoding. We build once and reuse for
+    # both Opus 4.6 (canonical) and Opus 4.7 (compare).
+    import tempfile, time as _time
+    from .image_decoder import ImageDecoder
+    with tempfile.TemporaryDirectory(prefix="wechat_daily_imgs_") as td:
+        chat_blocks = format_tokenized_messages_blocks(tokenized, ImageDecoder(Path(td)))
+    n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
+    if n_images:
+        console.print(f"[dim]图片解码 {n_decoded}/{n_images} 张成功[/dim]\n")
+
     # ── C: Claude structured extraction ─────────────────────────────────────
     console.rule(f"[bold]Claude 结构化提取  [dim]({CLAUDE_MODEL})[/dim]")
     headers: list[Text] = []  # permanent header / status lines
@@ -396,9 +410,6 @@ def _run_db_pipeline(
             state["body_partial"] = ""
             refresh()
 
-        import tempfile, time as _time
-        from .image_decoder import ImageDecoder
-
         # Closure for cost logging: extract_report calls usage_cb at the end
         # with (usage, input_chars). We measure duration around the call.
         t_extract_start = _time.perf_counter()
@@ -414,28 +425,18 @@ def _run_db_pipeline(
                 cost_records.append(record)
 
         try:
-            with tempfile.TemporaryDirectory(prefix="wechat_daily_imgs_") as td:
-                decoder = ImageDecoder(Path(td))
-                chat_blocks = format_tokenized_messages_blocks(tokenized, decoder)
-                n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
-                if n_images:
-                    headers.append(Text(
-                        f"图片解码 {n_decoded}/{n_images} 张成功",
-                        style="dim",
-                    ))
-                    refresh()
-                report = extract_report(
-                    date_str, chat_history, anthropic_key, progress_cb,
-                    roster_text=roster_text or None,
-                    thinking_cb=thinking_cb,
-                    header_cb=header_cb,
-                    attempt_cb=attempt_cb,
-                    text_cb=text_cb,
-                    usage_cb=_extract_usage_cb,
-                    chat_blocks=chat_blocks,
-                    prior_reports=prior_reports or None,
-                    prior_report_titles=prior_report_titles or None,
-                )
+            report = extract_report(
+                date_str, chat_history, anthropic_key, progress_cb,
+                roster_text=roster_text or None,
+                thinking_cb=thinking_cb,
+                header_cb=header_cb,
+                attempt_cb=attempt_cb,
+                text_cb=text_cb,
+                usage_cb=_extract_usage_cb,
+                chat_blocks=chat_blocks,
+                prior_reports=prior_reports or None,
+                prior_report_titles=prior_report_titles or None,
+            )
         except ExtractionError as e:
             console.print(f"[bold red]结构化提取失败:[/bold red] {e}")
             return
@@ -507,6 +508,212 @@ def _run_db_pipeline(
         "\n[dim]公开版已本地 commit（未推送）。"
         "下次运行带 -y 可推送到 GitHub，GitHub Pages 将自动构建。[/dim]"
     )
+
+    # ── G: Compare run with Opus 4.7 (skipped if --no-compare) ──────────────
+    # Strictly side-channel: own debug files (with .opus-4-7 suffix), own
+    # archive PDF, never feeds back into prior_reports for the next day, and
+    # never touches the public repo. A failure here is logged and the function
+    # still returns success for the canonical 4.6 path that already shipped.
+    if compare:
+        _run_compare_extraction(
+            date_str=date_str,
+            chat_history=chat_history,
+            chat_blocks=chat_blocks,
+            roster_text=roster_text,
+            prior_reports=prior_reports,
+            prior_report_titles=prior_report_titles,
+            alias_db=alias_db,
+            contact_map=contact_map,
+            token_map=token_map,
+            target_date=target_date,
+            anthropic_key=anthropic_key,
+            cost_records=cost_records,
+        )
+
+
+_COMPARE_DEBUG_SUFFIX = ".opus-4-7"
+
+
+def _run_compare_extraction(
+    *,
+    date_str: str,
+    chat_history: str,
+    chat_blocks: list[dict],
+    roster_text: str,
+    prior_reports: list[tuple[str, str]],
+    prior_report_titles: list[tuple[str, str]],
+    alias_db: AliasDB,
+    contact_map: ContactMap,
+    token_map: dict,
+    target_date,
+    anthropic_key: str,
+    cost_records: list[cost_tracker.CostRecord] | None,
+) -> None:
+    """Second-pass extraction with the compare model (Opus 4.7).
+
+    Writes debug sidecars with ``.opus-4-7`` suffix and a PDF named
+    ``{date} 群聊日报 (opus-4-7).pdf``. Never feeds back into next-day
+    continuity (which reads the un-suffixed ``debug/extract-{date}.md``)
+    and never touches the public repo. Any failure prints a warning and
+    returns silently — the canonical run has already shipped.
+    """
+    import time as _time
+
+    console.rule(
+        f"[bold]对比提取  [dim]({CLAUDE_MODEL_COMPARE}) — 仅本地，不发布[/dim]"
+    )
+
+    headers: list[Text] = []
+    thinking_lines: deque[str] = deque(maxlen=8)
+    body_lines: deque[str] = deque(maxlen=8)
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold magenta]Claude 4.7 对比生成..."),
+        TextColumn("[dim]{task.description}[/dim]"),
+        TimeElapsedColumn(),
+        console=console,
+    )
+    task = progress.add_task("连接中...", total=None)
+    state = {"text": 0, "thinking": 0, "thinking_partial": "", "body_partial": ""}
+
+    def _tail(lines: deque[str], partial: str, n: int, style: str) -> list[Text]:
+        visible = list(lines)
+        if partial:
+            visible.append(partial)
+        width = max(1, console.width)
+        rows: list[Text] = []
+        for s in visible:
+            rows.extend(Text(s, style=style).wrap(console, width))
+        return rows[-n:]
+
+    def render() -> Group:
+        parts: list = list(headers)
+        th = _tail(thinking_lines, state["thinking_partial"], 8, "dim italic")
+        bd = _tail(body_lines, state["body_partial"], 8, "")
+        if th:
+            parts.append(Text("─ thinking ─", style="dim cyan"))
+            parts.extend(th)
+        if bd:
+            parts.append(Text("─ 正文 ─", style="magenta"))
+            parts.extend(bd)
+        parts.append(progress)
+        return Group(*parts)
+
+    with Live(render(), console=console, refresh_per_second=10, transient=False) as live:
+        def refresh() -> None:
+            live.update(render())
+
+        def _update_progress(attempt: int) -> None:
+            label = f" (第 {attempt}/3 次)" if attempt > 1 else ""
+            phase = "思考中" if state["text"] == 0 and state["thinking"] > 0 else "已接收"
+            progress.update(
+                task,
+                description=(
+                    f"{phase} 正文 {state['text']:,} 字节 / "
+                    f"thinking {state['thinking']:,} 字节{label}"
+                ),
+            )
+            refresh()
+
+        def progress_cb(received: int, attempt: int) -> None:
+            state["text"] = received
+            _update_progress(attempt)
+
+        def thinking_cb(received: int, attempt: int) -> None:
+            state["thinking"] = received
+            _update_progress(attempt)
+
+        def text_cb(kind: str, delta: str, attempt: int) -> None:
+            key = "thinking_partial" if kind == "thinking" else "body_partial"
+            target = thinking_lines if kind == "thinking" else body_lines
+            combined = state[key] + delta
+            if "\n" in combined:
+                *complete, remainder = combined.split("\n")
+                for line in complete:
+                    target.append(line)
+                state[key] = remainder
+            else:
+                state[key] = combined
+            refresh()
+
+        def header_cb(_kind: str, level: int, title: str, _attempt: int) -> None:
+            headers.append(Text(f"{'  ' * level}{title}", style="bold"))
+            refresh()
+
+        def attempt_cb(attempt: int) -> None:
+            headers.append(Text(f"--- 第 {attempt}/3 次重试 ---", style="yellow"))
+            thinking_lines.clear()
+            body_lines.clear()
+            state["thinking_partial"] = ""
+            state["body_partial"] = ""
+            refresh()
+
+        t_start = _time.perf_counter()
+
+        def _usage_cb(usage, input_chars: int) -> None:
+            record = cost_tracker.log_call(
+                date=date_str, stage="extract-compare", model=CLAUDE_MODEL_COMPARE,
+                usage=usage,
+                duration_s=_time.perf_counter() - t_start,
+                input_chars=input_chars,
+            )
+            if cost_records is not None:
+                cost_records.append(record)
+
+        try:
+            compare_report = extract_report(
+                date_str, chat_history, anthropic_key, progress_cb,
+                roster_text=roster_text or None,
+                thinking_cb=thinking_cb,
+                header_cb=header_cb,
+                attempt_cb=attempt_cb,
+                text_cb=text_cb,
+                usage_cb=_usage_cb,
+                chat_blocks=chat_blocks,
+                prior_reports=prior_reports or None,
+                prior_report_titles=prior_report_titles or None,
+                model=CLAUDE_MODEL_COMPARE,
+                debug_suffix=_COMPARE_DEBUG_SUFFIX,
+            )
+        except ExtractionError as e:
+            # 4.7 failure is non-fatal — canonical 4.6 already shipped.
+            console.print(f"[yellow]4.7 对比生成失败，跳过：{e}[/yellow]")
+            return
+        except Exception as e:
+            console.print(f"[yellow]4.7 对比生成异常，跳过：{e}[/yellow]")
+            return
+
+    # Render group version for compare (no public path, no leak check).
+    day_log = [
+        e for e in alias_db.command_log()
+        if datetime.fromtimestamp(e['ts']).date() == target_date
+    ]
+    compare_group_md = render_group(
+        compare_report, alias_db, contact_map, day_log, token_map=token_map,
+    )
+
+    md_path = DEBUG_DIR / f"{date_str}{_COMPARE_DEBUG_SUFFIX}.md"
+    md_path.write_text(compare_group_md, encoding="utf-8")
+
+    ARCHIVE_DIR.mkdir(exist_ok=True)
+    compare_pdf_path = ARCHIVE_DIR / f"{date_str} 群聊日报 (opus-4-7).pdf"
+    # Note: get_pdf_path's collision-counter behavior is not what we want here
+    # — we always want exactly one "(opus-4-7)" file per date, overwriting
+    # stale ones on re-runs (matching how the canonical path overwrites
+    # debug/{date}.md). Counter-based dedup would silently accumulate cruft.
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold magenta]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task("4.7 Markdown → PDF...", total=None)
+        convert_to_pdf(compare_group_md, compare_pdf_path)
+        progress.update(task, description=f"PDF 已保存: {compare_pdf_path.name}")
+
+    console.print(f"[magenta]4.7 对比版:[/magenta] [cyan]{compare_pdf_path}[/cyan]")
+    console.print(f"[magenta]4.7 Markdown:[/magenta] [dim]{md_path}[/dim]\n")
 
 
 def _save_leak_debug(date_str: str, error: str, public_md: str) -> None:
@@ -606,6 +813,14 @@ def main() -> None:
         "--no-prior-prompt", action="store_true",
         help="最近若干天日报有缺失时不交互询问，按现有材料继续（适合自动化场景）。",
     )
+    parser.add_argument(
+        "--no-compare", action="store_true",
+        help=(
+            f"关闭 {CLAUDE_MODEL_COMPARE} 对比生成。默认每天都用 4.6（主路径，"
+            "feed 公开版与下日续写）和 4.7（仅本地 PDF/debug，加 .opus-4-7 后缀）"
+            "各跑一次，便于评估新模型；本 flag 用于临时省钱或加速。"
+        ),
+    )
     args = parser.parse_args()
 
     console.print(Panel.fit(
@@ -674,6 +889,7 @@ def main() -> None:
                     prior_title_days=args.prior_title_days,
                     prompt_on_missing_prior=not args.no_prior_prompt,
                     cost_records=cost_records,
+                    compare=not args.no_compare,
                 )
             else:
                 _run_gemini_pipeline(date_str, gemini_key, contact_map, alias_db)
