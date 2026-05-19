@@ -398,7 +398,14 @@ def extract_report(
             with client.messages.stream(
                 model=model,
                 max_tokens=128000,
-                thinking={"type": "adaptive"},
+                # `display` defaults to "summarized" on Opus ≤4.6 and "omitted"
+                # on 4.7+ (where omitted means no thinking_delta events are
+                # streamed at all — only a signature_delta for signing).
+                # Force "summarized" everywhere so both models stream visible
+                # thinking traces for the debug UI / extract-{date}.thinking.md.
+                # Trade-off accepted: 4.7 loses some time-to-first-text-token,
+                # but parity with 4.6 in the compare run is worth it.
+                thinking={"type": "adaptive", "display": "summarized"},
                 output_config={"effort": "high"},
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_content}],

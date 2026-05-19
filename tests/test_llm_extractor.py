@@ -115,6 +115,19 @@ def test_no_tool_use_in_request(monkeypatch, tmp_path):
     assert "messages" in call
 
 
+def test_thinking_display_forced_to_summarized(monkeypatch, tmp_path):
+    """Opus 4.7 default is display='omitted' (no thinking_delta events). We
+    force 'summarized' everywhere so both 4.6 and 4.7 stream visible thinking
+    for the debug UI."""
+    import wechat_daily.llm_extractor as mod
+    monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+
+    thinking_param = client.messages.calls[0]["thinking"]
+    assert thinking_param == {"type": "adaptive", "display": "summarized"}
+
+
 def test_refusal_raises_and_writes_failure(monkeypatch, tmp_path):
     import wechat_daily.llm_extractor as mod
     monkeypatch.setattr(mod, "DEBUG_DIR", tmp_path)
