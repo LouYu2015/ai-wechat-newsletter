@@ -83,8 +83,7 @@ python3 main.py --summary gemini
 | `archive/YYYY-MM-DD 群聊日报.pdf` | 4.6 | 群内版 PDF（真实昵称，主路径） |
 | `archive/YYYY-MM-DD 群聊日报 (opus-4-7).pdf` | 4.7 | 群内版 PDF（对比版，仅本地） |
 | `debug/YYYY-MM-DD.md` / `.opus-4-7.md` | 4.6 / 4.7 | 群内版 Markdown 原文 |
-| `debug/extract-YYYY-MM-DD.md` | 4.6 | 原始 Markdown 日报（用作下日续写素材） |
-| `debug/extract-YYYY-MM-DD.input.txt` | 4.6 | 喂给 Claude 的输入快照 |
+| `debug/extract-YYYY-MM-DD.{md,input.txt,thinking.md}` | 4.6 | 原始 Markdown 日报（用作下日续写素材）+ 输入快照 + thinking 摘要 |
 | `debug/extract-YYYY-MM-DD.opus-4-7.{md,input.txt,thinking.md}` | 4.7 | 对比版同上 |
 | `debug/costs.jsonl` | 全部 | 每次 Anthropic 调用的 token 用量 + 价格估算（JSON Lines） |
 | `data/public_repo/_posts/` | **仅 4.6** | 公开版 Jekyll Markdown（本地 commit，待推送） |
@@ -111,7 +110,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
-`pytest` 不在 `requirements.txt` 里（它是 dev-only），所以要单独追加。`weasyprint` 会拖一堆系统级字体/lxml 依赖、`sqlcipher3` 会编 C 扩展，首次安装 ~1–2 分钟，之后 `.venv/` 复用即可。装完 285 个测试 ~2s 跑完。
+`pytest` 不在 `requirements.txt` 里（它是 dev-only），所以要单独追加。`weasyprint` 会拖一堆系统级字体/lxml 依赖、`sqlcipher3` 会编 C 扩展，首次安装 ~1–2 分钟，之后 `.venv/` 复用即可。装完整套测试秒级跑完。
 
 不要用系统 Python `pip install`——sandbox 里它会落到 `/usr/local`，下次重启 sandbox 就丢了，而且会污染全局环境。venv 装在工作目录下，下次进同一个工作目录直接复用。
 
@@ -133,26 +132,38 @@ python3 -m venv .venv
 ```bash
 # 从零重建别名数据库（从历史消息完整回放所有指令）
 python3 -m scripts.rebuild_aliases
+
+# 把 aliases.json 升到新 token 格式（一次性迁移，按需运行）
+python3 -m scripts.migrate_token_format
+
+# 用保存的 input.txt 回放某天 4.7 提取，方便快速试 system-prompt 变体
+python3 scripts/probe_extractor_prompt.py
 ```
 
 ## 项目结构
 
 ```
 wechat_daily/
-├── config.py          # 常量、路径、env 加载
-├── wechat_db.py       # SQLCipher 连接（只读，immutable 模式）
-├── contacts.py        # wxid → 昵称映射
-├── message_parser.py  # 消息解析
-├── chat_extractor.py  # 按日期提取消息
-├── aliases.py         # 别名数据库、指令扫描、备份
-├── privacy.py         # token 化（惰性分配）、optout 遮蔽、泄漏检测
-├── roster.py          # token → 真实昵称变体花名册（喂给 LLM 解代称）
-├── llm_extractor.py   # Claude 流式 Markdown 生成
-├── renderer.py        # Markdown 后期处理：标记剥离、token 替换、群内版 / 公开版渲染
-├── pdf.py             # Markdown → PDF
-├── archiver.py        # 7 天滚动归档
-├── publisher.py       # 公开仓库 commit / push / 预览
-└── cli.py             # 主流程编排
+├── config.py            # 常量、路径、env 加载
+├── models.py            # DailyReport 等数据类
+├── wechat_db.py         # SQLCipher 连接（只读，immutable 模式）
+├── contacts.py          # wxid → 昵称映射
+├── chatroom_members.py  # 群成员名单
+├── message_parser.py    # 消息解析
+├── image_decoder.py     # 图片附件解码（dat → 原图）
+├── chat_extractor.py    # 按日期提取消息
+├── url_enricher.py      # 链接卡片抓取与摘要（喂给 LLM 的 [网页摘要] 来源）
+├── aliases.py           # 别名数据库、指令扫描、备份
+├── privacy.py           # token 化（惰性分配）、optout 遮蔽、泄漏检测
+├── roster.py            # token → 真实昵称变体花名册（喂给 LLM 解代称）
+├── prior_report.py      # 历史日报加载（跨日续写 / 去重的 <previous_reports> 素材）
+├── llm_extractor.py     # Claude 流式 Markdown 生成（含 4.6 / 4.7 双 prompt）
+├── renderer.py          # Markdown 后期处理：标记剥离、token 替换、群内版 / 公开版渲染
+├── pdf.py               # Markdown → PDF
+├── archiver.py          # 7 天滚动归档
+├── cost_tracker.py      # Anthropic 调用 token 用量 + 价格估算（写 debug/costs.jsonl）
+├── publisher.py         # 公开仓库 commit / push / 预览
+└── cli.py               # 主流程编排
 ```
 
 ## License
