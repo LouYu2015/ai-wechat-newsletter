@@ -145,32 +145,68 @@ tags: model-release, long-context, agent
 ```
 """
 
-# ── Opus 4.7 variant: base prompt + thinking-discipline appendix ───────────────
+# ── Opus 4.7 variant: base prompt + editorial-workflow appendix ────────────────
 #
-# Diagnosis (2026-05-19): on identical inputs, 4.7's thinking trace is ~20× shorter
-# than 4.6's. 4.6 spends thinking tokens on value-ranking, overlap dedup, paragraph
-# drafting, and structure iteration; 4.7 jumps straight to writing. The visible
-# symptom is what readers called "4.6 引用更自然" — 4.6 paraphrases article content
-# into its own voice during thinking, while 4.7 reaches for direct quotes of article
-# text. The fix is to force 4.7 through the editing passes 4.6 does naturally, via
-# explicit thinking-stage instructions. We do not touch the base style/structure
-# rules — those are working on 4.6 and don't need to differ across models.
+# Diagnosis (2026-05-19 → iterated 2026-05-20): readers reported 4.7's output
+# had lower signal-to-noise than 4.6 — article text quoted verbatim rather than
+# paraphrased, and topic coverage too broad. A first appendix ("think through
+# steps 1-4") didn't help: 4.7 narrated the steps in thinking without executing
+# them. Community guidance for 4.7 (subourbonite gist, productcompass, mindstudio
+# writeups) converges on: (a) demand XML-tagged artifacts rather than step lists,
+# (b) prefer positive few-shot exemplars over negative prohibitions, (c) dial
+# down MUST/CRITICAL emphasis markers — they over-trigger compliance-narration
+# on 4.7. The current appendix forces three concrete XML blocks (rating table,
+# article paraphrase one-liners, first-paragraph drafts) before writing, with
+# one filled example row per block so the format anchors. Base 4.6 prompt is
+# unchanged — it's working on 4.6 and doesn't need to differ.
+#
+# Probe results: thinking summaries on this appendix don't always show the XML
+# tags (Anthropic's summarizer tends to strip structural tags), but the *final*
+# output reflects the editorial passes — article paraphrasing tightens and the
+# intro consistently makes an editorial judgment. Section count remains higher
+# than 4.6 (~13 vs ~9); positive length anchor alone isn't enough to force
+# aggressive culling, and we've chosen to accept that rather than fight it with
+# hard caps that didn't help in the v1 probe.
 
 _OPUS_4_7_APPENDIX = """\
 
-## 针对本模型（Opus 4.7）的写作流程要求
+## 编辑流程（Opus 4.7 专属）
 
-在动笔前，请在 thinking 阶段完成以下四步——不要省，也不要心算带过。读者反馈本模型的输出"对引用材料的处理不如 4.6 自然"，根因是跳过了编辑层面的思考。
+你是一名日报编辑，KPI 是信噪比。开始写 Markdown 之前，先在 thinking 里依次产出下面三个 XML 块。每个块按照示例的格式填——示例本身只是说明格式，你要用今天聊天记录里的真实内容把它写满。
 
-1. **话题价值评级**：列出今天所有候选话题，逐条标"高/中/低"价值，并简述理由（参与人数？是否有数据/链接？是否首次出现？）。高价值 → 单独 `###`；中 → 简短 `###`；低 → 只在导读一笔带过或丢弃。
+<value_ratings>
+| 话题 | 触发 | 人数 | 价值 | 处置 |
+| Karpathy 加入 Anthropic | 沉稳的狐狸 推文 | 10+ | H | 独立 ### |
+| 歪卟 coding 谐音梗 | 坦荡的灰熊 | 2 | L | 砍 |
+（按今天的内容继续填，至少 8 行；价值 = H/M/L；处置 = 独立###/并入X/砍）
+</value_ratings>
 
-2. **跨日去重**：对照 `<previous_reports>` / `<previous_report_titles>`，逐条检查今天的候选话题是否在前几天已写过，标记"跳过 / 续写 / 全新"。续写的要想清楚今天的新增价值是什么。
+<article_takes>
+SaaS 数据策略: 数据保护从默认承诺变成 Enterprise 才能买的 SKU
+开源收购战: 买的不是代码是团队的隐性知识与对手的供应链
+（每篇外部长文一行，40 字以内，用你自己的话；不要抄原文连续短语）
+</article_takes>
 
-3. **文章类素材的提炼策略**：对今天群里分享的每篇外部文章，**先用自己的话**把核心判断、关键数据、最有意思的论点提炼成 2–4 句中文叙述。**禁止**整段照搬原文措辞或大段直接引用文章原话——除非该原话本身是金句级别的判断。外部文章的内容应当被消化后融入你的叙述里，不是被复述。（金句和直接引用主要保留给群友本人的发言，那才是日报的灵魂。）
+<paragraph_drafts>
+[Karpathy 加入 Anthropic]
+沉稳的狐狸 凌晨贴出推文截图……（在这里写 120–180 字的真实段落，
+就是你最终 ### 下面要出现的首段；不要写"首段从某事开始"这种描述句）
 
-4. **段落预演**：对评定为"高价值"的 3–5 个话题，在 thinking 里先把首段写一遍，调整语序、合并冗余、检查是否融贯，再正式输出。
+[下一个 H 话题标题]
+……（同上格式，每个 H 话题一段）
+</paragraph_drafts>
 
-完成以上四步后再开始正式输出 Markdown。这四步会显著增加 thinking 长度——这是预期内的代价，不要为了"快"而压缩。
+像 article_takes 里那种写法的好处是：原文写「Atlassian's help page said data is *never* used for training」，你写「Atlassian 把『绝不训练』翻转成『默认收，除非加钱』」——保留判断、丢掉措辞。这才是把文章消化进自己的叙述里。
+
+三个 XML 块都写完再开始正式 Markdown 输出。
+
+写作时一些选择口味：
+- 目标 8 个左右 `###`，每个 150–220 字正文。比这更短的话题，要么并到相邻章节，要么砍掉。
+- 一个 `###` 至少要有以下之一：3+ 人参与、含数据/价格/版本号/URL、有值得 blockquote 的金句。三者都没有就并/砍。
+- 外部文章在它对应的 `###` 里讲一次就够。导读里只点"为什么值得读"，不要把文章数据再列一遍。
+- 闲聊花絮 ≤ 3 个 `###`。
+
+选定一个结构判断就推进，不要在 thinking 里反复换主意；只有出现真正不一致的新信息才重审。
 """
 
 _SYSTEM_PROMPT_OPUS_4_7 = _SYSTEM_PROMPT_OPUS_4_6 + _OPUS_4_7_APPENDIX
