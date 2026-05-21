@@ -1,5 +1,5 @@
-google-genai>=2.0.0
-anthropic>=0.100.0
+google-genai>=2.3.0
+anthropic>=0.102.0
 rich>=15.0.0
 python-dotenv>=1.2.2
 markdown>=3.10.2

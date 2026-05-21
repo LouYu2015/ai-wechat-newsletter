@@ -21,7 +21,7 @@ from .models import DailyReport
 
 # ── System prompt ────────────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT_OPUS_4_6 = """\
 你是一个专门分析 AI 技术讨论群聊天记录的助手。基于经过匿名化处理的群聊记录，输出当天的 Markdown 日报。
 
 聊天记录、花名册、处理要点、写作风格、导读要求都在用户消息里。本系统提示只规定输出格式。
@@ -144,6 +144,50 @@ API 价格表小幅调整，Sonnet 输入降 10%，输出不变。讨论很短�
 tags: model-release, long-context, agent
 ```
 """
+
+# ── Opus 4.7 variant: base prompt + thinking-discipline appendix ───────────────
+#
+# Diagnosis (2026-05-19): on identical inputs, 4.7's thinking trace is ~20× shorter
+# than 4.6's. 4.6 spends thinking tokens on value-ranking, overlap dedup, paragraph
+# drafting, and structure iteration; 4.7 jumps straight to writing. The visible
+# symptom is what readers called "4.6 引用更自然" — 4.6 paraphrases article content
+# into its own voice during thinking, while 4.7 reaches for direct quotes of article
+# text. The fix is to force 4.7 through the editing passes 4.6 does naturally, via
+# explicit thinking-stage instructions. We do not touch the base style/structure
+# rules — those are working on 4.6 and don't need to differ across models.
+
+_OPUS_4_7_APPENDIX = """\
+
+## 针对本模型（Opus 4.7）的写作流程要求
+
+在动笔前，请在 thinking 阶段完成以下四步——不要省，也不要心算带过。读者反馈本模型的输出"对引用材料的处理不如 4.6 自然"，根因是跳过了编辑层面的思考。
+
+1. **话题价值评级**：列出今天所有候选话题，逐条标"高/中/低"价值，并简述理由（参与人数？是否有数据/链接？是否首次出现？）。高价值 → 单独 `###`；中 → 简短 `###`；低 → 只在导读一笔带过或丢弃。
+
+2. **跨日去重**：对照 `<previous_reports>` / `<previous_report_titles>`，逐条检查今天的候选话题是否在前几天已写过，标记"跳过 / 续写 / 全新"。续写的要想清楚今天的新增价值是什么。
+
+3. **文章类素材的提炼策略**：对今天群里分享的每篇外部文章，**先用自己的话**把核心判断、关键数据、最有意思的论点提炼成 2–4 句中文叙述。**禁止**整段照搬原文措辞或大段直接引用文章原话——除非该原话本身是金句级别的判断。外部文章的内容应当被消化后融入你的叙述里，不是被复述。（金句和直接引用主要保留给群友本人的发言，那才是日报的灵魂。）
+
+4. **段落预演**：对评定为"高价值"的 3–5 个话题，在 thinking 里先把首段写一遍，调整语序、合并冗余、检查是否融贯，再正式输出。
+
+完成以上四步后再开始正式输出 Markdown。这四步会显著增加 thinking 长度——这是预期内的代价，不要为了"快"而压缩。
+"""
+
+_SYSTEM_PROMPT_OPUS_4_7 = _SYSTEM_PROMPT_OPUS_4_6 + _OPUS_4_7_APPENDIX
+
+
+def _resolve_system_prompt(model: str) -> str:
+    """Pick the system prompt variant for *model*.
+
+    Opus 4.7 gets the base prompt plus a thinking-discipline appendix; every
+    other model (including 4.6 and any future fallback) gets the base prompt
+    unchanged. Match on substring so e.g. ``claude-opus-4-7-20260501`` also
+    routes to 4.7 if dated suffixes are ever introduced.
+    """
+    if "opus-4-7" in model:
+        return _SYSTEM_PROMPT_OPUS_4_7
+    return _SYSTEM_PROMPT_OPUS_4_6
+
 
 # ── User-message instructions (placed AFTER the long chat input) ────────────────
 
@@ -395,6 +439,11 @@ def extract_report(
                         header_cb("body", level, m.group(2).strip(), attempt)
                 return remainder
 
+            # Opus 4.7's adaptive thinking budget is gated by effort=...; default
+            # "high" produced ~20× less thinking than 4.6 on the same input, so we
+            # bump to "xhigh" (4.7-only) to force the editorial passes that 4.6
+            # does naturally. 4.6 keeps "high" — no regression target there.
+            effort = "xhigh" if "opus-4-7" in model else "high"
             with client.messages.stream(
                 model=model,
                 max_tokens=128000,
@@ -406,8 +455,8 @@ def extract_report(
                 # Trade-off accepted: 4.7 loses some time-to-first-text-token,
                 # but parity with 4.6 in the compare run is worth it.
                 thinking={"type": "adaptive", "display": "summarized"},
-                output_config={"effort": "high"},
-                system=_SYSTEM_PROMPT,
+                output_config={"effort": effort},
+                system=_resolve_system_prompt(model),
                 messages=[{"role": "user", "content": user_content}],
             ) as stream:
                 for event in stream:
