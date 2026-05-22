@@ -70,13 +70,6 @@ def test_estimate_cost_opus_4_6_basic():
     assert cost == pytest.approx(30.0)
 
 
-def test_estimate_cost_opus_4_7_same_rate_as_4_6():
-    """Opus 4.7 is priced identically per token; tokenizer cost increase
-    surfaces via input_tokens count, not the rate."""
-    u = {"input_tokens": 100_000, "output_tokens": 20_000}
-    assert estimate_cost("claude-opus-4-7", u) == estimate_cost("claude-opus-4-6", u)
-
-
 def test_estimate_cost_cache_read_at_one_tenth_of_input():
     # 1M cache reads on Opus = 0.50 per MTok = $0.50
     cost = estimate_cost("claude-opus-4-6", {"cache_read_input_tokens": 1_000_000})

@@ -78,17 +78,15 @@ python3 main.py --summary gemini
 
 ## 输出文件
 
-| 路径 | 模型 | 说明 |
-|------|------|------|
-| `archive/YYYY-MM-DD 群聊日报.pdf` | 4.6 | 群内版 PDF（真实昵称，主路径） |
-| `archive/YYYY-MM-DD 群聊日报 (opus-4-7).pdf` | 4.7 | 群内版 PDF（对比版，仅本地） |
-| `debug/YYYY-MM-DD.md` / `.opus-4-7.md` | 4.6 / 4.7 | 群内版 Markdown 原文 |
-| `debug/extract-YYYY-MM-DD.{md,input.txt,thinking.md}` | 4.6 | 原始 Markdown 日报（用作下日续写素材）+ 输入快照 + thinking 摘要 |
-| `debug/extract-YYYY-MM-DD.opus-4-7.{md,input.txt,thinking.md}` | 4.7 | 对比版同上 |
-| `debug/costs.jsonl` | 全部 | 每次 Anthropic 调用的 token 用量 + 价格估算（JSON Lines） |
-| `data/public_repo/_posts/` | **仅 4.6** | 公开版 Jekyll Markdown（本地 commit，待推送） |
+| 路径 | 说明 |
+|------|------|
+| `archive/YYYY-MM-DD 群聊日报.pdf` | 群内版 PDF（真实昵称） |
+| `debug/YYYY-MM-DD.md` | 群内版 Markdown 原文 |
+| `debug/extract-YYYY-MM-DD.{md,input.txt,thinking.md}` | 原始 Markdown 日报（用作下日续写素材）+ 输入快照 + thinking 摘要 |
+| `debug/costs.jsonl` | 每次 Anthropic 调用的 token 用量 + 价格估算（JSON Lines） |
+| `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
 
-每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表，含 `tok/char` 一列——Opus 4.7 用了新 tokenizer，对相同文本 token 数最高可涨 35%，这列让分词效率差异直观可见。临时省钱可用 `python3 main.py --no-compare` 跳过 4.7。
+每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表。
 
 ## 测试
 
@@ -135,9 +133,6 @@ python3 -m scripts.rebuild_aliases
 
 # 把 aliases.json 升到新 token 格式（一次性迁移，按需运行）
 python3 -m scripts.migrate_token_format
-
-# 用保存的 input.txt 回放某天 4.7 提取，方便快速试 system-prompt 变体
-python3 scripts/probe_extractor_prompt.py
 ```
 
 ## 项目结构
@@ -157,7 +152,7 @@ wechat_daily/
 ├── privacy.py           # token 化（惰性分配）、optout 遮蔽、泄漏检测
 ├── roster.py            # token → 真实昵称变体花名册（喂给 LLM 解代称）
 ├── prior_report.py      # 历史日报加载（跨日续写 / 去重的 <previous_reports> 素材）
-├── llm_extractor.py     # Claude 流式 Markdown 生成（含 4.6 / 4.7 双 prompt）
+├── llm_extractor.py     # Claude 流式 Markdown 生成
 ├── renderer.py          # Markdown 后期处理：标记剥离、token 替换、群内版 / 公开版渲染
 ├── pdf.py               # Markdown → PDF
 ├── archiver.py          # 7 天滚动归档

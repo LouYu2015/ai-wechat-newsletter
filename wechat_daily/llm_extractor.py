@@ -21,7 +21,7 @@ from .models import DailyReport
 
 # ── System prompt ────────────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT_OPUS_4_6 = """\
+_SYSTEM_PROMPT = """\
 你是一个专门分析 AI 技术讨论群聊天记录的助手。基于经过匿名化处理的群聊记录，输出当天的 Markdown 日报。
 
 聊天记录、花名册、处理要点、写作风格、导读要求都在用户消息里。本系统提示只规定输出格式。
@@ -144,86 +144,6 @@ API 价格表小幅调整，Sonnet 输入降 10%，输出不变。讨论很短�
 tags: model-release, long-context, agent
 ```
 """
-
-# ── Opus 4.7 variant: base prompt + editorial-workflow appendix ────────────────
-#
-# Diagnosis (2026-05-19 → iterated 2026-05-20): readers reported 4.7's output
-# had lower signal-to-noise than 4.6 — article text quoted verbatim rather than
-# paraphrased, and topic coverage too broad. A first appendix ("think through
-# steps 1-4") didn't help: 4.7 narrated the steps in thinking without executing
-# them. Community guidance for 4.7 (subourbonite gist, productcompass, mindstudio
-# writeups) converges on: (a) demand XML-tagged artifacts rather than step lists,
-# (b) prefer positive few-shot exemplars over negative prohibitions, (c) dial
-# down MUST/CRITICAL emphasis markers — they over-trigger compliance-narration
-# on 4.7. The current appendix forces three concrete XML blocks (rating table,
-# article paraphrase one-liners, first-paragraph drafts) before writing, with
-# one filled example row per block so the format anchors. Base 4.6 prompt is
-# unchanged — it's working on 4.6 and doesn't need to differ.
-#
-# Probe results: thinking summaries on this appendix don't always show the XML
-# tags (Anthropic's summarizer tends to strip structural tags), but the *final*
-# output reflects the editorial passes — article paraphrasing tightens and the
-# intro consistently makes an editorial judgment. Section count remains higher
-# than 4.6 (~13 vs ~9); positive length anchor alone isn't enough to force
-# aggressive culling, and we've chosen to accept that rather than fight it with
-# hard caps that didn't help in the v1 probe.
-
-_OPUS_4_7_APPENDIX = """\
-
-## 编辑流程（Opus 4.7 专属）
-
-你是一名日报编辑，KPI 是信噪比。开始写 Markdown 之前，先在 thinking 里依次产出下面三个 XML 块。每个块按照示例的格式填——示例本身只是说明格式，你要用今天聊天记录里的真实内容把它写满。
-
-<value_ratings>
-| 话题 | 触发 | 人数 | 价值 | 处置 |
-| Karpathy 加入 Anthropic | 沉稳的狐狸 推文 | 10+ | H | 独立 ### |
-| 歪卟 coding 谐音梗 | 坦荡的灰熊 | 2 | L | 砍 |
-（按今天的内容继续填，至少 8 行；价值 = H/M/L；处置 = 独立###/并入X/砍）
-</value_ratings>
-
-<article_takes>
-SaaS 数据策略: 数据保护从默认承诺变成 Enterprise 才能买的 SKU
-开源收购战: 买的不是代码是团队的隐性知识与对手的供应链
-（每篇外部长文一行，40 字以内，用你自己的话；不要抄原文连续短语）
-</article_takes>
-
-<paragraph_drafts>
-[Karpathy 加入 Anthropic]
-沉稳的狐狸 凌晨贴出推文截图……（在这里写 120–180 字的真实段落，
-就是你最终 ### 下面要出现的首段；不要写"首段从某事开始"这种描述句）
-
-[下一个 H 话题标题]
-……（同上格式，每个 H 话题一段）
-</paragraph_drafts>
-
-像 article_takes 里那种写法的好处是：原文写「Atlassian's help page said data is *never* used for training」，你写「Atlassian 把『绝不训练』翻转成『默认收，除非加钱』」——保留判断、丢掉措辞。这才是把文章消化进自己的叙述里。
-
-三个 XML 块都写完再开始正式 Markdown 输出。
-
-写作时一些选择口味：
-- 目标 8 个左右 `###`，每个 150–220 字正文。比这更短的话题，要么并到相邻章节，要么砍掉。
-- 一个 `###` 至少要有以下之一：3+ 人参与、含数据/价格/版本号/URL、有值得 blockquote 的金句。三者都没有就并/砍。
-- 外部文章在它对应的 `###` 里讲一次就够。导读里只点"为什么值得读"，不要把文章数据再列一遍。
-- 闲聊花絮 ≤ 3 个 `###`。
-
-选定一个结构判断就推进，不要在 thinking 里反复换主意；只有出现真正不一致的新信息才重审。
-"""
-
-_SYSTEM_PROMPT_OPUS_4_7 = _SYSTEM_PROMPT_OPUS_4_6 + _OPUS_4_7_APPENDIX
-
-
-def _resolve_system_prompt(model: str) -> str:
-    """Pick the system prompt variant for *model*.
-
-    Opus 4.7 gets the base prompt plus a thinking-discipline appendix; every
-    other model (including 4.6 and any future fallback) gets the base prompt
-    unchanged. Match on substring so e.g. ``claude-opus-4-7-20260501`` also
-    routes to 4.7 if dated suffixes are ever introduced.
-    """
-    if "opus-4-7" in model:
-        return _SYSTEM_PROMPT_OPUS_4_7
-    return _SYSTEM_PROMPT_OPUS_4_6
-
 
 # ── User-message instructions (placed AFTER the long chat input) ────────────────
 
@@ -356,8 +276,6 @@ def extract_report(
     chat_blocks: list[dict] | None = None,
     prior_reports: list[tuple[str, str]] | None = None,
     prior_report_titles: list[tuple[str, str]] | None = None,
-    model: str | None = None,
-    debug_suffix: str = "",
 ) -> DailyReport:
     """Stream a markdown daily report from Claude; return DailyReport(date, markdown).
 
@@ -388,17 +306,7 @@ def extract_report(
     ``input_tokens``, ``output_tokens``, etc.) and the prompt's character
     count. Used by the CLI to log token usage and estimate cost without this
     module having to know about :mod:`wechat_daily.cost_tracker`.
-
-    *model* overrides :data:`CLAUDE_MODEL` for this call — used by the
-    compare-mode pipeline to drive both Opus 4.6 and 4.7 through the same
-    extractor. *debug_suffix* (e.g. ``".opus-4-7"``) is interpolated into
-    the ``debug/extract-{date}{suffix}.md`` / ``.input.txt`` / ``.thinking.md``
-    sidecar filenames so the secondary run doesn't clobber the canonical
-    run's files. Default ``""`` preserves the historical filenames that
-    :func:`prior_report.load_prior_reports` reads from.
     """
-    if model is None:
-        model = CLAUDE_MODEL
     import anthropic  # for APIStatusError below
 
     if client is None:
@@ -475,24 +383,12 @@ def extract_report(
                         header_cb("body", level, m.group(2).strip(), attempt)
                 return remainder
 
-            # Opus 4.7's adaptive thinking budget is gated by effort=...; default
-            # "high" produced ~20× less thinking than 4.6 on the same input, so we
-            # bump to "xhigh" (4.7-only) to force the editorial passes that 4.6
-            # does naturally. 4.6 keeps "high" — no regression target there.
-            effort = "xhigh" if "opus-4-7" in model else "high"
             with client.messages.stream(
-                model=model,
+                model=CLAUDE_MODEL,
                 max_tokens=128000,
-                # `display` defaults to "summarized" on Opus ≤4.6 and "omitted"
-                # on 4.7+ (where omitted means no thinking_delta events are
-                # streamed at all — only a signature_delta for signing).
-                # Force "summarized" everywhere so both models stream visible
-                # thinking traces for the debug UI / extract-{date}.thinking.md.
-                # Trade-off accepted: 4.7 loses some time-to-first-text-token,
-                # but parity with 4.6 in the compare run is worth it.
-                thinking={"type": "adaptive", "display": "summarized"},
-                output_config={"effort": effort},
-                system=_resolve_system_prompt(model),
+                thinking={"type": "adaptive"},
+                output_config={"effort": "high"},
+                system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_content}],
             ) as stream:
                 for event in stream:
@@ -529,11 +425,11 @@ def extract_report(
             thinking_text = "".join(thinking_parts)
 
             if response.stop_reason == "refusal":
-                _save_failure(date_str, debug_text, markdown, "Claude 拒绝处理该内容", debug_suffix)
+                _save_failure(date_str, debug_text, markdown, "Claude 拒绝处理该内容")
                 raise ExtractionError("Claude 拒绝处理该内容（stop_reason=refusal）")
 
             if response.stop_reason == "max_tokens":
-                _save_failure(date_str, debug_text, markdown, "响应被 max_tokens 截断", debug_suffix)
+                _save_failure(date_str, debug_text, markdown, "响应被 max_tokens 截断")
                 raise ExtractionError("响应被 max_tokens 截断，请增大 max_tokens 后重试")
 
             # Fallback: if the streamed buffer is empty but the final response
@@ -546,10 +442,10 @@ def extract_report(
                 )
 
             if not markdown.strip():
-                _save_failure(date_str, debug_text, markdown, "响应为空", debug_suffix)
+                _save_failure(date_str, debug_text, markdown, "响应为空")
                 raise ExtractionError("响应为空")
 
-            _save_extract(date_str, markdown, debug_text, thinking_text, debug_suffix)
+            _save_extract(date_str, markdown, debug_text, thinking_text)
             if usage_cb:
                 usage_cb(getattr(response, "usage", None), len(debug_text))
             return DailyReport(date=date_str, markdown=markdown)
@@ -565,7 +461,7 @@ def extract_report(
             if attempt < max_retries:
                 time.sleep(30)
 
-    _save_failure(date_str, debug_text, None, str(last_exc), debug_suffix)
+    _save_failure(date_str, debug_text, None, str(last_exc))
     raise last_exc  # type: ignore[misc]
 
 
@@ -574,22 +470,16 @@ def _save_extract(
     markdown: str,
     user_content: str,
     thinking_text: str = "",
-    debug_suffix: str = "",
 ) -> None:
-    """Save successful extraction to debug/.
-
-    *debug_suffix* (e.g. ``".opus-4-7"``) is appended after the date so a
-    compare-mode run can write alongside the canonical run without
-    clobbering the files that ``prior_report`` reads next day.
-    """
+    """Save successful extraction to debug/."""
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    (DEBUG_DIR / f"extract-{date_str}{debug_suffix}.md").write_text(markdown, encoding="utf-8")
+    (DEBUG_DIR / f"extract-{date_str}.md").write_text(markdown, encoding="utf-8")
     # Sidecar: full LLM input (roster + tokenized chat) for post-mortem audit.
-    (DEBUG_DIR / f"extract-{date_str}{debug_suffix}.input.txt").write_text(
+    (DEBUG_DIR / f"extract-{date_str}.input.txt").write_text(
         user_content[:50000], encoding="utf-8",
     )
     if thinking_text:
-        (DEBUG_DIR / f"extract-{date_str}{debug_suffix}.thinking.md").write_text(
+        (DEBUG_DIR / f"extract-{date_str}.thinking.md").write_text(
             thinking_text, encoding="utf-8",
         )
 
@@ -599,12 +489,11 @@ def _save_failure(
     user_content: str,
     partial_markdown: str | None,
     reason: str,
-    debug_suffix: str = "",
 ) -> None:
     """Persist failure details to debug/ for post-mortem inspection."""
     import json
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    path = DEBUG_DIR / f"extract-{date_str}{debug_suffix}.FAILED.json"
+    path = DEBUG_DIR / f"extract-{date_str}.FAILED.json"
     payload = {
         "reason": reason,
         "partial_markdown": partial_markdown,

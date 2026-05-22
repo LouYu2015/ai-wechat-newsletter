@@ -13,8 +13,7 @@ and already roll into ``output_tokens``, so we don't separate them.
 
 The ``input_chars`` field on each record stores the raw character count of
 the prompt fed to the model — used to compute a ``tok/char`` ratio in the
-summary, which makes Opus 4.6 vs 4.7 comparison meaningful given 4.7's new
-tokenizer can inflate token counts up to 35%.
+summary, useful as a proxy for tokenizer efficiency across models.
 """
 
 from __future__ import annotations
@@ -179,8 +178,7 @@ def summarize(records: Iterable[CostRecord]):
 
     Records are grouped by (date, stage, model). The ``tok/char`` column is
     ``input_tokens / input_chars`` when both are known — useful as a proxy
-    for tokenizer efficiency when comparing Opus 4.6 vs 4.7 on identical
-    inputs.
+    for tokenizer efficiency across models.
     """
     from rich.table import Table
 

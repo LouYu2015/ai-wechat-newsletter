@@ -26,11 +26,7 @@ GROUP_CHAT_ID = "26389512912@chatroom"
 GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 
 # ── Models ──────────────────────────────────────────────────────────────────────
-CLAUDE_MODEL_PRIMARY = "claude-opus-4-6"
-CLAUDE_MODEL_COMPARE = "claude-opus-4-7"
-# Back-compat alias for callers still importing CLAUDE_MODEL — points at the
-# canonical model whose extract feeds public publishing and next-day continuity.
-CLAUDE_MODEL = CLAUDE_MODEL_PRIMARY
+CLAUDE_MODEL = "claude-opus-4-6"
 LINK_SUMMARY_MODEL = "claude-sonnet-4-6"
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_SUMMARY_MODEL = "gemini-3-flash"
@@ -39,11 +35,7 @@ GEMINI_SUMMARY_MODEL = "gemini-3-flash"
 # Source: https://platform.claude.com/docs/en/about-claude/pricing
 # (verified 2026-05). Cache-write 5m = 1.25× base input; cache-read = 0.1× base
 # input; we list them out explicitly so call sites don't have to multiply.
-# Opus 4.7 uses a new tokenizer that may consume up to 35% more tokens for the
-# same text — same per-token price, but effective cost vs 4.6 can shift; the
-# cost summary shows tok/char to quantify this.
 MODEL_PRICES: dict[str, dict[str, float]] = {
-    "claude-opus-4-7":   {"input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50},
     "claude-opus-4-6":   {"input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50},
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cache_write_5m": 3.75, "cache_read": 0.30},
     "claude-haiku-4-5":  {"input": 1.00, "output":  5.00, "cache_write_5m": 1.25, "cache_read": 0.10},
