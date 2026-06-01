@@ -458,15 +458,16 @@ def leak_check(
 
 
 # Regions that ``mark_leaks`` must not touch:
-#   <u>…</u>          — already token-resolved real names; marking them again
-#                       would double-wrap every legit reference.
+#   <span class="mention">…</span>
+#                     — already token-resolved real names (the @mention pill);
+#                       marking them again double-wraps every legit reference.
 #   ](url)            — markdown link target; inserting <mark> inside breaks
 #                       the URL (saw ``wei<mark>xin.</mark>qq.com`` in 05-02).
 #   `inline code`     — code spans with identifier-shaped contents (e.g.
 #                       ``config``) collide with English nicknames.
 #   <https://…>       — autolinks; same URL-corruption concern as above.
 _PROTECT_RE = re.compile(
-    r'<u>[^<]*</u>'
+    r'<span class="mention">[^<]*</span>'
     r'|\]\([^)]*\)'
     r'|`[^`\n]+`'
     r'|<https?://[^>\s]+>'

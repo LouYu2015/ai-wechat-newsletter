@@ -428,6 +428,17 @@ def _annotate_hidden_for_group(markdown: str) -> str:
 
 # ── Token replacement ───────────────────────────────────────────────────────────
 
+def _mention(name: str) -> str:
+    """Wrap a resolved nickname as a Slack-style ``@`` mention pill.
+
+    Every render target styles the ``mention`` class (PDF CSS in ``pdf.py``,
+    preview HTML in ``publisher.preview``, public site in the Chirpy theme's
+    ``custom.scss``). ``privacy._PROTECT_RE`` also keys off this exact markup
+    to skip already-resolved names during leak marking — keep the two in sync.
+    """
+    return f'<span class="mention">@{name}</span>'
+
+
 def _build_token_replacer(
     alias_db: "AliasDB",
     resolve_fn: Callable[[str], str],
@@ -499,11 +510,11 @@ def render_group(
         wxid = (token_map.wxid(token) if token_map else None) \
                or alias_db.wxid_of_token(token)
         if not wxid:
-            return f"<u>{token}</u>"
+            return _mention(token)
         real = contact_map.by_wxid(wxid)
         if real == wxid:
             real = alias_db.real_name_seen(wxid) or wxid
-        return f"<u>{real}</u>"
+        return _mention(real)
 
     extra = token_map.all_tokens() if token_map else None
     text_resolver = _build_token_replacer(alias_db, token_to_real, extra)
@@ -548,7 +559,7 @@ def _render_command_log(
             if real_name == wxid:
                 real_name = alias_db.real_name_seen(wxid) or wxid
             ok_mark = "✓" if entry['ok'] else "✗"
-            lines.append(f"- {ts_str}  <u>{real_name}</u>：{entry['msg']}  {ok_mark}")
+            lines.append(f"- {ts_str}  {_mention(real_name)}：{entry['msg']}  {ok_mark}")
     else:
         lines.append("- （今日无指令）")
 
@@ -586,10 +597,10 @@ def render_public(
         wxid = (token_map.wxid(token) if token_map else None) \
                or alias_db.wxid_of_token(token)
         if not wxid:
-            return f"<u>{token}</u>"
+            return _mention(token)
         if alias_db.is_optout(wxid):
-            return "<u>某群友</u>"
-        return f"<u>{alias_db.public_name_of(wxid)}</u>"
+            return _mention("某群友")
+        return _mention(alias_db.public_name_of(wxid))
 
     extra = token_map.all_tokens() if token_map else None
     text_resolver = _build_token_replacer(alias_db, token_to_public, extra)

@@ -69,6 +69,9 @@ def _get_pdf_css() -> str:
     hr { border: none; border-top: 1pt solid #ddd; margin: 14pt 0; }
     a { color: #1a56db; text-decoration: none; }
 
+    .mention { color: #1a56db; border: 1pt solid #1a56db; border-radius: 0.25em;
+               padding: 0 0.3em; text-decoration: none; white-space: nowrap; }
+
     .toc { background: #f0f5ff; border: 1pt solid #93c5fd; border-radius: 6pt;
            padding: 14pt 20pt; margin: 16pt 0 24pt 0; }
     .toc ul { margin: 4pt 0; padding-left: 20pt; }

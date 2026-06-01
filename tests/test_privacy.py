@@ -439,11 +439,11 @@ def test_mark_leaks_ascii_word_match_still_wraps():
     assert f"{LEAK_MARK_OPEN}team{LEAK_MARK_CLOSE}" in out
 
 
-def test_mark_leaks_skips_u_tag_region():
-    """Token-resolved real names live inside ``<u>…</u>`` after ``text_resolver``.
-    Marking them again would double-wrap every legitimate reference."""
+def test_mark_leaks_skips_mention_region():
+    """Token-resolved real names live inside the ``mention`` pill after
+    ``text_resolver``. Marking them again would double-wrap every legit ref."""
     contacts = _contact_map({"wxid_a": "AliceLong"})
-    out = mark_leaks("<u>AliceLong</u> 说话", contacts)
+    out = mark_leaks('<span class="mention">@AliceLong</span> 说话', contacts)
     assert LEAK_MARK_OPEN not in out
 
 
