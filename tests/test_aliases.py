@@ -160,6 +160,24 @@ def test_alias_too_long():
     assert not ok
 
 
+def test_alias_width_limit():
+    # Width ceiling: 6 汉字 == 12 英文字符. CJK counts 2, ASCII counts 1.
+    db = _make_db()
+    db.get_or_create_user("wxid_a")
+
+    # 12 ASCII → OK; 13 ASCII → rejected.
+    assert db.apply_command("wxid_a", "/alias " + "A" * 12, 1000)[0]
+    assert not db.apply_command("wxid_a", "/alias " + "A" * 13, 1100)[0]
+
+    # 6 汉字 → OK; 7 汉字 → rejected.
+    assert db.apply_command("wxid_a", "/alias 一二三四五六", 1200)[0]
+    assert not db.apply_command("wxid_a", "/alias 一二三四五六七", 1300)[0]
+
+    # Mixed: 5 汉字 (10) + 2 ASCII (2) = 12 → OK; +1 more → rejected.
+    assert db.apply_command("wxid_a", "/alias 一二三四五ab", 1400)[0]
+    assert not db.apply_command("wxid_a", "/alias 一二三四五abc", 1500)[0]
+
+
 def test_alias_reserved_word():
     db = _make_db()
     db.get_or_create_user("wxid_a")

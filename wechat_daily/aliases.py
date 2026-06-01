@@ -70,8 +70,30 @@ _ALIAS_RE = re.compile(
     r'\u30a0-\u30ff'      # Katakana
     r'\uac00-\ud7af'      # Hangul syllables
     r'a-zA-Z0-9_\-·'
-    r']{1,16}$'
+    r']+$'
 )
+
+# Max display width: a 汉字 counts as 2, an ASCII/narrow char as 1.
+# So 6 汉字 == 12 英文字符 share one ceiling.
+_ALIAS_MAX_WIDTH = 12
+
+# Characters counted as double-width (CJK / kana / hangul). Mirrors the wide
+# ranges in _ALIAS_RE; everything else in the whitelist is single-width.
+_WIDE_RE = re.compile(
+    r'['
+    r'一-鿿'
+    r'㐀-䶿'
+    r'豈-﫿'
+    r'぀-ゟ'
+    r'゠-ヿ'
+    r'가-힯'
+    r']'
+)
+
+
+def _alias_width(alias: str) -> int:
+    """Display width: wide (CJK/kana/hangul) chars count 2, others count 1."""
+    return sum(2 if _WIDE_RE.match(c) else 1 for c in alias)
 
 
 # ── Default anon derivation ─────────────────────────────────────────────────────
@@ -320,7 +342,9 @@ class AliasDB:
         """Return error message if alias is invalid, else None."""
         # alias must already be NFC-normalized by caller
         if not _ALIAS_RE.match(alias):
-            return "别名格式不合法（仅支持中英文/数字/_ /- /·，长度 1–16）"
+            return "别名格式不合法（仅支持中英文/数字/_ /- /·）"
+        if _alias_width(alias) > _ALIAS_MAX_WIDTH:
+            return "别名过长（最多 6 个汉字或 12 个英文字符）"
         if alias.lower() in RESERVED_ALIASES or alias in RESERVED_ALIASES:
             return f"别名「{alias}」是保留词，不可使用"
         if self._is_default_anon(alias):
