@@ -137,8 +137,8 @@ def preview(date_str: str, markdown: str, open_browser: bool = True) -> Path:
   blockquote {{ background: #f0f5ff; border-left: 4px solid #93c5fd; padding: 8px 16px; }}
   code {{ background: #f0f0f0; padding: 2px 4px; border-radius: 3px; }}
   pre code {{ display: block; padding: 12px; overflow-x: auto; }}
-  .mention {{ color: #1a56db; border: 1px solid #1a56db; border-radius: 4px;
-              padding: 0 5px; text-decoration: none; white-space: nowrap; }}
+  .mention {{ color: #1a56db; font-weight: 600; text-decoration: none;
+              white-space: nowrap; }}
 </style>
 </head>
 <body>
