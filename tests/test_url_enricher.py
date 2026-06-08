@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 
+from wechat_daily.config import LINK_SUMMARY_MODEL
 from wechat_daily.message_parser import LinkMeta, Message, MSG_LINK_OPEN, MSG_TEXT
 from wechat_daily.url_enricher import enrich_link_messages, fetch_url_text
 
@@ -190,7 +191,9 @@ def test_enrich_summarizes_fetched_text():
     assert stats.summarized == 1
     assert msg.link_context == "摘要结果"
     call = anthropic.messages.calls[0]
-    assert call["model"] == "claude-sonnet-4-6"
+    # An injected client is always honored (the Anthropic fallback path); the
+    # model passed through is whatever LINK_SUMMARY_MODEL is configured to.
+    assert call["model"] == LINK_SUMMARY_MODEL
     assert "thinking" not in call
 
 
@@ -516,3 +519,36 @@ def test_enrich_appends_multiple_inline_link_contexts():
 
     assert msg.link_context == "摘要\n摘要"
     assert client.urls == [url1, url2]
+
+
+def test_enrich_routes_to_deepseek_when_no_client(monkeypatch):
+    """With LINK_SUMMARY_MODEL=deepseek-* and no injected client, summaries go
+    through deepseek_client.stream_chat (thinking disabled), not Anthropic."""
+    import wechat_daily.url_enricher as ue
+    import wechat_daily.config as cfg
+
+    monkeypatch.setattr(ue, "LINK_SUMMARY_MODEL", "deepseek-v4-pro")
+    monkeypatch.setattr(cfg, "get_deepseek_key", lambda: "fake-key")
+
+    calls: list[dict] = []
+
+    def fake_stream_chat(**kwargs):
+        calls.append(kwargs)
+        # (content, reasoning, usage, finish_reason)
+        return "DS 摘要", "", {"prompt_tokens": 10, "completion_tokens": 5}, "stop"
+
+    import wechat_daily.deepseek_client as dc
+    monkeypatch.setattr(dc, "stream_chat", fake_stream_chat)
+
+    url = "https://example.com/a"
+    html = "<article><p>" + ("正文 " * 500) + "</p></article>"
+    msg = _link_msg(url=url)
+    client = FakeHTTP({url: (html, "text/html")})
+
+    stats = enrich_link_messages([msg], api_key="ignored", http_client=client)
+
+    assert stats.summarized == 1
+    assert msg.link_context == "DS 摘要"
+    assert len(calls) == 1
+    assert calls[0]["model"] == "deepseek-v4-pro"
+    assert calls[0]["thinking"] is False

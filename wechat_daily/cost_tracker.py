@@ -49,6 +49,24 @@ def usage_to_dict(usage: Any) -> dict[str, int]:
         src = usage
     else:
         src = {k: getattr(usage, k, None) for k in _USAGE_FIELDS}
+
+    # DeepSeek (OpenAI-compatible) usage → Anthropic-shaped fields. Its dict has
+    # prompt_tokens / completion_tokens / prompt_cache_{hit,miss}_tokens (and
+    # nested *_details dicts we must not int()). completion_tokens already
+    # includes reasoning tokens, matching how adaptive-thinking rolls into
+    # output_tokens. Handle this before the generic int() coercion below.
+    if "prompt_tokens" in src or "completion_tokens" in src:
+        hit = int(src.get("prompt_cache_hit_tokens") or 0)
+        miss = src.get("prompt_cache_miss_tokens")
+        if miss is None:
+            miss = int(src.get("prompt_tokens") or 0) - hit
+        return {
+            "input_tokens": max(0, int(miss)),
+            "output_tokens": int(src.get("completion_tokens") or 0),
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": hit,
+        }
+
     return {k: int(v) for k, v in src.items() if v is not None}
 
 

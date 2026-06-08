@@ -484,13 +484,6 @@ def summarize_text(
     """
     import time
 
-    if client is None:
-        import anthropic
-        client = anthropic.Anthropic(
-            api_key=api_key,
-            timeout=httpx.Timeout(120.0, connect=15.0),
-        )
-
     webpage_block = _build_webpage_block(
         title=title,
         url=url,
@@ -505,6 +498,20 @@ def summarize_text(
         )
     else:
         prompt = _SUMMARY_PROMPT_NO_CONTEXT.format(webpage_block=webpage_block)
+
+    # DeepSeek backend (current AB-test config): no Anthropic SDK, thinking off
+    # for summaries. The Anthropic path below is kept as a fallback in case
+    # LINK_SUMMARY_MODEL is pointed back at a Claude model.
+    if LINK_SUMMARY_MODEL.startswith("deepseek") and client is None:
+        return _summarize_deepseek(prompt, delta_cb)
+
+    if client is None:
+        import anthropic
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            timeout=httpx.Timeout(120.0, connect=15.0),
+        )
+
     parts: list[str] = []
     usage = None
     t0 = time.perf_counter()
@@ -530,6 +537,39 @@ def summarize_text(
             usage = None
     duration_s = time.perf_counter() - t0
     return _clean_text("".join(parts)), usage, duration_s, len(prompt)
+
+
+def _summarize_deepseek(
+    prompt: str,
+    delta_cb: Callable[[str], None] | None,
+) -> tuple[str, object, float, int]:
+    """Link-summary via DeepSeek (OpenAI-compatible), thinking disabled.
+
+    Same return contract as :func:`summarize_text`. Raises ``RuntimeError``
+    if the key is missing — :func:`enrich_link_messages` catches summary
+    failures and falls back to raw-concat context.
+    """
+    import time
+
+    from . import deepseek_client
+    from .config import get_deepseek_key
+
+    key = get_deepseek_key()
+    if not key:
+        raise RuntimeError("缺少 DEEPSEEK_API_KEY，无法生成链接摘要")
+
+    t0 = time.perf_counter()
+    content, _reasoning, usage, _finish = deepseek_client.stream_chat(
+        api_key=key,
+        model=LINK_SUMMARY_MODEL,
+        system="你是一个网页内容摘要器。直接输出摘要正文。",
+        user=prompt,
+        thinking=False,
+        max_tokens=2500,
+        content_cb=delta_cb,
+    )
+    duration_s = time.perf_counter() - t0
+    return _clean_text(content), usage, duration_s, len(prompt)
 
 
 def _fetch_tweet(url: str, client: httpx.Client) -> str:

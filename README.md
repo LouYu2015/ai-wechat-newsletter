@@ -6,6 +6,8 @@
 
 - **双版本产出**：群内版保留真实昵称，公开版经过三级隐私处理后发布到 GitHub Pages
 - **Markdown 提取**：用 Claude Opus 从聊天记录中流式生成 Markdown 日报；公开/内部版本通过后期处理分流
+- **模型 AB 对比**：主版本（Opus 4.6，发布 + 喂次日续写）跑完后，再用 DeepSeek V4 Pro 旁路生成一份对比日报（仅本地 PDF/debug，不发布、不喂续写），便于并排比质量与成本
+- **链接摘要**：用 DeepSeek V4 Pro（关 thinking）抓取并摘要群内分享的链接，作为 `[网页摘要]` 喂给报告生成；两版日报共用同一批摘要
 - **三级隐私模型**：`/optout`（不出现）/ 默认匿名（稳定派生）/ `/alias`（自定义公开别名）
 - **泄漏检测**：公开版发布前，用 Claude Haiku 二次确认真实昵称是否为人名引用
 - **7 天滚动归档**：超过 7 天的 PDF 自动整理到 `archive/YYYY/MM/` 子目录
@@ -14,8 +16,13 @@
 
 - Python 3.11+
 - `chatlog-mac/keys.json`（微信数据库解密密钥，不随代码发布）
+- 系统级 CLI 依赖（非 pip 包）：
+  - `zstd` —— 解压消息内容（`message_parser.decompress`），**必需**
+  - `ffmpeg` —— 解码 wxgf/HEVC 格式图片首帧，仅图片解码时需要
 
 ```bash
+brew install zstd ffmpeg     # macOS
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -27,7 +34,8 @@ pip install -r requirements.txt
 
 ```
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
-GEMINI_API_KEY=your_gemini_api_key_here   # 仅 --summary gemini 时需要
+DEEPSEEK_API_KEY=your_deepseek_api_key_here   # claude 路径需要（链接摘要 + 对比版日报）
+GEMINI_API_KEY=your_gemini_api_key_here       # 仅 --summary gemini 时需要
 ```
 
 ## 配置目标群聊
@@ -80,13 +88,16 @@ python3 main.py --summary gemini
 
 | 路径 | 说明 |
 |------|------|
-| `archive/YYYY-MM-DD 群聊日报.pdf` | 群内版 PDF（真实昵称） |
-| `debug/YYYY-MM-DD.md` | 群内版 Markdown 原文 |
-| `debug/extract-YYYY-MM-DD.{md,input.txt,thinking.md}` | 原始 Markdown 日报（用作下日续写素材）+ 输入快照 + thinking 摘要 |
-| `debug/costs.jsonl` | 每次 Anthropic 调用的 token 用量 + 价格估算（JSON Lines） |
+| `archive/YYYY-MM-DD 群聊日报.pdf` | 主版本（Opus 4.6）群内版 PDF（真实昵称） |
+| `debug/YYYY-MM-DD.md` | 主版本群内版 Markdown 原文 |
+| `debug/extract-YYYY-MM-DD.{md,input.txt,thinking.md}` | 主版本原始 Markdown 日报（用作下日续写素材）+ 输入快照 + thinking 摘要 |
+| `archive/YYYY-MM-DD 群聊日报 (deepseek-v4-pro).pdf` | **对比版**（DeepSeek V4 Pro）群内版 PDF（仅本地，不发布、不喂续写） |
+| `debug/YYYY-MM-DD.deepseek-v4-pro.md` | 对比版群内版 Markdown 原文 |
+| `debug/extract-YYYY-MM-DD.deepseek-v4-pro.{md,input.txt,thinking.md}` | 对比版原始 Markdown + 输入快照 + reasoning |
+| `debug/costs.jsonl` | 每次模型调用的 token 用量 + 价格估算（JSON Lines） |
 | `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
 
-每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表。
+每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表，阶段含 `link`（DeepSeek 链接摘要）/ `extract`（Opus 4.6 主版本）/ `extract-compare`（DeepSeek V4 Pro 对比版），可直接并排比成本。对比版生成失败不影响主版本（主版本已先发布）。
 
 ## 测试
 
@@ -133,7 +144,23 @@ python3 -m scripts.rebuild_aliases
 
 # 把 aliases.json 升到新 token 格式（一次性迁移，按需运行）
 python3 -m scripts.migrate_token_format
+
+# 查询群聊记录（匿名化纯文本，可选解码图片）
+python3 scripts/query_chatlog.py --since 2026-06-01 --until 2026-06-05
+python3 scripts/query_chatlog.py --keyword 显卡 --context 2 --limit 50
+python3 scripts/query_chatlog.py --since "2026-06-04 18:00" --decode-images
 ```
+
+`query_chatlog.py` 用与日报相同的匿名机制输出纯文本（发送者及正文 @提及均替换为匿名别名，optout 用户隐藏）。参数：
+
+| 参数 | 说明 |
+|------|------|
+| `--since` / `--until` | 时间范围，`YYYY-MM-DD` 或 `'YYYY-MM-DD HH:MM'`；`--until` 给日期含当天；均可选 |
+| `--keyword` | 正文/引用子串匹配（大小写不敏感），跑在匿名化之前的原文上 |
+| `--context N` | 关键词命中时附带前后各 N 条（默认 0） |
+| `--limit N` | 数量上限，取最新 N 条（默认 20；0 表示不限） |
+| `--decode-images` | 解码图片到临时目录，文本中嵌入图片路径 |
+| `--image-dir DIR` | 指定图片输出目录（默认自动建临时目录），隐含 `--decode-images` |
 
 ## 项目结构
 
@@ -147,12 +174,13 @@ wechat_daily/
 ├── message_parser.py    # 消息解析
 ├── image_decoder.py     # 图片附件解码（dat → 原图）
 ├── chat_extractor.py    # 按日期提取消息
-├── url_enricher.py      # 链接卡片抓取与摘要（喂给 LLM 的 [网页摘要] 来源）
+├── url_enricher.py      # 链接卡片抓取与摘要（DeepSeek 摘要，喂给 LLM 的 [网页摘要] 来源）
+├── deepseek_client.py   # DeepSeek（OpenAI 兼容）流式客户端：链接摘要 + 对比版日报
 ├── aliases.py           # 别名数据库、指令扫描、备份
 ├── privacy.py           # token 化（惰性分配）、optout 遮蔽、泄漏检测
 ├── roster.py            # token → 真实昵称变体花名册（喂给 LLM 解代称）
 ├── prior_report.py      # 历史日报加载（跨日续写 / 去重的 <previous_reports> 素材）
-├── llm_extractor.py     # Claude 流式 Markdown 生成
+├── llm_extractor.py     # 流式 Markdown 生成（Claude 主版本 + DeepSeek 对比版）
 ├── renderer.py          # Markdown 后期处理：标记剥离、token 替换、群内版 / 公开版渲染
 ├── pdf.py               # Markdown → PDF
 ├── archiver.py          # 7 天滚动归档

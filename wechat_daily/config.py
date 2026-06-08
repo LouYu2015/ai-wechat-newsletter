@@ -26,8 +26,12 @@ GROUP_CHAT_ID = "26389512912@chatroom"
 GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 
 # ── Models ──────────────────────────────────────────────────────────────────────
-CLAUDE_MODEL = "claude-opus-4-6"
-LINK_SUMMARY_MODEL = "claude-sonnet-4-6"
+# AB test: 报告生成对比 Opus 4.6（主版本，发布 + 喂续写）vs DeepSeek V4 Pro
+# （旁路，仅本地 PDF/debug）。链接摘要统一改用 DeepSeek V4 Pro（关 thinking），
+# 两版日报共用同一批摘要，把唯一变量收敛到报告生成模型上。
+CLAUDE_MODEL = "claude-opus-4-6"            # 主版本报告生成（发布）
+DEEPSEEK_REPORT_MODEL = "deepseek-v4-pro"   # 对比版报告生成（旁路，不发布）
+LINK_SUMMARY_MODEL = "deepseek-v4-pro"      # 链接摘要（thinking off）
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_SUMMARY_MODEL = "gemini-3-flash"
 
@@ -39,6 +43,11 @@ MODEL_PRICES: dict[str, dict[str, float]] = {
     "claude-opus-4-6":   {"input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50},
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cache_write_5m": 3.75, "cache_read": 0.30},
     "claude-haiku-4-5":  {"input": 1.00, "output":  5.00, "cache_write_5m": 1.25, "cache_read": 0.10},
+    # DeepSeek 官方价（https://api-docs.deepseek.com/quick_start/pricing）：
+    # 输入 cache-miss $0.435/M、cache-hit $0.0036/M、输出 $0.87/M。DeepSeek 缓存
+    # 写入按普通输入计费（无单独 write 价），故 cache_write_5m 取 = input。
+    # usage 归一在 cost_tracker.usage_to_dict：miss→input、hit→cache_read。
+    "deepseek-v4-pro":   {"input": 0.435, "output": 0.87, "cache_write_5m": 0.435, "cache_read": 0.003625},
 }
 
 # ── Alias / Privacy ─────────────────────────────────────────────────────────────
@@ -66,3 +75,8 @@ def get_anthropic_key() -> str:
 def get_gemini_key() -> str:
     load_env()
     return os.getenv("GEMINI_API_KEY", "")
+
+
+def get_deepseek_key() -> str:
+    load_env()
+    return os.getenv("DEEPSEEK_API_KEY", "")

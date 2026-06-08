@@ -22,11 +22,15 @@ from .aliases import AliasDB
 from .archiver import archive_old_files, get_pdf_path
 from .chat_extractor import extract_messages, find_missing_dates
 from .config import (
-    CLAUDE_MODEL, DEBUG_DIR, GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL, PROJECT_ROOT,
+    ARCHIVE_DIR, CLAUDE_MODEL, DEBUG_DIR, DEEPSEEK_REPORT_MODEL,
+    GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL, PROJECT_ROOT, get_deepseek_key,
 )
 from .contacts import ContactMap
 from . import cost_tracker
-from .llm_extractor import ExtractionError, extract_report, generate_markdown_with_gemini
+from .llm_extractor import (
+    ExtractionError, extract_report, extract_report_deepseek,
+    generate_markdown_with_gemini,
+)
 from .pdf import convert_to_pdf
 from .message_parser import MSG_TAP, MSG_SYSTEM
 from .prior_report import (
@@ -98,6 +102,32 @@ def _ensure_api_keys(need_anthropic: bool) -> tuple[str, str]:
         console.print("[green]API Keys 已保存到 .env[/green]")
 
     return gemini_key, anthropic_key
+
+
+def _ensure_deepseek_key() -> str:
+    """Ensure DEEPSEEK_API_KEY is in the environment (link summaries + compare
+    report both need it); prompt and persist to .env if missing."""
+    env_path = PROJECT_ROOT / ".env"
+    load_dotenv(env_path)
+    key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    if key:
+        return key
+
+    console.print(
+        "[yellow]需要 DeepSeek API Key（链接摘要 + 对比版日报，将保存到 .env）[/yellow]"
+    )
+    key = console.input("[bold]请输入 DEEPSEEK_API_KEY: [/bold]").strip()
+    if key:
+        existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+        lines = [
+            line for line in existing.splitlines()
+            if not line.startswith("DEEPSEEK_API_KEY=")
+        ]
+        lines.append(f"DEEPSEEK_API_KEY={key}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.environ["DEEPSEEK_API_KEY"] = key
+        console.print("[green]DEEPSEEK_API_KEY 已保存到 .env[/green]")
+    return key
 
 
 # ── Single-date pipeline (Claude structured path) ───────────────────────────────
@@ -477,6 +507,25 @@ def _run_db_pipeline(
     console.print(f"[green]群内版:[/green] [cyan]{pdf_path}[/cyan]")
     console.print(f"[green]Markdown:[/green] [dim]{md_path}[/dim]\n")
 
+    # ── D2: DeepSeek 对比提取（旁路，仅本地，不发布、不喂续写）────────────────
+    # 放在主版本群内版渲染之后、公开版/泄漏检测之前：只要主版本本身生成成功就
+    # 产出对比版，不受公开版泄漏检测早退的影响。失败不致命。
+    if get_deepseek_key():
+        _run_compare_extraction_deepseek(
+            date_str=date_str,
+            chat_history=chat_history,
+            roster_text=roster_text,
+            prior_reports=prior_reports,
+            prior_report_titles=prior_report_titles,
+            alias_db=alias_db,
+            contact_map=contact_map,
+            token_map=token_map,
+            target_date=target_date,
+            cost_records=cost_records,
+        )
+    else:
+        console.print("[yellow]未配置 DEEPSEEK_API_KEY，跳过 DeepSeek 对比版。[/yellow]\n")
+
     # ── E: Render public version + leak check ───────────────────────────────
     console.rule("[bold]渲染公开版 + 泄漏检测")
     public_md = render_public(report, alias_db, token_map=token_map)
@@ -507,6 +556,186 @@ def _run_db_pipeline(
         "\n[dim]公开版已本地 commit（未推送）。"
         "下次运行带 -y 可推送到 GitHub，GitHub Pages 将自动构建。[/dim]"
     )
+
+
+_COMPARE_DEBUG_SUFFIX = ".deepseek-v4-pro"
+
+
+def _run_compare_extraction_deepseek(
+    *,
+    date_str: str,
+    chat_history: str,
+    roster_text: str,
+    prior_reports: list[tuple[str, str]],
+    prior_report_titles: list[tuple[str, str]],
+    alias_db: AliasDB,
+    contact_map: ContactMap,
+    token_map: dict,
+    target_date,
+    cost_records: list[cost_tracker.CostRecord] | None,
+) -> None:
+    """Second-pass report generation with DeepSeek V4 Pro (AB-test compare).
+
+    Writes debug sidecars with ``.deepseek-v4-pro`` suffix and a PDF named
+    ``{date} 群聊日报 (deepseek-v4-pro).pdf``. Never feeds back into next-day
+    continuity (which reads the un-suffixed ``debug/extract-{date}.md``) and
+    never touches the public repo. Any failure prints a warning and returns
+    silently — the canonical Opus 4.6 run has already shipped.
+    """
+    import time as _time
+
+    console.rule(
+        f"[bold]对比提取  [dim]({DEEPSEEK_REPORT_MODEL}) — 仅本地，不发布[/dim]"
+    )
+
+    headers: list[Text] = []
+    thinking_lines: deque[str] = deque(maxlen=8)
+    body_lines: deque[str] = deque(maxlen=8)
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold magenta]DeepSeek 对比生成..."),
+        TextColumn("[dim]{task.description}[/dim]"),
+        TimeElapsedColumn(),
+        console=console,
+    )
+    task = progress.add_task("连接中...", total=None)
+    state = {"text": 0, "thinking": 0, "thinking_partial": "", "body_partial": ""}
+
+    def _tail(lines: deque[str], partial: str, n: int, style: str) -> list[Text]:
+        visible = list(lines)
+        if partial:
+            visible.append(partial)
+        width = max(1, console.width)
+        rows: list[Text] = []
+        for s in visible:
+            rows.extend(Text(s, style=style).wrap(console, width))
+        return rows[-n:]
+
+    def render() -> Group:
+        parts: list = list(headers)
+        th = _tail(thinking_lines, state["thinking_partial"], 8, "dim italic")
+        bd = _tail(body_lines, state["body_partial"], 8, "")
+        if th:
+            parts.append(Text("─ thinking ─", style="dim cyan"))
+            parts.extend(th)
+        if bd:
+            parts.append(Text("─ 正文 ─", style="magenta"))
+            parts.extend(bd)
+        parts.append(progress)
+        return Group(*parts)
+
+    with Live(render(), console=console, refresh_per_second=10, transient=False) as live:
+        def refresh() -> None:
+            live.update(render())
+
+        def _update_progress(attempt: int) -> None:
+            label = f" (第 {attempt}/3 次)" if attempt > 1 else ""
+            phase = "思考中" if state["text"] == 0 and state["thinking"] > 0 else "已接收"
+            progress.update(
+                task,
+                description=(
+                    f"{phase} 正文 {state['text']:,} 字节 / "
+                    f"thinking {state['thinking']:,} 字节{label}"
+                ),
+            )
+            refresh()
+
+        def progress_cb(received: int, attempt: int) -> None:
+            state["text"] = received
+            _update_progress(attempt)
+
+        def thinking_cb(received: int, attempt: int) -> None:
+            state["thinking"] = received
+            _update_progress(attempt)
+
+        def text_cb(kind: str, delta: str, attempt: int) -> None:
+            key = "thinking_partial" if kind == "thinking" else "body_partial"
+            target = thinking_lines if kind == "thinking" else body_lines
+            combined = state[key] + delta
+            if "\n" in combined:
+                *complete, remainder = combined.split("\n")
+                for line in complete:
+                    target.append(line)
+                state[key] = remainder
+            else:
+                state[key] = combined
+            refresh()
+
+        def header_cb(_kind: str, level: int, title: str, _attempt: int) -> None:
+            headers.append(Text(f"{'  ' * level}{title}", style="bold"))
+            refresh()
+
+        def attempt_cb(attempt: int) -> None:
+            headers.append(Text(f"--- 第 {attempt}/3 次重试 ---", style="yellow"))
+            thinking_lines.clear()
+            body_lines.clear()
+            state["thinking_partial"] = ""
+            state["body_partial"] = ""
+            refresh()
+
+        t_start = _time.perf_counter()
+
+        def _usage_cb(usage, input_chars: int) -> None:
+            record = cost_tracker.log_call(
+                date=date_str, stage="extract-compare", model=DEEPSEEK_REPORT_MODEL,
+                usage=usage,
+                duration_s=_time.perf_counter() - t_start,
+                input_chars=input_chars,
+            )
+            if cost_records is not None:
+                cost_records.append(record)
+
+        try:
+            compare_report = extract_report_deepseek(
+                date_str, chat_history,
+                model=DEEPSEEK_REPORT_MODEL,
+                debug_suffix=_COMPARE_DEBUG_SUFFIX,
+                roster_text=roster_text or None,
+                prior_reports=prior_reports or None,
+                prior_report_titles=prior_report_titles or None,
+                progress_cb=progress_cb,
+                thinking_cb=thinking_cb,
+                header_cb=header_cb,
+                attempt_cb=attempt_cb,
+                text_cb=text_cb,
+                usage_cb=_usage_cb,
+            )
+        except ExtractionError as e:
+            console.print(f"[yellow]DeepSeek 对比生成失败，跳过：{e}[/yellow]\n")
+            return
+        except Exception as e:
+            console.print(f"[yellow]DeepSeek 对比生成异常，跳过：{e}[/yellow]\n")
+            return
+
+    # Render group version for compare (no public path, no leak check).
+    day_log = [
+        e for e in alias_db.command_log()
+        if datetime.fromtimestamp(e['ts']).date() == target_date
+    ]
+    compare_group_md = render_group(
+        compare_report, alias_db, contact_map, day_log, token_map=token_map,
+    )
+
+    md_path = DEBUG_DIR / f"{date_str}{_COMPARE_DEBUG_SUFFIX}.md"
+    md_path.write_text(compare_group_md, encoding="utf-8")
+
+    ARCHIVE_DIR.mkdir(exist_ok=True)
+    # Always exactly one "(deepseek-v4-pro)" file per date, overwriting stale
+    # ones on re-runs (matching how the canonical path overwrites debug/{date}.md).
+    compare_pdf_path = ARCHIVE_DIR / f"{date_str} 群聊日报 (deepseek-v4-pro).pdf"
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold magenta]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task("DeepSeek Markdown → PDF...", total=None)
+        convert_to_pdf(compare_group_md, compare_pdf_path)
+        progress.update(task, description=f"PDF 已保存: {compare_pdf_path.name}")
+
+    console.print(f"[magenta]DeepSeek 对比版:[/magenta] [cyan]{compare_pdf_path}[/cyan]")
+    console.print(f"[magenta]DeepSeek Markdown:[/magenta] [dim]{md_path}[/dim]\n")
 
 
 def _save_leak_debug(date_str: str, error: str, public_md: str) -> None:
@@ -618,6 +847,10 @@ def main() -> None:
         # Step 1: API keys
         console.rule("[bold]Step 1  API Key 配置")
         gemini_key, anthropic_key = _ensure_api_keys(need_anthropic=(args.summary == "claude"))
+        # Claude path now depends on DeepSeek for link summaries + the compare
+        # report; make sure the key is present before generation starts.
+        if args.summary == "claude":
+            _ensure_deepseek_key()
         console.print("[green]API Keys 就绪[/green]\n")
 
         # Step 2: Push PREVIOUS run's pending commits (-y semantics per §7.6)

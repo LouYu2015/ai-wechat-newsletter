@@ -261,6 +261,64 @@ def _default_client(api_key: str):
     )
 
 
+def _build_extract_user_content(
+    *,
+    date_str: str,
+    tokenized_chat: str,
+    roster_text: str | None,
+    chat_blocks: list[dict] | None,
+    prior_reports: list[tuple[str, str]] | None,
+    prior_report_titles: list[tuple[str, str]] | None,
+) -> tuple[str | list[dict], str]:
+    """Assemble the extraction user message; shared by the Claude and DeepSeek
+    backends so the only difference between the two report versions is the model.
+
+    Long input first (best practice for multi-doc prompts): roster →
+    previous_report_titles → previous_reports → chat_log are wrapped in XML tags
+    at the top; processing rules / audience profile / 导读 requirements follow the
+    chat log so the model reads them with the data fresh. Title-only block goes
+    before full-body block (it covers the older days) so the model scans
+    "old → new".
+
+    Returns ``(user_content, debug_text)``. *user_content* is a block list when
+    *chat_blocks* is given (Claude path, with inline images), else a flat string
+    (DeepSeek path — text only, images appear as ``[图片]`` placeholders).
+    *debug_text* is always the flat string used for the debug sidecar.
+    """
+    from .prior_report import (
+        format_prior_report_titles_block,
+        format_prior_reports_block,
+    )
+
+    parts: list[str] = []
+    if roster_text:
+        parts.append(f"<group_roster>\n{roster_text}\n</group_roster>\n\n")
+    if prior_report_titles:
+        parts.append(format_prior_report_titles_block(prior_report_titles) + "\n")
+    if prior_reports:
+        parts.append(format_prior_reports_block(prior_reports) + "\n")
+    parts.append(f'<chat_log date="{date_str}">\n')
+    prefix = "".join(parts)
+    suffix = "\n</chat_log>\n\n---\n\n" + _USER_INSTRUCTIONS.format(date_str=date_str)
+
+    if chat_blocks is not None:
+        user_content: str | list[dict] = [
+            {"type": "text", "text": prefix},
+            *chat_blocks,
+            {"type": "text", "text": suffix},
+        ]
+        debug_text = (
+            prefix
+            + "".join(b["text"] for b in chat_blocks if b.get("type") == "text")
+            + suffix
+        )
+    else:
+        user_content = prefix + tokenized_chat + suffix
+        debug_text = user_content
+
+    return user_content, debug_text
+
+
 def extract_report(
     date_str: str,
     tokenized_chat: str,
@@ -312,51 +370,14 @@ def extract_report(
     if client is None:
         client = _default_client(api_key)
 
-    # Long input first (Anthropic best practice for multi-doc prompts):
-    # roster → previous_report_titles → previous_reports → chat_log are
-    # wrapped in XML tags at the top of the user message; processing rules /
-    # audience profile / 导读 requirements follow the chat log so the model
-    # reads them with the data fresh.
-    #
-    # Title-only block goes before full-body block: it covers the older days
-    # (e.g. 4–7 back), so the model reads "old → new" as it scans down.
-    from .prior_report import (
-        format_prior_report_titles_block,
-        format_prior_reports_block,
+    user_content, debug_text = _build_extract_user_content(
+        date_str=date_str,
+        tokenized_chat=tokenized_chat,
+        roster_text=roster_text,
+        chat_blocks=chat_blocks,
+        prior_reports=prior_reports,
+        prior_report_titles=prior_report_titles,
     )
-
-    parts: list[str] = []
-    if roster_text:
-        parts.append(f"<group_roster>\n{roster_text}\n</group_roster>\n\n")
-    if prior_report_titles:
-        parts.append(format_prior_report_titles_block(prior_report_titles) + "\n")
-    if prior_reports:
-        parts.append(format_prior_reports_block(prior_reports) + "\n")
-    parts.append(f'<chat_log date="{date_str}">\n')
-    prefix = "".join(parts)
-    suffix = (
-        f"\n</chat_log>\n\n---\n\n"
-        + _USER_INSTRUCTIONS.format(date_str=date_str)
-    )
-
-    user_content: str | list[dict]
-    if chat_blocks is not None:
-        user_content = [
-            {"type": "text", "text": prefix},
-            *chat_blocks,
-            {"type": "text", "text": suffix},
-        ]
-        # Flat string only used for debug sidecar dump.
-        debug_text = (
-            prefix
-            + "".join(
-                b["text"] for b in chat_blocks if b.get("type") == "text"
-            )
-            + suffix
-        )
-    else:
-        user_content = prefix + tokenized_chat + suffix
-        debug_text = user_content
 
     max_retries = 3
     last_exc: Exception | None = None
@@ -465,21 +486,146 @@ def extract_report(
     raise last_exc  # type: ignore[misc]
 
 
+def extract_report_deepseek(
+    date_str: str,
+    chat_history: str,
+    *,
+    model: str,
+    debug_suffix: str = "",
+    roster_text: str | None = None,
+    prior_reports: list[tuple[str, str]] | None = None,
+    prior_report_titles: list[tuple[str, str]] | None = None,
+    progress_cb=None,
+    thinking_cb=None,
+    header_cb=None,
+    attempt_cb=None,
+    text_cb=None,
+    usage_cb=None,
+    max_tokens: int = 65536,
+) -> DailyReport:
+    """Stream a markdown daily report from DeepSeek (the AB-test compare model).
+
+    Reuses the same ``_SYSTEM_PROMPT`` + ``_USER_INSTRUCTIONS`` as the Claude
+    path so the only difference between the two report versions is the model.
+    Text-only input: images appear as ``[图片]`` placeholders rather than inline
+    image blocks (DeepSeek vision support is out of scope for this experiment —
+    a known confound noted in the design).
+
+    Callback contract matches :func:`extract_report` so the CLI's live view and
+    cost logging work unchanged. *usage_cb(usage, input_chars)* receives the raw
+    DeepSeek usage dict. *debug_suffix* keeps sidecars from colliding with the
+    canonical run. Raises :class:`ExtractionError` on refusal / truncation / empty.
+    """
+    from . import deepseek_client
+    from .config import get_deepseek_key
+
+    api_key = get_deepseek_key()
+    if not api_key:
+        raise ExtractionError("缺少 DEEPSEEK_API_KEY，无法用 DeepSeek 生成对比版")
+
+    user_content, debug_text = _build_extract_user_content(
+        date_str=date_str,
+        tokenized_chat=chat_history,
+        roster_text=roster_text,
+        chat_blocks=None,
+        prior_reports=prior_reports,
+        prior_report_titles=prior_report_titles,
+    )
+
+    def _flush_headers(buf: str, attempt: int) -> str:
+        """Emit body headers for any complete lines in *buf*; return remainder."""
+        if "\n" not in buf or not header_cb:
+            return buf
+        *complete, remainder = buf.split("\n")
+        for line in complete:
+            m = _BODY_HEADER_RE.match(line)
+            if m:
+                level = len(m.group(1)) - 2  # ## → 0, ### → 1
+                header_cb("body", level, m.group(2).strip(), attempt)
+        return remainder
+
+    max_retries = 3
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        if attempt > 1 and attempt_cb:
+            attempt_cb(attempt)
+
+        st = {"received": 0, "thinking": 0, "buf": ""}
+
+        def on_content(delta: str, _st=st, _attempt=attempt) -> None:
+            _st["received"] += len(delta)
+            _st["buf"] = _flush_headers(_st["buf"] + delta, _attempt)
+            if text_cb:
+                text_cb("body", delta, _attempt)
+            if progress_cb:
+                progress_cb(_st["received"], _attempt)
+
+        def on_reasoning(delta: str, _st=st, _attempt=attempt) -> None:
+            _st["thinking"] += len(delta)
+            if text_cb:
+                text_cb("thinking", delta, _attempt)
+            if thinking_cb:
+                thinking_cb(_st["thinking"], _attempt)
+
+        try:
+            content, reasoning, usage, finish_reason = deepseek_client.stream_chat(
+                api_key=api_key,
+                model=model,
+                system=_SYSTEM_PROMPT,
+                user=user_content,
+                thinking=True,
+                max_tokens=max_tokens,
+                content_cb=on_content,
+                reasoning_cb=on_reasoning,
+            )
+        except deepseek_client.DeepSeekError as e:
+            last_exc = e
+            if attempt < max_retries:
+                time.sleep(5 * attempt)
+                continue
+            _save_failure(date_str, debug_text, None, str(e), suffix=debug_suffix)
+            raise ExtractionError(f"DeepSeek 调用失败：{e}") from e
+
+        markdown = deepseek_client.strip_markdown_fence(content)
+
+        if finish_reason == "length":
+            _save_failure(date_str, debug_text, markdown, "响应被 max_tokens 截断", suffix=debug_suffix)
+            raise ExtractionError("DeepSeek 响应被 max_tokens 截断，请增大 max_tokens 后重试")
+
+        if not markdown.strip():
+            _save_failure(date_str, debug_text, markdown, "响应为空", suffix=debug_suffix)
+            raise ExtractionError("DeepSeek 响应为空")
+
+        _save_extract(date_str, markdown, debug_text, reasoning, suffix=debug_suffix)
+        if usage_cb:
+            usage_cb(usage, len(debug_text))
+        return DailyReport(date=date_str, markdown=markdown)
+
+    _save_failure(date_str, debug_text, None, str(last_exc), suffix=debug_suffix)
+    raise last_exc  # type: ignore[misc]
+
+
 def _save_extract(
     date_str: str,
     markdown: str,
     user_content: str,
     thinking_text: str = "",
+    suffix: str = "",
 ) -> None:
-    """Save successful extraction to debug/."""
+    """Save successful extraction to debug/.
+
+    *suffix* (e.g. ``.deepseek-v4-pro``) keeps the compare run's sidecars from
+    colliding with the canonical un-suffixed ones.
+    """
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    (DEBUG_DIR / f"extract-{date_str}.md").write_text(markdown, encoding="utf-8")
+    (DEBUG_DIR / f"extract-{date_str}{suffix}.md").write_text(markdown, encoding="utf-8")
     # Sidecar: full LLM input (roster + tokenized chat) for post-mortem audit.
-    (DEBUG_DIR / f"extract-{date_str}.input.txt").write_text(
+    (DEBUG_DIR / f"extract-{date_str}{suffix}.input.txt").write_text(
         user_content[:50000], encoding="utf-8",
     )
     if thinking_text:
-        (DEBUG_DIR / f"extract-{date_str}.thinking.md").write_text(
+        (DEBUG_DIR / f"extract-{date_str}{suffix}.thinking.md").write_text(
             thinking_text, encoding="utf-8",
         )
 
@@ -489,11 +635,12 @@ def _save_failure(
     user_content: str,
     partial_markdown: str | None,
     reason: str,
+    suffix: str = "",
 ) -> None:
     """Persist failure details to debug/ for post-mortem inspection."""
     import json
     DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    path = DEBUG_DIR / f"extract-{date_str}.FAILED.json"
+    path = DEBUG_DIR / f"extract-{date_str}{suffix}.FAILED.json"
     payload = {
         "reason": reason,
         "partial_markdown": partial_markdown,
