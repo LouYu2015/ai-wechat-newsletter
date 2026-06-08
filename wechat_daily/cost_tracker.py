@@ -67,6 +67,20 @@ def usage_to_dict(usage: Any) -> dict[str, int]:
             "cache_read_input_tokens": hit,
         }
 
+    # Gemini SDK `usage_metadata` → Anthropic-shaped fields. It carries
+    # prompt_token_count / candidates_token_count / cached_content_token_count.
+    # prompt_token_count is the *total* input incl. cached, so subtract the
+    # cached part out to input_tokens and bill it as a cache read.
+    if "prompt_token_count" in src or "candidates_token_count" in src:
+        cached = int(src.get("cached_content_token_count") or 0)
+        prompt = int(src.get("prompt_token_count") or 0)
+        return {
+            "input_tokens": max(0, prompt - cached),
+            "output_tokens": int(src.get("candidates_token_count") or 0),
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": cached,
+        }
+
     return {k: int(v) for k, v in src.items() if v is not None}
 
 

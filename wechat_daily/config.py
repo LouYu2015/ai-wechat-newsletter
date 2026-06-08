@@ -33,7 +33,8 @@ CLAUDE_MODEL = "claude-opus-4-6"            # 主版本报告生成（发布）
 DEEPSEEK_REPORT_MODEL = "deepseek-v4-pro"   # 对比版报告生成（旁路，不发布）
 LINK_SUMMARY_MODEL = "deepseek-v4-pro"      # 链接摘要（thinking off）
 GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_SUMMARY_MODEL = "gemini-3-flash"
+GEMINI_SUMMARY_MODEL = "gemini-3.5-flash"        # 旧版：纯 Markdown 日报（--summary gemini）
+GEMINI_CAPTION_MODEL = "gemini-3.5-flash"        # 图片 caption（喂 DeepSeek 对比版）
 
 # ── Anthropic API pricing (USD per 1M tokens) ──────────────────────────────────
 # Source: https://platform.claude.com/docs/en/about-claude/pricing
@@ -48,6 +49,10 @@ MODEL_PRICES: dict[str, dict[str, float]] = {
     # 写入按普通输入计费（无单独 write 价），故 cache_write_5m 取 = input。
     # usage 归一在 cost_tracker.usage_to_dict：miss→input、hit→cache_read。
     "deepseek-v4-pro":   {"input": 0.435, "output": 0.87, "cache_write_5m": 0.435, "cache_read": 0.003625},
+    # Gemini 3.5 Flash（https://ai.google.dev/gemini-api/docs/pricing，2026-06）：
+    # 输入 $1.50/M、输出 $9.00/M、缓存读 $0.15/M。无 Anthropic 式 cache-write。
+    # usage 归一在 cost_tracker.usage_to_dict（prompt/candidates token → in/out）。
+    "gemini-3.5-flash":  {"input": 1.50, "output": 9.00, "cache_write_5m": 1.50, "cache_read": 0.15},
 }
 
 # ── Alias / Privacy ─────────────────────────────────────────────────────────────

@@ -23,7 +23,8 @@ from .archiver import archive_old_files, get_pdf_path
 from .chat_extractor import extract_messages, find_missing_dates
 from .config import (
     ARCHIVE_DIR, CLAUDE_MODEL, DEBUG_DIR, DEEPSEEK_REPORT_MODEL,
-    GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL, PROJECT_ROOT, get_deepseek_key,
+    GEMINI_CAPTION_MODEL, GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL,
+    PROJECT_ROOT, get_deepseek_key, get_gemini_key,
 )
 from .contacts import ContactMap
 from . import cost_tracker
@@ -32,6 +33,7 @@ from .llm_extractor import (
     generate_markdown_with_gemini,
 )
 from .pdf import convert_to_pdf
+from .image_captioner import caption_images, count_image_targets
 from .message_parser import MSG_TAP, MSG_SYSTEM
 from .prior_report import (
     load_prior_report_titles,
@@ -514,6 +516,7 @@ def _run_db_pipeline(
         _run_compare_extraction_deepseek(
             date_str=date_str,
             chat_history=chat_history,
+            tokenized=tokenized,
             roster_text=roster_text,
             prior_reports=prior_reports,
             prior_report_titles=prior_report_titles,
@@ -561,10 +564,77 @@ def _run_db_pipeline(
 _COMPARE_DEBUG_SUFFIX = ".deepseek-v4-pro"
 
 
+def _caption_images_for_deepseek(
+    date_str: str,
+    tokenized: list,
+    cost_records: list[cost_tracker.CostRecord] | None,
+) -> dict[str, str]:
+    """Caption images with Gemini so the text-only DeepSeek path can "see" them.
+
+    Returns ``{image_md5: caption}``. Empty (best-effort, never fatal) when
+    there are no images, no ``GEMINI_API_KEY``, or the stage errors — DeepSeek
+    then just gets bare ``[图片]`` placeholders. The canonical Claude run is
+    unaffected either way (it uses native inline images).
+    """
+    import tempfile, time as _time
+    from .image_decoder import ImageDecoder
+
+    n_images = count_image_targets(tokenized)
+    if not n_images:
+        return {}
+    if not get_gemini_key():
+        console.print(
+            "[yellow]未配置 GEMINI_API_KEY，DeepSeek 对比版图片仅作 [图片] 占位。[/yellow]\n"
+        )
+        return {}
+
+    console.rule(
+        f"[bold]图片描述  [dim]({GEMINI_CAPTION_MODEL}) — 供 DeepSeek 对比版[/dim]"
+    )
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]描述图片..."),
+        TextColumn("[dim]{task.description}[/dim]"),
+        TimeElapsedColumn(),
+        console=console,
+    )
+    task = progress.add_task(f"0/{n_images}", total=n_images)
+
+    def _progress_cb(current: int, total: int, label: str) -> None:
+        progress.update(task, completed=current, description=f"{current}/{total} {label}")
+
+    def _usage_cb(usage, duration_s: float, input_chars: int) -> None:
+        record = cost_tracker.log_call(
+            date=date_str, stage="caption", model=GEMINI_CAPTION_MODEL,
+            usage=usage, duration_s=duration_s, input_chars=input_chars,
+        )
+        if cost_records is not None:
+            cost_records.append(record)
+
+    captions: dict[str, str] = {}
+    try:
+        with progress, tempfile.TemporaryDirectory(prefix="wechat_daily_caps_") as td:
+            decoder = ImageDecoder(Path(td))
+            captions, stats = caption_images(
+                tokenized, decoder, get_gemini_key(),
+                progress_cb=_progress_cb, usage_cb=_usage_cb,
+            )
+    except Exception as e:
+        console.print(f"[yellow]图片描述失败，跳过（DeepSeek 看占位符）：{e}[/yellow]\n")
+        return {}
+
+    console.print(
+        f"[green]图片描述完毕[/green] [dim]图片 {stats.total} 张；"
+        f"成功 {stats.captioned}；跳过 {stats.skipped}；失败 {stats.failed}[/dim]\n"
+    )
+    return captions
+
+
 def _run_compare_extraction_deepseek(
     *,
     date_str: str,
     chat_history: str,
+    tokenized: list,
     roster_text: str,
     prior_reports: list[tuple[str, str]],
     prior_report_titles: list[tuple[str, str]],
@@ -583,6 +653,12 @@ def _run_compare_extraction_deepseek(
     silently — the canonical Opus 4.6 run has already shipped.
     """
     import time as _time
+
+    # Vision preprocessing: DeepSeek can't see images, so caption them with
+    # Gemini and inline the descriptions as `[图片：…]` for this path only.
+    captions = _caption_images_for_deepseek(date_str, tokenized, cost_records)
+    if captions:
+        chat_history = format_tokenized_messages(tokenized, captions)
 
     console.rule(
         f"[bold]对比提取  [dim]({DEEPSEEK_REPORT_MODEL}) — 仅本地，不发布[/dim]"
@@ -699,6 +775,7 @@ def _run_compare_extraction_deepseek(
                 attempt_cb=attempt_cb,
                 text_cb=text_cb,
                 usage_cb=_usage_cb,
+                image_caption_mode=bool(captions),
             )
         except ExtractionError as e:
             console.print(f"[yellow]DeepSeek 对比生成失败，跳过：{e}[/yellow]\n")

@@ -59,6 +59,27 @@ def test_usage_to_dict_skips_missing_attrs():
     # Missing fields are not in dict (treated as 0 by estimate_cost).
 
 
+def test_usage_to_dict_gemini_metadata():
+    """Gemini usage_metadata dict → Anthropic-shaped fields; cached split out."""
+    d = usage_to_dict({
+        "prompt_token_count": 1000,
+        "candidates_token_count": 200,
+        "cached_content_token_count": 300,
+    })
+    assert d["input_tokens"] == 700  # prompt - cached
+    assert d["output_tokens"] == 200
+    assert d["cache_read_input_tokens"] == 300
+    assert d["cache_creation_input_tokens"] == 0
+
+
+def test_estimate_cost_gemini_3_5_flash_rates():
+    # Gemini 3.5 Flash: 1M in + 1M out = $1.50 + $9.00 = $10.50
+    cost = estimate_cost("gemini-3.5-flash", {
+        "input_tokens": 1_000_000, "output_tokens": 1_000_000,
+    })
+    assert cost == pytest.approx(10.50)
+
+
 # ── estimate_cost ──────────────────────────────────────────────────────────────
 
 

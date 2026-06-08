@@ -347,8 +347,16 @@ def tokenize_messages(
     return result, token_map
 
 
-def _format_one_line(msg: Message) -> str | None:
-    """Render one Message as a chat-history line, or None to skip."""
+def _format_one_line(
+    msg: Message, captions: dict[str, str] | None = None,
+) -> str | None:
+    """Render one Message as a chat-history line, or None to skip.
+
+    *captions* (``{image_md5: caption}``) is the text-only DeepSeek path's
+    vision substitute: when an image's md5 has a caption, the ``[图片]``
+    placeholder becomes ``[图片：<caption>]``. The Claude block path passes
+    ``None`` so it keeps bare placeholders + real inline images.
+    """
     ts = datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
 
     if msg.local_type == MSG_TAP:
@@ -367,7 +375,12 @@ def _format_one_line(msg: Message) -> str | None:
     if not name:
         return None
 
-    line = f"[{ts}] {name}: {msg.content}"
+    content = msg.content
+    if captions and msg.local_type == MSG_IMAGE and msg.image_md5:
+        cap = captions.get(msg.image_md5)
+        if cap:
+            content = content.replace('[图片]', f'[图片：{cap}]')
+    line = f"[{ts}] {name}: {content}"
     if msg.link_context:
         for context in msg.link_context.splitlines():
             if context.strip():
@@ -377,9 +390,19 @@ def _format_one_line(msg: Message) -> str | None:
     return line
 
 
-def format_tokenized_messages(messages: list[Message]) -> str:
-    """Format tokenized messages into plain-text chat history for LLM consumption."""
-    lines = [line for msg in messages if (line := _format_one_line(msg)) is not None]
+def format_tokenized_messages(
+    messages: list[Message], captions: dict[str, str] | None = None,
+) -> str:
+    """Format tokenized messages into plain-text chat history for LLM consumption.
+
+    *captions* (``{image_md5: caption}``) inlines vision-model image
+    descriptions as ``[图片：…]`` for the text-only DeepSeek path. Omit it
+    (the default) to keep bare ``[图片]`` placeholders.
+    """
+    lines = [
+        line for msg in messages
+        if (line := _format_one_line(msg, captions)) is not None
+    ]
     return '\n'.join(lines)
 
 
