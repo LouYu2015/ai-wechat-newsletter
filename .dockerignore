@@ -1,0 +1,14 @@
+# 构建镜像时只需要 requirements.txt；其余重内容（含 macOS 的 .venv）排除。
+# 项目目录在运行时通过读写挂载进入 /workspace，不依赖构建上下文。
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/
+debug/
+archive/
+data/
+*.pdf
+*.mp4
+.DS_Store
+.pytest_cache/

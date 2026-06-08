@@ -1,0 +1,9 @@
+# 公开版站点（data/public_repo，Chirpy 主题）的 Gemfile 副本。
+# 用途：镜像构建时据此把 Jekyll 全套 gem 预装进 /usr/local/bundle，
+#       这样容器内构建/测试站点（jekyll build + htmlproofer）无需联网。
+# 维护：保持与 data/public_repo/Gemfile 一致；那边改了，这里同步。
+source "https://rubygems.org"
+
+gem "jekyll-theme-chirpy", "~> 7.2", ">= 7.2.4"
+gem "jekyll-archives"
+gem "html-proofer", "~> 5.0"
