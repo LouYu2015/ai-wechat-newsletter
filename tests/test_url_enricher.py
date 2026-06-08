@@ -91,6 +91,52 @@ def _link_msg(title="Title", url="https://example.com/a", des="card des"):
     )
 
 
+class _EchoMarkerAnthropic:
+    """Summary client that echoes whichever MARKER<n> token is in the prompt.
+
+    Lets a parallel run assert each fetched page's summary lands on its own
+    message (no cross-thread mixups).
+    """
+
+    def __init__(self) -> None:
+        outer = self
+
+        class _Msgs:
+            def stream(self, **kwargs):
+                prompt = kwargs["messages"][0]["content"]
+                marker = next(
+                    (m for m in ("MARKER0", "MARKER1", "MARKER2") if m in prompt),
+                    "NONE",
+                )
+                return _FakeStream(f"summary-{marker}")
+
+        self.messages = _Msgs()
+
+
+def test_enrich_parallel_maps_each_summary_to_its_own_message():
+    # Three distinct long pages (>SHORT_THRESHOLD) → summary path, run in pool.
+    msgs = []
+    routes = {}
+    for i in range(3):
+        url = f"https://example.com/p{i}"
+        body = f"MARKER{i} " + ("正文内容很长所以走摘要路径。" * 80)  # >800 chars
+        routes[url] = (body, "text/plain")
+        msgs.append(_link_msg(title=f"T{i}", url=url))
+
+    stats = enrich_link_messages(
+        msgs,
+        api_key="k",
+        http_client=FakeHTTP(routes),
+        anthropic_client=_EchoMarkerAnthropic(),
+        max_workers=3,
+    )
+
+    assert stats.total == 3 and stats.summarized == 3
+    # Each message carries exactly its own page's summary — no shuffling.
+    for i, m in enumerate(msgs):
+        assert f"summary-MARKER{i}" in m.link_context
+
+
 def test_fetch_wechat_js_content():
     url = "https://mp.weixin.qq.com/s?mid=1"
     html = """

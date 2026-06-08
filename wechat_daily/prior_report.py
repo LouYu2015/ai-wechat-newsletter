@@ -54,7 +54,20 @@ def _normalize_to_ref_placeholders(markdown: str) -> str:
 
 
 def _extract_path(date_str: str, debug_dir: Path | None = None) -> Path:
-    return (debug_dir or DEBUG_DIR) / f"extract-{date_str}.md"
+    """Canonical extract path for *date_str*.
+
+    New layout is the per-date folder ``debug/{date}/extract.md``; we fall back
+    to the legacy flat ``debug/extract-{date}.md`` when the new one is absent,
+    so continuity keeps working across the layout switch (yesterday's flat file
+    still loads today).
+    """
+    base = debug_dir or DEBUG_DIR
+    year, month, day = date_str.split("-")
+    new = base / year / month / day / "extract.md"
+    if new.exists():
+        return new
+    legacy = base / f"extract-{date_str}.md"
+    return legacy if legacy.exists() else new
 
 
 def expected_dates(date_str: str, n_days: int) -> list[str]:

@@ -12,6 +12,19 @@ DEBUG_DIR = PROJECT_ROOT / "debug"
 OUTPUT_DIR = PROJECT_ROOT
 ARCHIVE_DIR = PROJECT_ROOT / "archive"
 
+def debug_dir_for(date_str: str) -> Path:
+    """Per-date debug archive folder, nested ``YYYY/MM/DD``.
+
+    ``2026-06-07`` → ``debug/2026/06/07/``. All per-day debug artifacts
+    (full LLM input/output, thinking, outline, rendered group markdown,
+    preview, leak report) live here, grouped under year/month folders so a busy
+    month doesn't flood one directory. The cross-date cost ledger
+    (``debug/costs.jsonl``) stays at the top level on purpose.
+    """
+    year, month, day = date_str.split("-")  # "2026-06-07" → 2026 / 06 / 07
+    return DEBUG_DIR / year / month / day
+
+
 CHATLOG_DIR = Path.home() / "Documents/chatlog"
 CHATLOG_MAC_DIR = PROJECT_ROOT / "chatlog-mac"
 WECHAT_DATA_DIR = (

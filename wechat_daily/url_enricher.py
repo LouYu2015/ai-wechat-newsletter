@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
@@ -180,11 +181,25 @@ def enrich_link_messages(
     anthropic_client=None,
     summary_delta_cb: Callable[[str], None] | None = None,
     usage_cb: Callable[[object, float, int], None] | None = None,
+    max_workers: int = 5,
 ) -> EnrichStats:
     """Mutate link-card messages with short webpage summaries.
 
+    Fetch + summary for each target run concurrently in a thread pool (each
+    target is an independent fetch + one LLM call — exactly the
+    network-bound shape the image captioner already parallelizes). Workers are
+    pure: they fetch and summarize but **do not** touch shared state; the main
+    thread then applies their results back onto the messages in original target
+    order and updates stats. So the per-message ``link_context`` ends up
+    byte-identical to the old sequential loop — the canonical Opus input is
+    unaffected, the stage is just faster.
+
     Failures are contained per URL. If fetching or summarization fails, the
     original link-card description/title is used as a weak fallback.
+
+    Per-token streaming (*summary_delta_cb*) is disabled when running
+    concurrently (>1 worker) because deltas from parallel summaries would
+    interleave into noise; progress is reported per-completion instead.
 
     *usage_cb(usage, duration_s, input_chars)* fires once per successful
     LLM summary with the response's usage object, wall-clock seconds spent,
@@ -204,79 +219,100 @@ def enrich_link_messages(
             headers=_DEFAULT_HEADERS,
         )
 
-    try:
-        for idx, (host_idx, msg, link) in enumerate(targets, start=1):
-            label = _short_label(link.title, link.url)
+    workers = max(1, min(max_workers, len(targets)))
+    # Streaming only makes sense for a single in-flight summary.
+    delta_cb = summary_delta_cb if workers == 1 else None
 
-            title = (link.title or "").strip()
-            card_desc = (link.description or "").strip()
+    def _work(item: tuple[int, tuple[int, Message, LinkMeta]]) -> dict:
+        """Fetch + summarize one target. Pure: returns a result, mutates nothing."""
+        _order, (host_idx, msg, link) = item
+        label = _short_label(link.title, link.url)
+        title = (link.title or "").strip()
+        card_desc = (link.description or "").strip()
 
-            text = ""
-            og = ""
-            try:
-                if progress_cb:
-                    progress_cb(idx, stats.total, "抓取", label)
-                text, og = fetch_url_text(link.url, http_client)
-                if text:
-                    stats.fetched += 1
-            except Exception:
-                text = ""
-                og = ""
-            text = text.strip()
-            og = og.strip()
+        text = ""
+        og = ""
+        try:
+            text, og = fetch_url_text(link.url, http_client)
+        except Exception:
+            text, og = "", ""
+        text = text.strip()
+        og = og.strip()
 
-            total_chars = len(title) + len(card_desc) + len(og) + len(text)
+        base = {"msg": msg, "url": link.url, "label": label, "fetched": bool(text)}
+        total_chars = len(title) + len(card_desc) + len(og) + len(text)
 
-            if total_chars == 0:
-                stats.failed += 1
-                _log_failed(link.url, label)
-                continue
+        if total_chars == 0:
+            return {**base, "kind": "failed", "context": None, "usage": None}
 
-            if total_chars < SHORT_THRESHOLD:
-                ctx = _build_short_context(title, card_desc, og, text)
-                if ctx:
-                    _append_link_context(msg, ctx)
-                    stats.short += 1
-                else:
-                    stats.failed += 1
-                    _log_failed(link.url, label)
-                continue
-
-            try:
-                if progress_cb:
-                    progress_cb(idx, stats.total, "摘要", label)
-                surrounding = _build_surrounding(messages, host_idx)
-                summary, summary_usage, summary_duration, summary_chars = summarize_text(
-                    title=link.title,
-                    url=link.url,
-                    text=text,
-                    card_description=card_desc,
-                    og_description=og,
-                    api_key=api_key,
-                    client=anthropic_client,
-                    surrounding=surrounding,
-                    delta_cb=summary_delta_cb,
-                )
-                if summary.strip():
-                    _append_link_context(msg, summary)
-                    stats.summarized += 1
-                    if usage_cb:
-                        usage_cb(summary_usage, summary_duration, summary_chars)
-                    continue
-            except Exception:
-                pass
-
-            # Summarize raised or returned empty: fall back to short-style raw concat.
+        if total_chars < SHORT_THRESHOLD:
             ctx = _build_short_context(title, card_desc, og, text)
-            if ctx:
-                _append_link_context(msg, ctx)
-                stats.short += 1
-            else:
-                stats.failed += 1
-                _log_failed(link.url, label)
+            return {
+                **base,
+                "kind": "short" if ctx else "failed",
+                "context": ctx or None,
+                "usage": None,
+            }
+
+        try:
+            surrounding = _build_surrounding(messages, host_idx)
+            summary, s_usage, s_dur, s_chars = summarize_text(
+                title=link.title,
+                url=link.url,
+                text=text,
+                card_description=card_desc,
+                og_description=og,
+                api_key=api_key,
+                client=anthropic_client,
+                surrounding=surrounding,
+                delta_cb=delta_cb,
+            )
+            if summary.strip():
+                return {
+                    **base,
+                    "kind": "summary",
+                    "context": summary,
+                    "usage": (s_usage, s_dur, s_chars),
+                }
+        except Exception:
+            pass
+
+        # Summarize raised or returned empty: fall back to short-style raw concat.
+        ctx = _build_short_context(title, card_desc, og, text)
+        return {
+            **base,
+            "kind": "short" if ctx else "failed",
+            "context": ctx or None,
+            "usage": None,
+        }
+
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            # pool.map preserves input order → results are in target order, so
+            # applying them below reproduces the sequential loop's behavior.
+            results = list(pool.map(_work, enumerate(targets)))
     finally:
         if own_http:
             http_client.close()
+
+    done = 0
+    for r in results:
+        done += 1
+        if r["fetched"]:
+            stats.fetched += 1
+        if r["kind"] == "summary":
+            _append_link_context(r["msg"], r["context"])
+            stats.summarized += 1
+            if usage_cb and r["usage"]:
+                usage_cb(*r["usage"])
+        elif r["kind"] == "short":
+            _append_link_context(r["msg"], r["context"])
+            stats.short += 1
+        else:
+            stats.failed += 1
+            _log_failed(r["url"], r["label"])
+        if progress_cb:
+            progress_cb(done, stats.total, "完成", r["label"])
 
     return stats
 

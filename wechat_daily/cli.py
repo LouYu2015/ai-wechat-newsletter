@@ -24,7 +24,7 @@ from .chat_extractor import extract_messages, find_missing_dates
 from .config import (
     ARCHIVE_DIR, CLAUDE_MODEL, DEBUG_DIR, DEEPSEEK_REPORT_MODEL,
     GEMINI_CAPTION_MODEL, GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL,
-    PROJECT_ROOT, get_deepseek_key, get_gemini_key,
+    PROJECT_ROOT, debug_dir_for, get_deepseek_key, get_gemini_key,
 )
 from .contacts import ContactMap
 from . import cost_tracker
@@ -490,8 +490,9 @@ def _run_db_pipeline(
     ]
     group_md = render_group(report, alias_db, contact_map, day_log, token_map=token_map)
 
-    DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    md_path = DEBUG_DIR / f"{date_str}.md"
+    debug_day = debug_dir_for(date_str)
+    debug_day.mkdir(exist_ok=True, parents=True)
+    md_path = debug_day / "group.md"
     md_path.write_text(group_md, encoding='utf-8')
 
     pdf_path = get_pdf_path(date_str)
@@ -793,7 +794,9 @@ def _run_compare_extraction_deepseek(
         compare_report, alias_db, contact_map, day_log, token_map=token_map,
     )
 
-    md_path = DEBUG_DIR / f"{date_str}{_COMPARE_DEBUG_SUFFIX}.md"
+    debug_day = debug_dir_for(date_str)
+    debug_day.mkdir(exist_ok=True, parents=True)
+    md_path = debug_day / f"group{_COMPARE_DEBUG_SUFFIX}.md"
     md_path.write_text(compare_group_md, encoding="utf-8")
 
     ARCHIVE_DIR.mkdir(exist_ok=True)
@@ -817,10 +820,11 @@ def _run_compare_extraction_deepseek(
 
 def _save_leak_debug(date_str: str, error: str, public_md: str) -> None:
     import json
-    DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    path = DEBUG_DIR / f"leak-{date_str}.json"
+    debug_day = debug_dir_for(date_str)
+    debug_day.mkdir(exist_ok=True, parents=True)
+    path = debug_day / "leak.json"
     path.write_text(
-        json.dumps({"error": error, "public_md_snippet": public_md[:2000]},
+        json.dumps({"error": error, "public_md": public_md},
                    ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
@@ -863,8 +867,9 @@ def _run_gemini_pipeline(
 
     console.print(f"[green]日报生成完毕[/green] [dim]{len(report_markdown):,} 字符[/dim]\n")
 
-    DEBUG_DIR.mkdir(exist_ok=True, parents=True)
-    md_path = DEBUG_DIR / f"{date_str}.md"
+    debug_day = debug_dir_for(date_str)
+    debug_day.mkdir(exist_ok=True, parents=True)
+    md_path = debug_day / "group.md"
     md_path.write_text(report_markdown, encoding='utf-8')
 
     console.rule("[bold]导出 PDF")

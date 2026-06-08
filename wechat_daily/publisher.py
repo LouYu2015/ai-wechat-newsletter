@@ -7,7 +7,7 @@ from pathlib import Path
 
 import markdown as md_lib
 
-from .config import PUBLIC_REPO_URL, PUBLIC_REPO_DIR, DEBUG_DIR
+from .config import PUBLIC_REPO_URL, PUBLIC_REPO_DIR, DEBUG_DIR, debug_dir_for
 
 
 def _run(
@@ -123,7 +123,8 @@ def push_pending() -> bool:
 def preview(date_str: str, markdown: str, open_browser: bool = True) -> Path:
     """Generate a standalone HTML preview. Opens browser unless open_browser=False."""
     import subprocess as sp
-    DEBUG_DIR.mkdir(exist_ok=True, parents=True)
+    debug_day = debug_dir_for(date_str)
+    debug_day.mkdir(exist_ok=True, parents=True)
     html_body = md_lib.markdown(
         markdown,
         extensions=["tables", "fenced_code", "toc"],
@@ -145,7 +146,7 @@ def preview(date_str: str, markdown: str, open_browser: bool = True) -> Path:
 {html_body}
 </body>
 </html>"""
-    out = DEBUG_DIR / f"preview-{date_str}.html"
+    out = debug_day / "preview.html"
     out.write_text(full_html, encoding='utf-8')
     if open_browser:
         sp.run(['open', str(out)], check=False)
