@@ -162,6 +162,35 @@ def test_progress_cb_fires(patch_genai, tmp_path):
     assert seen[-1] == (2, 2)
 
 
+class _RecordReporter:
+    def __init__(self):
+        self.events = []
+
+    def start(self, uid, label):
+        self.events.append(("start", uid))
+
+    def phase(self, uid, phase):
+        self.events.append(("phase", uid, phase))
+
+    def delta(self, uid, text):
+        self.events.append(("delta", uid))
+
+    def done(self, uid, status, error=None):
+        self.events.append(("done", uid, status))
+
+
+def test_reporter_lane_events_per_image(patch_genai, tmp_path):
+    patch_genai({"aaa": "猫", "bbb": "-", "ccc": "RAISE"})
+    msgs = [_img("aaa"), _img("bbb"), _img("ccc")]
+    rep = _RecordReporter()
+    caption_images(msgs, _FakeDecoder(tmp_path), "key", max_workers=1, reporter=rep)
+    # each image: start → done with its outcome, keyed by md5
+    assert ("done", "aaa", "ok") in rep.events
+    assert ("done", "bbb", "skip") in rep.events       # model returned "-"
+    assert ("done", "ccc", "failed") in rep.events     # API raised
+    assert {e[1] for e in rep.events} == {"aaa", "bbb", "ccc"}
+
+
 # ── Injection into the flat chat history (privacy.format_tokenized_messages) ──────
 
 def test_caption_injection_replaces_placeholder():

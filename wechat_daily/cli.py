@@ -34,6 +34,7 @@ from .llm_extractor import (
 )
 from .pdf import convert_to_pdf
 from .image_captioner import caption_images, count_image_targets
+from .lanes_ui import Lanes
 from .message_parser import MSG_TAP, MSG_SYSTEM
 from .prior_report import (
     load_prior_report_titles,
@@ -172,85 +173,27 @@ def _run_db_pipeline(
         console.rule(
             f"[bold]链接增强  [dim]({LINK_SUMMARY_MODEL}, no thinking)[/dim]"
         )
-        link_progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]处理链接..."),
-            TextColumn("[dim]{task.description}[/dim]"),
-            TimeElapsedColumn(),
-            console=console,
+        link_lanes = Lanes(
+            "链接增强", total=link_count, subtitle=LINK_SUMMARY_MODEL,
+            status_labels={"summary": "摘要", "short": "太短", "failed": "失败"},
         )
-        link_task = link_progress.add_task(f"0/{link_count}", total=link_count)
-        link_lines: deque[str] = deque(maxlen=8)
-        link_state = {"partial": "", "current": 0}
 
-        def _link_render() -> Group:
-            parts: list = []
-            visible = list(link_lines)
-            if link_state["partial"]:
-                visible.append(link_state["partial"])
-            width = max(1, console.width)
-            rows: list[Text] = []
-            for s in visible:
-                rows.extend(Text(s).wrap(console, width))
-            rows = rows[-8:]
-            if rows:
-                parts.append(Text("─ 摘要 ─", style="cyan"))
-                parts.extend(rows)
-            parts.append(link_progress)
-            return Group(*parts)
+        def _link_usage_cb(usage, duration_s: float, input_chars: int) -> None:
+            record = cost_tracker.log_call(
+                date=date_str, stage="link", model=LINK_SUMMARY_MODEL,
+                usage=usage, duration_s=duration_s, input_chars=input_chars,
+            )
+            if cost_records is not None:
+                cost_records.append(record)
 
-        with Live(_link_render(), console=console, refresh_per_second=10, transient=False) as live:
-            def _refresh() -> None:
-                live.update(_link_render())
-
-            def _link_progress_cb(current: int, total: int, phase: str, label: str) -> None:
-                if current != link_state["current"]:
-                    if link_state["partial"]:
-                        link_lines.append(link_state["partial"])
-                        link_state["partial"] = ""
-                    link_state["current"] = current
-                link_progress.update(
-                    link_task,
-                    completed=max(0, current - 1),
-                    description=f"{current}/{total} {phase}: {label}",
-                )
-                _refresh()
-
-            def _link_delta_cb(delta: str) -> None:
-                combined = link_state["partial"] + delta
-                if "\n" in combined:
-                    *complete, remainder = combined.split("\n")
-                    for line in complete:
-                        link_lines.append(line)
-                    link_state["partial"] = remainder
-                else:
-                    link_state["partial"] = combined
-                _refresh()
-
-            def _link_usage_cb(usage, duration_s: float, input_chars: int) -> None:
-                record = cost_tracker.log_call(
-                    date=date_str, stage="link", model=LINK_SUMMARY_MODEL,
-                    usage=usage, duration_s=duration_s, input_chars=input_chars,
-                )
-                if cost_records is not None:
-                    cost_records.append(record)
-
+        with Live(link_lanes, console=console, refresh_per_second=12, transient=False):
             stats = enrich_link_messages(
                 messages,
                 anthropic_key,
-                progress_cb=_link_progress_cb,
-                summary_delta_cb=_link_delta_cb,
+                reporter=link_lanes,
                 usage_cb=_link_usage_cb,
             )
-            link_progress.update(
-                link_task,
-                completed=stats.total,
-                description=(
-                    f"完成：抓取 {stats.fetched}，摘要 {stats.summarized}，"
-                    f"太短 {stats.short}，失败 {stats.failed}"
-                ),
-            )
-            _refresh()
+            link_lanes.freeze()
         console.print(
             f"[green]链接增强完毕[/green] "
             f"[dim]链接 {stats.total} 个；摘要 {stats.summarized} 个；"
@@ -592,17 +535,10 @@ def _caption_images_for_deepseek(
     console.rule(
         f"[bold]图片描述  [dim]({GEMINI_CAPTION_MODEL}) — 供 DeepSeek 对比版[/dim]"
     )
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[bold blue]描述图片..."),
-        TextColumn("[dim]{task.description}[/dim]"),
-        TimeElapsedColumn(),
-        console=console,
+    caption_lanes = Lanes(
+        "图片描述", total=n_images, subtitle=GEMINI_CAPTION_MODEL,
+        status_labels={"ok": "成功", "skip": "跳过", "failed": "失败"},
     )
-    task = progress.add_task(f"0/{n_images}", total=n_images)
-
-    def _progress_cb(current: int, total: int, label: str) -> None:
-        progress.update(task, completed=current, description=f"{current}/{total} {label}")
 
     def _usage_cb(usage, duration_s: float, input_chars: int) -> None:
         record = cost_tracker.log_call(
@@ -614,12 +550,14 @@ def _caption_images_for_deepseek(
 
     captions: dict[str, str] = {}
     try:
-        with progress, tempfile.TemporaryDirectory(prefix="wechat_daily_caps_") as td:
+        with Live(caption_lanes, console=console, refresh_per_second=12, transient=False), \
+                tempfile.TemporaryDirectory(prefix="wechat_daily_caps_") as td:
             decoder = ImageDecoder(Path(td))
             captions, stats = caption_images(
                 tokenized, decoder, get_gemini_key(),
-                progress_cb=_progress_cb, usage_cb=_usage_cb,
+                usage_cb=_usage_cb, reporter=caption_lanes,
             )
+            caption_lanes.freeze()
     except Exception as e:
         console.print(f"[yellow]图片描述失败，跳过（DeepSeek 看占位符）：{e}[/yellow]\n")
         return {}

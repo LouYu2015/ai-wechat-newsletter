@@ -113,6 +113,41 @@ class _EchoMarkerAnthropic:
         self.messages = _Msgs()
 
 
+class _RecordReporter:
+    def __init__(self) -> None:
+        self.events: list[tuple] = []
+
+    def start(self, uid, label):
+        self.events.append(("start", uid))
+
+    def phase(self, uid, phase):
+        self.events.append(("phase", uid, phase))
+
+    def delta(self, uid, text):
+        self.events.append(("delta", uid))
+
+    def done(self, uid, status, error=None):
+        self.events.append(("done", uid, status))
+
+
+def test_enrich_reports_lane_events_keyed_by_url():
+    url = "https://example.com/long"
+    body = "正文很长。" * 200  # > SHORT_THRESHOLD → summary path
+    rep = _RecordReporter()
+    enrich_link_messages(
+        [_link_msg(url=url)],
+        api_key="k",
+        reporter=rep,
+        http_client=FakeHTTP({url: (body, "text/plain")}),
+        anthropic_client=FakeAnthropic(text="摘要内容"),
+    )
+    # every event is keyed by the link's url (so deltas never cross lanes)
+    assert all(e[1] == url for e in rep.events)
+    assert rep.events[0] == ("start", url)
+    assert ("done", url, "summary") in rep.events
+    assert any(e[0] == "delta" for e in rep.events)  # streamed into its lane
+
+
 def test_enrich_parallel_maps_each_summary_to_its_own_message():
     # Three distinct long pages (>SHORT_THRESHOLD) → summary path, run in pool.
     msgs = []

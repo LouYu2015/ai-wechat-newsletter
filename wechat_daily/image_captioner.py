@@ -34,6 +34,18 @@ UsageCB = Callable[[dict, float, int], None]
 # Empty / unrecognizable images: the model is told to reply with a lone "-".
 _SKIP_TOKEN = "-"
 
+
+class _NullReporter:
+    """No-op lane reporter so workers can call start/phase/delta/done freely."""
+
+    def start(self, *a) -> None: ...
+    def phase(self, *a) -> None: ...
+    def delta(self, *a) -> None: ...
+    def done(self, *a, **k) -> None: ...
+
+
+_NULL_REPORTER = _NullReporter()
+
 _CAPTION_PROMPT = """\
 你正在为「微信 AI 技术讨论群日报」描述一张群里分享的图片，供日报作者理解图片内容。
 
@@ -72,6 +84,7 @@ def caption_images(
     *,
     progress_cb: ProgressCB | None = None,
     usage_cb: UsageCB | None = None,
+    reporter=None,
     max_workers: int = 5,
 ) -> tuple[dict[str, str], CaptionStats]:
     """Return ``({image_md5: caption}, stats)`` for images in *messages*.
@@ -80,7 +93,13 @@ def caption_images(
     decode, error out, or come back unrecognizable are simply absent from the
     returned dict — the caller then renders a bare ``[图片]`` for them.
     Failures are contained per image; one bad image never aborts the batch.
+
+    Workers report lifecycle to *reporter* (a
+    :class:`wechat_daily.lanes_ui.Lanes`, keyed by ``image_md5``) for the live
+    parallel-lanes UI. Gemini captioning is one-shot (no token stream), so a
+    lane shows the decode/describe phase then resolves to ok / skip / failed.
     """
+    rep = reporter if reporter is not None else _NULL_REPORTER
     targets = _collect_image_targets(messages)
     stats = CaptionStats(total=len(targets))
     if not targets:
@@ -96,18 +115,26 @@ def caption_images(
 
     captions: dict[str, str] = {}
 
-    def _one(target: tuple[str, int]) -> tuple[str, str | None, object, float, int]:
-        """Decode + caption a single image. Returns (md5, caption|None, usage, dur, chars)."""
+    def _one(target: tuple[str, int]) -> tuple[str, str | None, object, float, int, str]:
+        """Decode + caption one image; report lane events keyed by md5.
+
+        Returns (md5, caption|None, usage, dur, prompt_chars, status) where
+        status is "ok" / "skip" / "failed".
+        """
         import time
 
         md5, host_idx = target
+        rep.start(md5, _label(messages, md5))
+        rep.phase(md5, "解码")
         jpeg = decoder.decode(md5)
         if jpeg is None:
-            return md5, None, None, 0.0, 0
+            rep.done(md5, "failed", error="解码失败")
+            return md5, None, None, 0.0, 0, "failed"
 
         context = _build_context(messages, host_idx)
         prompt = _CAPTION_PROMPT.format(context=context or "（无相邻聊天）", skip=_SKIP_TOKEN)
 
+        rep.phase(md5, "描述中")
         t0 = time.perf_counter()
         # Contain per-image failures (API error, safety block that makes
         # `.text` raise): one bad image must not abort the whole batch — it's
@@ -124,19 +151,25 @@ def caption_images(
             text = (response.text or "").strip()
             usage = _usage_dict(getattr(response, "usage_metadata", None))
         except Exception:
-            return md5, None, None, 0.0, 0
+            rep.done(md5, "failed", error="识别失败")
+            return md5, None, None, 0.0, 0, "failed"
         duration_s = time.perf_counter() - t0
-        return md5, text, usage, duration_s, len(prompt)
+
+        if not text or text.strip(" 。.-") == "" or text.strip() == _SKIP_TOKEN:
+            rep.done(md5, "skip")
+            return md5, None, usage, duration_s, len(prompt), "skip"
+        rep.done(md5, "ok")
+        return md5, text, usage, duration_s, len(prompt), "ok"
 
     done = 0
     with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
-        for md5, text, usage, duration_s, chars in pool.map(_one, targets):
+        for md5, text, usage, duration_s, chars, status in pool.map(_one, targets):
             done += 1
             label = _label(messages, md5)
             try:
-                if text is None:
+                if status == "failed":
                     stats.failed += 1
-                elif not text or text.strip(" 。.-") == "" or text.strip() == _SKIP_TOKEN:
+                elif status == "skip":
                     stats.skipped += 1
                 else:
                     captions[md5] = text

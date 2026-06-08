@@ -22,6 +22,18 @@ from .message_parser import (
 
 ProgressCB = Callable[[int, int, str, str], None]
 
+
+class _NullReporter:
+    """No-op lane reporter so workers can call start/phase/delta/done freely."""
+
+    def start(self, *a) -> None: ...
+    def phase(self, *a) -> None: ...
+    def delta(self, *a) -> None: ...
+    def done(self, *a, **k) -> None: ...
+
+
+_NULL_REPORTER = _NullReporter()
+
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -176,36 +188,32 @@ class _TextExtractor(HTMLParser):
 def enrich_link_messages(
     messages: list[Message],
     api_key: str,
-    progress_cb: ProgressCB | None = None,
+    reporter=None,
     http_client: httpx.Client | None = None,
     anthropic_client=None,
-    summary_delta_cb: Callable[[str], None] | None = None,
     usage_cb: Callable[[object, float, int], None] | None = None,
     max_workers: int = 5,
 ) -> EnrichStats:
     """Mutate link-card messages with short webpage summaries.
 
     Fetch + summary for each target run concurrently in a thread pool (each
-    target is an independent fetch + one LLM call — exactly the
-    network-bound shape the image captioner already parallelizes). Workers are
-    pure: they fetch and summarize but **do not** touch shared state; the main
-    thread then applies their results back onto the messages in original target
-    order and updates stats. So the per-message ``link_context`` ends up
-    byte-identical to the old sequential loop — the canonical Opus input is
-    unaffected, the stage is just faster.
+    target is an independent fetch + one LLM call). Workers report their
+    lifecycle to *reporter* (a :class:`wechat_daily.lanes_ui.Lanes`, or any
+    object with ``start/phase/delta/done``) keyed by the link's url, so a live
+    parallel-lanes UI can stream each summary into its own lane without
+    interleaving. Result *application* still happens single-threaded in target
+    order, so the per-message ``link_context`` is byte-identical to the old
+    sequential loop — the canonical Opus input is unaffected.
 
     Failures are contained per URL. If fetching or summarization fails, the
     original link-card description/title is used as a weak fallback.
-
-    Per-token streaming (*summary_delta_cb*) is disabled when running
-    concurrently (>1 worker) because deltas from parallel summaries would
-    interleave into noise; progress is reported per-completion instead.
 
     *usage_cb(usage, duration_s, input_chars)* fires once per successful
     LLM summary with the response's usage object, wall-clock seconds spent,
     and the prompt's character count — wired into ``cost_tracker.log_call``
     by the CLI.
     """
+    rep = reporter if reporter is not None else _NULL_REPORTER
     targets = _collect_link_targets(messages)
     stats = EnrichStats(total=len(targets))
     if not targets:
@@ -220,19 +228,25 @@ def enrich_link_messages(
         )
 
     workers = max(1, min(max_workers, len(targets)))
-    # Streaming only makes sense for a single in-flight summary.
-    delta_cb = summary_delta_cb if workers == 1 else None
 
     def _work(item: tuple[int, tuple[int, Message, LinkMeta]]) -> dict:
-        """Fetch + summarize one target. Pure: returns a result, mutates nothing."""
+        """Fetch + summarize one target; report lane events keyed by url.
+
+        Pure w.r.t. shared report state: only mutates the reporter (thread-safe)
+        and returns a result the main thread applies. ``link_context`` is never
+        touched here.
+        """
         _order, (host_idx, msg, link) = item
+        uid = link.url
         label = _short_label(link.title, link.url)
+        rep.start(uid, label)
         title = (link.title or "").strip()
         card_desc = (link.description or "").strip()
 
         text = ""
         og = ""
         try:
+            rep.phase(uid, "抓取")
             text, og = fetch_url_text(link.url, http_client)
         except Exception:
             text, og = "", ""
@@ -243,18 +257,17 @@ def enrich_link_messages(
         total_chars = len(title) + len(card_desc) + len(og) + len(text)
 
         if total_chars == 0:
+            rep.done(uid, "failed", error="无正文")
             return {**base, "kind": "failed", "context": None, "usage": None}
 
         if total_chars < SHORT_THRESHOLD:
             ctx = _build_short_context(title, card_desc, og, text)
-            return {
-                **base,
-                "kind": "short" if ctx else "failed",
-                "context": ctx or None,
-                "usage": None,
-            }
+            rep.done(uid, "short" if ctx else "failed", error=None if ctx else "无正文")
+            return {**base, "kind": "short" if ctx else "failed",
+                    "context": ctx or None, "usage": None}
 
         try:
+            rep.phase(uid, "摘要")
             surrounding = _build_surrounding(messages, host_idx)
             summary, s_usage, s_dur, s_chars = summarize_text(
                 title=link.title,
@@ -265,26 +278,20 @@ def enrich_link_messages(
                 api_key=api_key,
                 client=anthropic_client,
                 surrounding=surrounding,
-                delta_cb=delta_cb,
+                delta_cb=lambda d: rep.delta(uid, d),
             )
             if summary.strip():
-                return {
-                    **base,
-                    "kind": "summary",
-                    "context": summary,
-                    "usage": (s_usage, s_dur, s_chars),
-                }
+                rep.done(uid, "summary")
+                return {**base, "kind": "summary", "context": summary,
+                        "usage": (s_usage, s_dur, s_chars)}
         except Exception:
             pass
 
         # Summarize raised or returned empty: fall back to short-style raw concat.
         ctx = _build_short_context(title, card_desc, og, text)
-        return {
-            **base,
-            "kind": "short" if ctx else "failed",
-            "context": ctx or None,
-            "usage": None,
-        }
+        rep.done(uid, "short" if ctx else "failed", error=None if ctx else "摘要失败")
+        return {**base, "kind": "short" if ctx else "failed",
+                "context": ctx or None, "usage": None}
 
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -295,9 +302,7 @@ def enrich_link_messages(
         if own_http:
             http_client.close()
 
-    done = 0
     for r in results:
-        done += 1
         if r["fetched"]:
             stats.fetched += 1
         if r["kind"] == "summary":
@@ -311,8 +316,6 @@ def enrich_link_messages(
         else:
             stats.failed += 1
             _log_failed(r["url"], r["label"])
-        if progress_cb:
-            progress_cb(done, stats.total, "完成", r["label"])
 
     return stats
 
