@@ -123,6 +123,24 @@ python3 -m venv .venv
 
 不要用系统 Python `pip install`——sandbox 里它会落到 `/usr/local`，下次重启 sandbox 就丢了，而且会污染全局环境。venv 装在工作目录下，下次进同一个工作目录直接复用。
 
+## 容器开发沙箱（dev.sh）
+
+在隔离的 Docker 容器里跑本项目与 Claude Code：**只读**挂载微信加密数据库、**读写**挂载项目目录。完整说明见 [`docker/README.md`](docker/README.md)。
+
+```bash
+./dev.sh             # 构建/复用镜像并进入 Claude Code（默认 YOLO 模式）
+./dev.sh bash        # 进入 shell 调试
+./dev.sh --continue  # 以 - 开头的参数透传给 claude（如 --continue / --resume）
+REBUILD=1 ./dev.sh   # 不带缓存重建镜像
+```
+
+容器内干活前需要知道的关键事实：
+
+- **微信库只读**：宿主机 `~/Library/Containers/com.tencent.xinWeChat/.../xwechat_files` 以 `:ro` 挂到容器内**同路径**（`$HOME=/root` 下）。`wechat_daily/config.py` 用 `Path.home()` 定位，故挂载点必须落在 `$HOME`；改不动原始库。
+- **Python 用 `/opt/venv`**：镜像里已装好依赖，直接 `python` / `pytest` 即可；**不要** source 项目里 macOS 的 `.venv`（那是宿主机的）。
+- **不能 push**：容器不带 SSH 私钥，只做 `git commit` 与构建测试；`git push` 在宿主机/外部完成。
+- **首次登录**：进容器后执行一次 `/login`，登录态存在持久卷 `wechat-dev-claude`，之后免登录。
+
 ## 公开版隐私模型
 
 群友在微信群内发送以下指令（单独成行，下次跑日报时生效）：

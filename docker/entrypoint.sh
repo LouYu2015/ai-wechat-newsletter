@@ -17,4 +17,11 @@ echo "▶ 检查 Claude Code 更新…"
 claude update >/dev/null 2>&1 || true
 echo "▶ Claude Code 版本：$(claude --version 2>/dev/null || echo '未知')"
 
+# 防御：若 CMD 首参以 - 开头（如直接 docker run … --continue），bash 的 exec
+# 会把它当选项并报「exec: --: invalid option」。这种情况一律视为 claude 的参数。
+first="${1-}"
+if [ -n "$first" ] && [ "$first" != "${first#-}" ]; then
+  set -- claude "$@"
+fi
+
 exec "$@"

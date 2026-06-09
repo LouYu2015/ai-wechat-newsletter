@@ -38,8 +38,14 @@ docker build ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} -f "$SCRIPT_DIR/docker/Dockerfi
 #   微信库       → ...xwechat_files:ro （只读）
 # 默认进入 Claude Code 并开 YOLO（跳过权限确认）——容器已隔离，挂载的微信库只读。
 # 传了自定义命令（如 ./dev.sh bash）则原样执行。
+# 决定容器内要跑的命令：
+#   无参数            → claude（带 YOLO 跳过权限确认）
+#   首参以 - 开头     → 视为透传给 claude 的 flag（如 ./dev.sh --continue / --resume）
+#   其它（bash/ls…）  → 原样执行
 if [ "$#" -eq 0 ]; then
   set -- claude --dangerously-skip-permissions
+elif [ "${1#-}" != "$1" ]; then
+  set -- claude --dangerously-skip-permissions "$@"
 fi
 
 # 注：不向容器透传 SSH 私钥 —— 公开版站点（data/public_repo）的推送在宿主机/外部完成，
