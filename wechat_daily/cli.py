@@ -394,10 +394,22 @@ def _run_db_pipeline(
                 chat_blocks = format_tokenized_messages_blocks(tokenized, decoder)
                 n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
                 if n_images:
-                    headers.append(Text(
-                        f"图片解码 {n_decoded}/{n_images} 张成功",
-                        style="dim",
-                    ))
+                    # Undecodable images (decode error, or a blank/wxgf frame the
+                    # decoder rejected) fall back to a bare [图片] placeholder —
+                    # Opus never sees a silent white image. Surface the shortfall
+                    # so the author knows some images aren't reaching the model.
+                    n_missing = n_images - n_decoded
+                    if n_missing:
+                        headers.append(Text(
+                            f"图片解码 {n_decoded}/{n_images} 张成功"
+                            f"（{n_missing} 张无法解码，已降级为 [图片] 占位）",
+                            style="yellow",
+                        ))
+                    else:
+                        headers.append(Text(
+                            f"图片解码 {n_decoded}/{n_images} 张成功",
+                            style="dim",
+                        ))
                     refresh()
                 report = extract_report(
                     date_str, chat_history, anthropic_key, progress_cb,

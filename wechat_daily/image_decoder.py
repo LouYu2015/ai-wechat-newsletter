@@ -1,11 +1,22 @@
 """Decode WeChat group-chat images for LLM consumption.
 
 Pipeline per `image_md5`:
-  1. find `<md5>.dat` under msg/attach/<group_hash>/YYYY-MM/Img/
-  2. decrypt via vendored chatlog-mac/decode_image.py (V2 AES+XOR or legacy XOR)
+  1. find the `<md5>*.dat` variants under msg/attach/<group_hash>/YYYY-MM/Img/
+  2. try them in order HD `_h.dat` → standard `.dat` → thumbnail `_t.dat`,
+     decrypting each via vendored chatlog-mac/decode_image.py (V2 AES+XOR or
+     legacy XOR)
   3. wxgf/HEVC → JPEG via ffmpeg first frame
   4. resize long edge ≤ 1568, re-encode JPEG q=85 → write to caller-supplied tmpdir
-  5. on any failure, fall back to thumbnail `<md5>_t.dat` (usually plain JPEG)
+  5. a decode that fails *or comes out blank* falls through to the next variant
+
+Why HD-first + blank guard: many `<md5>.dat` files are wxgf/HEVC, and ffmpeg's
+first-frame extraction is unreliable — it can yield an all-white frame (no
+error). Being a valid JPEG, that frame used to pre-empt the good variants, so
+the captioner saw a blank image and the model replied "-" (a spurious skip).
+The HD `_h.dat` is a plain PNG/JPEG raster with the real content, so it's tried
+first; the blank guard (grayscale stddev ≈ 0) catches the remaining uniform
+decodes. (A white frame with a black *border* has non-zero stddev, which is
+exactly why ordering — not just the stddev guard — is needed.)
 
 Outputs land in the TemporaryDirectory the caller passes in; this module never
 writes to a persistent location. Each `decode()` call is memoized within the
@@ -20,7 +31,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image
+from PIL import Image, ImageStat
 
 from .config import CHATLOG_MAC_DIR, GROUP_CHAT_ID, WECHAT_DATA_DIR
 
@@ -30,6 +41,11 @@ import decode_image as _vendor_decode  # noqa: E402
 
 _LONG_EDGE_LIMIT = 1568   # cap to avoid Anthropic's >20-image / 2000² rule
 _JPEG_QUALITY = 85
+# Decoded frames whose grayscale stddev is below this are uniform (blank) — a
+# wxgf first-frame that came out all-white. Treat as a decode failure so the
+# next variant is tried. Real screenshots (even mostly-white) sit far above 1.0;
+# the observed blank frames measure exactly 0.0.
+_BLANK_STDDEV = 1.0
 
 
 class ImageDecoder:
@@ -80,11 +96,17 @@ class ImageDecoder:
         if not dats:
             return None
 
-        # Try full image first; fall back to thumbnail (_t.dat)
+        # Prefer the HD variant (_h.dat): it's a real PNG/JPEG raster. The
+        # standard `.dat` is often wxgf/HEVC, whose ffmpeg first-frame extraction
+        # is unreliable — it can yield an all-white frame (sometimes with a
+        # border, so the blank-stddev guard alone can't catch it) that would
+        # otherwise pre-empt the good variants. Order: _h → .dat → _t, each
+        # gated by the blank check so a bad decode falls through to the next.
         full = next((d for d in dats if d.name == f"{image_md5}.dat"), None)
+        hd = next((d for d in dats if d.name == f"{image_md5}_h.dat"), None)
         thumb = next((d for d in dats if d.name == f"{image_md5}_t.dat"), None)
 
-        for src in (full, thumb):
+        for src in (hd, full, thumb):
             if src is None:
                 continue
             jpeg = self._decode_one(src, image_md5)
@@ -155,6 +177,12 @@ class ImageDecoder:
         # Animated GIF / multi-frame: PIL gives first frame on .convert
         if im.mode not in ("RGB", "L"):
             im = im.convert("RGB")
+
+        # Reject uniform (blank) frames — a wxgf first-frame that decoded to
+        # all-white. Returning None lets the caller fall back to _h/_t.
+        gray = im if im.mode == "L" else im.convert("L")
+        if ImageStat.Stat(gray).stddev[0] < _BLANK_STDDEV:
+            return None
 
         w, h = im.size
         long_edge = max(w, h)
