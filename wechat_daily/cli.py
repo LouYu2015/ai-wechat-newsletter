@@ -6,7 +6,7 @@ import argparse
 import os
 import sys
 from collections import deque
-from datetime import datetime, timedelta, date as date_type
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -22,18 +22,17 @@ from .aliases import AliasDB
 from .archiver import archive_old_files, get_pdf_path
 from .chat_extractor import extract_messages, find_missing_dates
 from .config import (
-    ARCHIVE_DIR, CLAUDE_MODEL, DEBUG_DIR, DEEPSEEK_REPORT_MODEL,
-    GEMINI_CAPTION_MODEL, GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL,
-    PROJECT_ROOT, debug_dir_for, get_deepseek_key, get_gemini_key,
+    ARCHIVE_DIR, CLAUDE_MODEL, COMPARE_REPORT_MODEL,
+    GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL,
+    PROJECT_ROOT, debug_dir_for,
 )
 from .contacts import ContactMap
 from . import cost_tracker
 from .llm_extractor import (
-    ExtractionError, extract_report, extract_report_deepseek,
+    ExtractionError, extract_report,
     generate_markdown_with_gemini,
 )
 from .pdf import convert_to_pdf
-from .image_captioner import caption_images, count_image_targets
 from .lanes_ui import Lanes
 from .message_parser import MSG_TAP, MSG_SYSTEM
 from .prior_report import (
@@ -143,6 +142,7 @@ def _run_db_pipeline(
     prior_days: int = 3,
     prior_title_days: int = 7,
     prompt_on_missing_prior: bool = True,
+    run_compare: bool = True,
     cost_records: list[cost_tracker.CostRecord] | None = None,
 ) -> None:
     """Full pipeline for one date: extract → tokenize → LLM → render → PDF + public.
@@ -156,6 +156,8 @@ def _run_db_pipeline(
     *prompt_on_missing_prior* — when *some* of the last *prior_days* are
     available but others aren't (suggesting a recent gap, not a fresh start),
     ask the user whether to proceed.
+    *run_compare* — also produce the Fable 5 AB-compare report (bypass, local
+    only). ``False`` (``--no-compare``) skips it to save cost.
     """
 
     target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -465,14 +467,16 @@ def _run_db_pipeline(
     console.print(f"[green]群内版:[/green] [cyan]{pdf_path}[/cyan]")
     console.print(f"[green]Markdown:[/green] [dim]{md_path}[/dim]\n")
 
-    # ── D2: DeepSeek 对比提取（旁路，仅本地，不发布、不喂续写）────────────────
+    # ── D2: Fable 5 对比提取（旁路，仅本地，不发布、不喂续写）────────────────
     # 放在主版本群内版渲染之后、公开版/泄漏检测之前：只要主版本本身生成成功就
-    # 产出对比版，不受公开版泄漏检测早退的影响。失败不致命。
-    if get_deepseek_key():
-        _run_compare_extraction_deepseek(
+    # 产出对比版，不受公开版泄漏检测早退的影响。失败不致命。对比版与主版本共用
+    # 同一把 ANTHROPIC_API_KEY（主版本刚用过，必然就绪）；--no-compare 可关闭。
+    if run_compare:
+        _run_compare_extraction(
             date_str=date_str,
             chat_history=chat_history,
             tokenized=tokenized,
+            anthropic_key=anthropic_key,
             roster_text=roster_text,
             prior_reports=prior_reports,
             prior_report_titles=prior_report_titles,
@@ -482,8 +486,6 @@ def _run_db_pipeline(
             target_date=target_date,
             cost_records=cost_records,
         )
-    else:
-        console.print("[yellow]未配置 DEEPSEEK_API_KEY，跳过 DeepSeek 对比版。[/yellow]\n")
 
     # ── E: Render public version + leak check ───────────────────────────────
     console.rule("[bold]渲染公开版 + 泄漏检测")
@@ -517,75 +519,15 @@ def _run_db_pipeline(
     )
 
 
-_COMPARE_DEBUG_SUFFIX = ".deepseek-v4-pro"
+_COMPARE_DEBUG_SUFFIX = ".fable-5"
 
 
-def _caption_images_for_deepseek(
-    date_str: str,
-    tokenized: list,
-    cost_records: list[cost_tracker.CostRecord] | None,
-) -> dict[str, str]:
-    """Caption images with Gemini so the text-only DeepSeek path can "see" them.
-
-    Returns ``{image_md5: caption}``. Empty (best-effort, never fatal) when
-    there are no images, no ``GEMINI_API_KEY``, or the stage errors — DeepSeek
-    then just gets bare ``[图片]`` placeholders. The canonical Claude run is
-    unaffected either way (it uses native inline images).
-    """
-    import tempfile, time as _time
-    from .image_decoder import ImageDecoder
-
-    n_images = count_image_targets(tokenized)
-    if not n_images:
-        return {}
-    if not get_gemini_key():
-        console.print(
-            "[yellow]未配置 GEMINI_API_KEY，DeepSeek 对比版图片仅作 [图片] 占位。[/yellow]\n"
-        )
-        return {}
-
-    console.rule(
-        f"[bold]图片描述  [dim]({GEMINI_CAPTION_MODEL}) — 供 DeepSeek 对比版[/dim]"
-    )
-    caption_lanes = Lanes(
-        "图片描述", total=n_images, subtitle=GEMINI_CAPTION_MODEL,
-        status_labels={"ok": "成功", "skip": "跳过", "failed": "失败"},
-    )
-
-    def _usage_cb(usage, duration_s: float, input_chars: int) -> None:
-        record = cost_tracker.log_call(
-            date=date_str, stage="caption", model=GEMINI_CAPTION_MODEL,
-            usage=usage, duration_s=duration_s, input_chars=input_chars,
-        )
-        if cost_records is not None:
-            cost_records.append(record)
-
-    captions: dict[str, str] = {}
-    try:
-        with Live(caption_lanes, console=console, refresh_per_second=12, transient=False), \
-                tempfile.TemporaryDirectory(prefix="wechat_daily_caps_") as td:
-            decoder = ImageDecoder(Path(td))
-            captions, stats = caption_images(
-                tokenized, decoder, get_gemini_key(),
-                usage_cb=_usage_cb, reporter=caption_lanes,
-            )
-            caption_lanes.freeze()
-    except Exception as e:
-        console.print(f"[yellow]图片描述失败，跳过（DeepSeek 看占位符）：{e}[/yellow]\n")
-        return {}
-
-    console.print(
-        f"[green]图片描述完毕[/green] [dim]图片 {stats.total} 张；"
-        f"成功 {stats.captioned}；跳过 {stats.skipped}；失败 {stats.failed}[/dim]\n"
-    )
-    return captions
-
-
-def _run_compare_extraction_deepseek(
+def _run_compare_extraction(
     *,
     date_str: str,
     chat_history: str,
     tokenized: list,
+    anthropic_key: str,
     roster_text: str,
     prior_reports: list[tuple[str, str]],
     prior_report_titles: list[tuple[str, str]],
@@ -595,24 +537,23 @@ def _run_compare_extraction_deepseek(
     target_date,
     cost_records: list[cost_tracker.CostRecord] | None,
 ) -> None:
-    """Second-pass report generation with DeepSeek V4 Pro (AB-test compare).
+    """Second-pass report generation with Fable 5 (AB-test compare).
 
-    Writes debug sidecars with ``.deepseek-v4-pro`` suffix and a PDF named
-    ``{date} 群聊日报 (deepseek-v4-pro).pdf``. Never feeds back into next-day
-    continuity (which reads the un-suffixed ``debug/extract-{date}.md``) and
-    never touches the public repo. Any failure prints a warning and returns
-    silently — the canonical Opus 4.6 run has already shipped.
+    Runs the *exact same* Anthropic path as the published main version
+    (:func:`extract_report`) — same prompt, native inline images, single pass —
+    only the model differs, so the comparison isolates the model variable.
+
+    Writes debug sidecars with ``.fable-5`` suffix and a PDF named
+    ``{date} 群聊日报 (fable-5).pdf``. Never feeds back into next-day continuity
+    (which reads the un-suffixed ``debug/{date}/extract.md``) and never touches
+    the public repo. Any failure prints a warning and returns silently — the
+    canonical Opus 4.6 run has already shipped.
     """
-    import time as _time
-
-    # Vision preprocessing: DeepSeek can't see images, so caption them with
-    # Gemini and inline the descriptions as `[图片：…]` for this path only.
-    captions = _caption_images_for_deepseek(date_str, tokenized, cost_records)
-    if captions:
-        chat_history = format_tokenized_messages(tokenized, captions)
+    import tempfile, time as _time
+    from .image_decoder import ImageDecoder
 
     console.rule(
-        f"[bold]对比提取  [dim]({DEEPSEEK_REPORT_MODEL}) — 仅本地，不发布[/dim]"
+        f"[bold]对比提取  [dim]({COMPARE_REPORT_MODEL}) — 仅本地，不发布[/dim]"
     )
 
     headers: list[Text] = []
@@ -620,7 +561,7 @@ def _run_compare_extraction_deepseek(
     body_lines: deque[str] = deque(maxlen=8)
     progress = Progress(
         SpinnerColumn(),
-        TextColumn("[bold magenta]DeepSeek 对比生成..."),
+        TextColumn("[bold magenta]Fable 对比生成..."),
         TextColumn("[dim]{task.description}[/dim]"),
         TimeElapsedColumn(),
         console=console,
@@ -704,7 +645,7 @@ def _run_compare_extraction_deepseek(
 
         def _usage_cb(usage, input_chars: int) -> None:
             record = cost_tracker.log_call(
-                date=date_str, stage="extract-compare", model=DEEPSEEK_REPORT_MODEL,
+                date=date_str, stage="extract-compare", model=COMPARE_REPORT_MODEL,
                 usage=usage,
                 duration_s=_time.perf_counter() - t_start,
                 input_chars=input_chars,
@@ -713,26 +654,28 @@ def _run_compare_extraction_deepseek(
                 cost_records.append(record)
 
         try:
-            compare_report = extract_report_deepseek(
-                date_str, chat_history,
-                model=DEEPSEEK_REPORT_MODEL,
-                debug_suffix=_COMPARE_DEBUG_SUFFIX,
-                roster_text=roster_text or None,
-                prior_reports=prior_reports or None,
-                prior_report_titles=prior_report_titles or None,
-                progress_cb=progress_cb,
-                thinking_cb=thinking_cb,
-                header_cb=header_cb,
-                attempt_cb=attempt_cb,
-                text_cb=text_cb,
-                usage_cb=_usage_cb,
-                image_caption_mode=bool(captions),
-            )
+            with tempfile.TemporaryDirectory(prefix="wechat_daily_cmp_imgs_") as td:
+                decoder = ImageDecoder(Path(td))
+                chat_blocks = format_tokenized_messages_blocks(tokenized, decoder)
+                compare_report = extract_report(
+                    date_str, chat_history, anthropic_key, progress_cb,
+                    roster_text=roster_text or None,
+                    thinking_cb=thinking_cb,
+                    header_cb=header_cb,
+                    attempt_cb=attempt_cb,
+                    text_cb=text_cb,
+                    usage_cb=_usage_cb,
+                    chat_blocks=chat_blocks,
+                    prior_reports=prior_reports or None,
+                    prior_report_titles=prior_report_titles or None,
+                    model=COMPARE_REPORT_MODEL,
+                    debug_suffix=_COMPARE_DEBUG_SUFFIX,
+                )
         except ExtractionError as e:
-            console.print(f"[yellow]DeepSeek 对比生成失败，跳过：{e}[/yellow]\n")
+            console.print(f"[yellow]Fable 对比生成失败，跳过：{e}[/yellow]\n")
             return
         except Exception as e:
-            console.print(f"[yellow]DeepSeek 对比生成异常，跳过：{e}[/yellow]\n")
+            console.print(f"[yellow]Fable 对比生成异常，跳过：{e}[/yellow]\n")
             return
 
     # Render group version for compare (no public path, no leak check).
@@ -750,9 +693,9 @@ def _run_compare_extraction_deepseek(
     md_path.write_text(compare_group_md, encoding="utf-8")
 
     ARCHIVE_DIR.mkdir(exist_ok=True)
-    # Always exactly one "(deepseek-v4-pro)" file per date, overwriting stale
-    # ones on re-runs (matching how the canonical path overwrites debug/{date}.md).
-    compare_pdf_path = ARCHIVE_DIR / f"{date_str} 群聊日报 (deepseek-v4-pro).pdf"
+    # Always exactly one "(fable-5)" file per date, overwriting stale ones on
+    # re-runs (matching how the canonical path overwrites debug/{date}.md).
+    compare_pdf_path = ARCHIVE_DIR / f"{date_str} 群聊日报 (fable-5).pdf"
     with Progress(
         SpinnerColumn(),
         TextColumn("[bold magenta]{task.description}"),
@@ -760,12 +703,12 @@ def _run_compare_extraction_deepseek(
         console=console,
         transient=False,
     ) as progress:
-        task = progress.add_task("DeepSeek Markdown → PDF...", total=None)
+        task = progress.add_task("Fable Markdown → PDF...", total=None)
         convert_to_pdf(compare_group_md, compare_pdf_path)
         progress.update(task, description=f"PDF 已保存: {compare_pdf_path.name}")
 
-    console.print(f"[magenta]DeepSeek 对比版:[/magenta] [cyan]{compare_pdf_path}[/cyan]")
-    console.print(f"[magenta]DeepSeek Markdown:[/magenta] [dim]{md_path}[/dim]\n")
+    console.print(f"[magenta]Fable 对比版:[/magenta] [cyan]{compare_pdf_path}[/cyan]")
+    console.print(f"[magenta]Fable Markdown:[/magenta] [dim]{md_path}[/dim]\n")
 
 
 def _save_leak_debug(date_str: str, error: str, public_md: str) -> None:
@@ -867,6 +810,13 @@ def main() -> None:
         "--no-prior-prompt", action="store_true",
         help="最近若干天日报有缺失时不交互询问，按现有材料继续（适合自动化场景）。",
     )
+    parser.add_argument(
+        "--no-compare", action="store_true",
+        help=(
+            "跳过 Fable 5 对比版（旁路，仅本地 PDF/debug、不发布）。"
+            "对比版与主版本同价位、且每天跑全天聊天记录，成本不低；只想要发布版时用此项关闭。"
+        ),
+    )
     args = parser.parse_args()
 
     console.print(Panel.fit(
@@ -879,8 +829,8 @@ def main() -> None:
         # Step 1: API keys
         console.rule("[bold]Step 1  API Key 配置")
         gemini_key, anthropic_key = _ensure_api_keys(need_anthropic=(args.summary == "claude"))
-        # Claude path now depends on DeepSeek for link summaries + the compare
-        # report; make sure the key is present before generation starts.
+        # Claude path depends on DeepSeek for link summaries (the Fable 5 compare
+        # report now uses the Anthropic key); make sure it's present before start.
         if args.summary == "claude":
             _ensure_deepseek_key()
         console.print("[green]API Keys 就绪[/green]\n")
@@ -938,6 +888,7 @@ def main() -> None:
                     prior_days=args.prior_days,
                     prior_title_days=args.prior_title_days,
                     prompt_on_missing_prior=not args.no_prior_prompt,
+                    run_compare=not args.no_compare,
                     cost_records=cost_records,
                 )
             else:

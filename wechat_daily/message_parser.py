@@ -112,7 +112,6 @@ def format_quoted(refermsg: str) -> str:
 def _parse_quoted(refermsg_xml: str) -> QuotedMessage:
     ref_type = xml_text(refermsg_xml, 'type')
     displayname = xml_text(refermsg_xml, 'displayname')
-    content_field = xml_text(refermsg_xml, 'content')
     fromusername = xml_text(refermsg_xml, 'fromusername')
     rendered = format_quoted(refermsg_xml)
     return QuotedMessage(

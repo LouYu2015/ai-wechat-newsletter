@@ -34,7 +34,6 @@ def patched_extractor(monkeypatch, tmp_path):
     archive = tmp_path / "archive"
     archive.mkdir()
     monkeypatch.setattr(mod, "ARCHIVE_DIR", archive)
-    monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path)
     return mod, archive
 
 

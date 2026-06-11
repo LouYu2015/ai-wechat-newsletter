@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Callable
 
 from .message_parser import (
     Message, QuotedMessage,
-    MSG_TAP, MSG_SYSTEM, MSG_QUOTE, MSG_TEXT, MSG_IMAGE,
+    MSG_TAP, MSG_SYSTEM, MSG_IMAGE,
 )
 
 if TYPE_CHECKING:

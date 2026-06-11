@@ -143,7 +143,6 @@ def test_preview_creates_html(monkeypatch, tmp_path):
     import wechat_daily.publisher as pub
     import wechat_daily.config as cfg
     monkeypatch.setattr(cfg, 'DEBUG_DIR', tmp_path / "debug")
-    monkeypatch.setattr(pub, 'DEBUG_DIR', tmp_path / "debug")
     _patch_publisher(monkeypatch, tmp_path)
 
     path = pub.preview("2026-04-17", "# Hello\n\n**World**", open_browser=False)

@@ -80,7 +80,6 @@ def _parse_member(sub: bytes) -> dict[int, object]:
 
 def _parse_member_buffer(buf: bytes) -> dict[str, str]:
     """Return ``{wxid: 群昵称}`` for members with a non-empty 群昵称."""
-    out: dict[int, str] = {}
     result: dict[str, str] = {}
     i = 0
     while i < len(buf):

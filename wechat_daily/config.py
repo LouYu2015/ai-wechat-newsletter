@@ -39,15 +39,15 @@ GROUP_CHAT_ID = "26389512912@chatroom"
 GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 
 # ── Models ──────────────────────────────────────────────────────────────────────
-# AB test: 报告生成对比 Opus 4.6（主版本，发布 + 喂续写）vs DeepSeek V4 Pro
-# （旁路，仅本地 PDF/debug）。链接摘要统一改用 DeepSeek V4 Pro（关 thinking），
-# 两版日报共用同一批摘要，把唯一变量收敛到报告生成模型上。
+# AB test: 报告生成对比 Opus 4.6（主版本，发布 + 喂续写）vs Fable 5（旁路，仅本地
+# PDF/debug）。两版都走 Anthropic 同一条 extract_report 路径、同套提示词、原生喂图，
+# 只有报告生成模型不同——把唯一变量真正收敛到模型上。链接摘要仍统一用 DeepSeek V4
+# Pro（关 thinking），两版日报共用同一批摘要。
 CLAUDE_MODEL = "claude-opus-4-6"            # 主版本报告生成（发布）
-DEEPSEEK_REPORT_MODEL = "deepseek-v4-pro"   # 对比版报告生成（旁路，不发布）
+COMPARE_REPORT_MODEL = "claude-fable-5"     # 对比版报告生成（旁路，不发布）
 LINK_SUMMARY_MODEL = "deepseek-v4-pro"      # 链接摘要（thinking off）
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_SUMMARY_MODEL = "gemini-3.5-flash"        # 旧版：纯 Markdown 日报（--summary gemini）
-GEMINI_CAPTION_MODEL = "gemini-3.5-flash"        # 图片 caption（喂 DeepSeek 对比版）
 
 # ── Anthropic API pricing (USD per 1M tokens) ──────────────────────────────────
 # Source: https://platform.claude.com/docs/en/about-claude/pricing
@@ -55,6 +55,10 @@ GEMINI_CAPTION_MODEL = "gemini-3.5-flash"        # 图片 caption（喂 DeepSeek
 # input; we list them out explicitly so call sites don't have to multiply.
 MODEL_PRICES: dict[str, dict[str, float]] = {
     "claude-opus-4-6":   {"input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50},
+    # Fable 5（对比版报告生成）：$10/M 输入、$50/M 输出。cache-write 5m = 1.25×
+    # 输入、cache-read = 0.1× 输入。注意 Fable 新分词器同样内容 token 数约 +30%，
+    # 实际日报成本会高于这里按 token 数线性外推的直觉值。
+    "claude-fable-5":    {"input": 10.00, "output": 50.00, "cache_write_5m": 12.50, "cache_read": 1.00},
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cache_write_5m": 3.75, "cache_read": 0.30},
     "claude-haiku-4-5":  {"input": 1.00, "output":  5.00, "cache_write_5m": 1.25, "cache_read": 0.10},
     # DeepSeek 官方价（https://api-docs.deepseek.com/quick_start/pricing）：

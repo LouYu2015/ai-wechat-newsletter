@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .config import ARCHIVE_DIR, OUTPUT_DIR
+from .config import ARCHIVE_DIR
 
 
 def get_pdf_path(date_str: str) -> Path:

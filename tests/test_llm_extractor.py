@@ -117,6 +117,34 @@ def test_no_tool_use_in_request(monkeypatch, tmp_path):
     assert "messages" in call
 
 
+def test_default_model_is_opus(monkeypatch, tmp_path):
+    """Without an explicit model, the main path uses the published model."""
+    from wechat_daily.config import CLAUDE_MODEL
+    monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["x"])
+    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    assert client.messages.calls[0]["model"] == CLAUDE_MODEL
+
+
+def test_model_and_debug_suffix_forwarded(monkeypatch, tmp_path):
+    """AB-compare path: model is passed to the API and debug_suffix isolates
+    sidecars from the canonical un-suffixed ones (which feed next-day continuity)."""
+    monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
+    client = _FakeClient(text_chunks=["intro\n\n### x\nbody\n"])
+    extract_report(
+        "2026-04-30", "chat", api_key="fake", client=client,
+        model="claude-fable-5", debug_suffix=".fable-5",
+    )
+    # Model reaches the API call.
+    assert client.messages.calls[0]["model"] == "claude-fable-5"
+    # Adaptive thinking streams visible reasoning (Fable defaults to omitted).
+    assert client.messages.calls[0]["thinking"] == {"type": "adaptive", "display": "summarized"}
+    # Suffixed sidecar written; canonical extract.md left untouched.
+    day = debug_dir_for("2026-04-30")
+    assert (day / "extract.fable-5.md").exists()
+    assert not (day / "extract.md").exists()
+
+
 def test_refusal_raises_and_writes_failure(monkeypatch, tmp_path):
     import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)

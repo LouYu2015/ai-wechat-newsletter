@@ -7,7 +7,7 @@ from pathlib import Path
 
 import markdown as md_lib
 
-from .config import PUBLIC_REPO_URL, PUBLIC_REPO_DIR, DEBUG_DIR, debug_dir_for
+from .config import PUBLIC_REPO_URL, PUBLIC_REPO_DIR, debug_dir_for
 
 
 def _run(
