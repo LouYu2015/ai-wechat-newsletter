@@ -63,6 +63,14 @@ _FINAL_REF_RE = re.compile(
     r"(?:#(?P<slug>[^']*))?'\s*\|\s*relative_url\s*\}\}\)"
 )
 
+# Inline markdown link ``[text](href)`` — the negative lookbehind skips image
+# syntax ``![alt](src)``. Used to catch hallucinated non-URL link targets.
+_LINK_RE = re.compile(r"(?<!!)\[(?P<text>[^\]\n]+)\]\((?P<href>[^)\n]+)\)")
+# Allowed link-target prefixes: http(s) citations, root/relative paths, in-page
+# anchors, mailto, and the ``{{ … | relative_url }}`` Liquid form used for
+# cross-day refs. Anything else is a hallucinated caption, not a URL.
+_VALID_HREF_RE = re.compile(r"^\s*(?:https?://|/|#|\.{1,2}/|mailto:|\{\{)")
+
 # ASCII punctuation we strip from kramdown-style slugs. CJK characters are
 # preserved as-is; modern browsers handle them in URL fragments.
 _SLUG_PUNCT_RE = re.compile(r"[!\"#$%&'()*+,./:;<=>?@\[\\\]^_`{|}~。！？，、；：『』「」（）【】《》——]")
@@ -388,6 +396,32 @@ def _validate_final_refs_public(
     return _FINAL_REF_RE.sub(sub, text)
 
 
+def _warn_malformed_links(text: str) -> str:
+    """Warn about markdown links whose target isn't a real URL/anchor.
+
+    The LLM occasionally emits ``[visible text](描述文字)`` where the
+    parenthesised part is a hallucinated caption rather than a URL — e.g. the
+    2026-06-10 ``[Microsoft 因数据保留顾虑限制员工使用 Fable](Microsoft restricts
+    Fable 截图)`` deadlink that failed htmlproofer's internal-link check. Real
+    citations carry an ``http(s)`` scheme and cross-day refs use the
+    ``{{ … | relative_url }}`` Liquid form, so any target that doesn't start
+    with an allowed prefix is flagged. The text is returned unchanged — fixing
+    the link is left to a human / AI review pass, not done automatically.
+    """
+
+    for m in _LINK_RE.finditer(text):
+        href = m.group("href")
+        if _VALID_HREF_RE.match(href):
+            continue
+        print(
+            f"[warn] markdown link target {href!r} ({m.group('text')!r}) is not "
+            f"a URL/anchor — likely a hallucinated caption; please fix manually",
+            file=sys.stderr,
+        )
+
+    return text
+
+
 # ── Group-version annotation ────────────────────────────────────────────────────
 
 def _annotate_hidden_for_group(markdown: str) -> str:
@@ -592,6 +626,7 @@ def render_public(
     body = _strip_hidden_for_public(body)
     body = _expand_refs_public(body)
     body = _validate_final_refs_public(body)
+    _warn_malformed_links(body)
 
     def token_to_public(token: str) -> str:
         wxid = (token_map.wxid(token) if token_map else None) \
