@@ -137,6 +137,8 @@ REBUILD=1 ./dev.sh   # 不带缓存重建镜像
 容器内干活前需要知道的关键事实：
 
 - **微信库只读**：宿主机 `~/Library/Containers/com.tencent.xinWeChat/.../xwechat_files` 以 `:ro` 挂到容器内**同路径**（`$HOME=/root` 下）。`wechat_daily/config.py` 用 `Path.home()` 定位，故挂载点必须落在 `$HOME`；改不动原始库。
+- **⚠️ 容器读到的库可能比宿主机陈旧（甚至差数小时）**：Docker Desktop on macOS 的绑定挂载（gRPC-FUSE/VirtioFS）存在已知缓存不一致——**宿主机写入文件后，容器内未必能看到更新**（[docker/for-mac#4861](https://github.com/docker/for-mac/issues/4861)、[#7274](https://github.com/docker/for-mac/issues/7274)）。微信在宿主机持续写库，但容器经只读绑定挂载读到的可能是一份被缓存冻住的旧版本。实测出现过「宿主机已读到 21:25 的消息、19 分钟后启动的容器却只读到 17:46」。**这与时区、解密、`immutable` 都无关，是 Docker 文件共享层的缓存问题。** 要可靠拿到最新聊天记录，请**在宿主机跑**；容器适合改代码 / 跑测试 / 构建，不适合依赖「当下最新」的聊天数据。
+- **⚠️ 容器时钟是 UTC，宿主机是本地时区（如西雅图 PDT）**：数据库里存的是绝对 epoch，内容本身无歧义；但容器内 `datetime.fromtimestamp()` / `strptime(...).timestamp()` 走的是 **UTC** 本地时钟，与日报里显示的 `[HH:MM]`、`config.py` 里按**宿主机本地时区**书写的时间窗（如 `BLOCKED_TIME_RANGES`）**会差出时区偏移**。在容器里算「现在」「某条消息几点」「时间窗边界」时极易错位（实测因此误判过窗口、又一度误猜成 UTC 问题）。涉及本地时间的核对请在**宿主机**做，或在容器里显式按宿主机时区换算。
 - **Python 用 `/opt/venv`**：镜像里已装好依赖，直接 `python` / `pytest` 即可；**不要** source 项目里 macOS 的 `.venv`（那是宿主机的）。
 - **不能 push**：容器不带 SSH 私钥，只做 `git commit` 与构建测试；`git push` 在宿主机/外部完成。
 - **首次登录**：进容器后执行一次 `/login`，登录态存在持久卷 `wechat-dev-claude`，之后免登录。
