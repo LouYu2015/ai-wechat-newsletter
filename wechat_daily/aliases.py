@@ -18,8 +18,8 @@ from .config import (
     ALIASES_FILE, ALIASES_CURSOR_FILE, ANON_SALT_FILE,
     ALIASES_BACKUP_DIR, ALIAS_RESERVATION_DAYS, GROUP_TABLE,
 )
-from .message_parser import MSG_TEXT, decompress, parse_sender_content
-from .wechat_db import get_conn
+from .message_parser import MSG_TEXT, decompress, split_content
+from .wechat_db import get_conn, name2id_map
 
 # ── Word lists ──────────────────────────────────────────────────────────────────
 # 40 × 40 = 1600 combinations. Plenty of headroom for 500+ current users and
@@ -447,19 +447,21 @@ class AliasDB:
             )
             if not cur.fetchone():
                 continue
+            id2wxid = name2id_map(cur)
             cur.execute(
-                f"SELECT create_time, message_content FROM {GROUP_TABLE} "
+                f"SELECT create_time, message_content, real_sender_id FROM {GROUP_TABLE} "
                 f"WHERE local_type = ? AND create_time > ? ORDER BY create_time",
                 (MSG_TEXT, cursor_ts),
             )
-            rows.extend(cur.fetchall())
+            for ct, mc, rsid in cur.fetchall():
+                rows.append((ct, mc, id2wxid.get(rsid, '')))
 
         rows.sort(key=lambda x: x[0])
 
         max_ts = cursor_ts
-        for create_time, message_content in rows:
+        for create_time, message_content, wxid in rows:
             raw = decompress(message_content)
-            wxid, content = parse_sender_content(raw)
+            _, content = split_content(raw, wxid)
             if not wxid:
                 continue
             content = content.strip().split('\n')[0].strip()  # first line only

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from .config import CHATLOG_MAC_DIR, GROUP_TABLE, ARCHIVE_DIR
 from .contacts import ContactMap
 from .message_parser import MSG_IMAGE, MSG_SYSTEM, MSG_TAP, Message, parse_row
-from .wechat_db import get_conn
+from .wechat_db import get_conn, name2id_map
 
 
 def _db_rels() -> list[str]:
@@ -25,6 +25,10 @@ def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> li
     start_ts = int((date - timedelta(hours=1)).timestamp())
     end_ts = int((date + timedelta(days=1, hours=1)).timestamp())
 
+    # Each message DB carries its own Name2Id table mapping the integer
+    # ``real_sender_id`` column → wxid. This is the authoritative sender source
+    # (the embedded ``wxid:\n`` content prefix is missing on the owner's own
+    # messages, which is why they used to vanish). Resolve per-db before merging.
     rows: list[tuple] = []
     for rel in _db_rels():
         try:
@@ -35,13 +39,16 @@ def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> li
             )
             if not cur.fetchone():
                 continue
+            id2wxid = name2id_map(cur)
             cur.execute(
-                f"SELECT create_time, local_type, message_content, local_id, server_id "
+                f"SELECT create_time, local_type, message_content, local_id, server_id, "
+                f"real_sender_id "
                 f"FROM {GROUP_TABLE} "
                 f"WHERE create_time >= ? AND create_time < ? ORDER BY create_time",
                 (start_ts, end_ts),
             )
-            rows.extend(cur.fetchall())
+            for ct, lt, mc, lid, sid, rsid in cur.fetchall():
+                rows.append((ct, lt, mc, lid, sid, id2wxid.get(rsid, '')))
         except FileNotFoundError:
             continue
         except Exception as e:
@@ -53,8 +60,8 @@ def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> li
 
     messages: list[Message] = []
     image_keys: list[tuple[Message, int, int]] = []
-    for create_time, local_type, message_content, local_id, server_id in rows:
-        msg = parse_row(create_time, local_type, message_content)
+    for create_time, local_type, message_content, local_id, server_id, sender_wxid in rows:
+        msg = parse_row(create_time, local_type, message_content, sender_wxid)
         if msg is None:
             continue
         if msg.local_type == MSG_IMAGE and local_id is not None and server_id is not None:

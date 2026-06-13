@@ -69,14 +69,20 @@ def decompress(data) -> str:
     return data or ''
 
 
-def parse_sender_content(raw: str) -> tuple[str, str]:
-    """Split 'wxid:\\ncontent' → (wxid, content). Returns ('', raw) if not matched."""
-    pos = raw.find(':\n')
-    if pos > 0:
-        candidate = raw[:pos]
-        if ' ' not in candidate and len(candidate) < 60:
-            return candidate, raw[pos + 2:]
-    return '', raw
+def split_content(raw: str, sender_wxid: str) -> tuple[str, str]:
+    """Return (sender_wxid, content) with the ``wxid:\\n`` prefix stripped off.
+
+    Sender identity is authoritative — it comes from the DB's ``real_sender_id``
+    column (resolved via ``Name2Id``), passed in by the caller. The embedded
+    ``wxid:\\n`` prefix is used *only* to strip it back off the content, and only
+    when it exactly matches that known sender. The database owner's own messages
+    carry no prefix at all, so nothing is stripped and the content stays intact —
+    which is precisely the bug this fixes (those messages used to resolve to an
+    empty sender and get dropped).
+    """
+    prefix = f"{sender_wxid}:\n"
+    content = raw[len(prefix):] if sender_wxid and raw.startswith(prefix) else raw
+    return sender_wxid, content
 
 
 def xml_text(xml_str: str, tag: str) -> str:
@@ -124,12 +130,23 @@ def _parse_quoted(refermsg_xml: str) -> QuotedMessage:
 
 # ── Main parser ─────────────────────────────────────────────────────────────────
 
-def parse_row(create_time: int, local_type: int, message_content) -> Message | None:
-    """Parse a single DB row into a Message, or return None if it should be skipped."""
+def parse_row(
+    create_time: int,
+    local_type: int,
+    message_content,
+    sender_wxid: str,
+) -> Message | None:
+    """Parse a single DB row into a Message, or return None if it should be skipped.
+
+    *sender_wxid* is the authoritative sender resolved from the row's
+    ``real_sender_id`` column via ``Name2Id`` (see ``chat_extractor``). It is the
+    single source of sender identity — notably it carries the owner's own
+    prefix-less messages, which have no ``wxid:\\n`` prefix to recover from.
+    """
     raw = decompress(message_content)
 
     if local_type == MSG_TEXT:
-        sender_wxid, content = parse_sender_content(raw)
+        sender_wxid, content = split_content(raw, sender_wxid)
         content = content.strip()
         if not content:
             return None
@@ -137,7 +154,7 @@ def parse_row(create_time: int, local_type: int, message_content) -> Message | N
                        sender_wxid=sender_wxid, content=content, raw=raw)
 
     elif local_type == MSG_QUOTE:
-        sender_wxid, xml = parse_sender_content(raw)
+        sender_wxid, xml = split_content(raw, sender_wxid)
         title = xml_text(xml, 'title').strip()
         if not title:
             return None
@@ -162,7 +179,7 @@ def parse_row(create_time: int, local_type: int, message_content) -> Message | N
                        sender_wxid='', content=text, raw=raw)
 
     elif local_type in (MSG_LINK_CARD, MSG_LINK_OPEN):
-        sender_wxid, xml = parse_sender_content(raw)
+        sender_wxid, xml = split_content(raw, sender_wxid)
         title = xml_text(xml, 'title')
         url = html.unescape(xml_text(xml, 'url'))
         description = xml_text(xml, 'des')
@@ -180,50 +197,50 @@ def parse_row(create_time: int, local_type: int, message_content) -> Message | N
                        link=LinkMeta(title=title, url=url, description=description))
 
     elif local_type == MSG_FILE:
-        sender_wxid, xml = parse_sender_content(raw)
+        sender_wxid, xml = split_content(raw, sender_wxid)
         title = xml_text(xml, 'title')
         label = '[文件] ' + title if title else '[文件]'
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content=label, raw=raw)
 
     elif local_type == MSG_FORWARD:
-        sender_wxid, xml = parse_sender_content(raw)
+        sender_wxid, xml = split_content(raw, sender_wxid)
         title = xml_text(xml, 'title')
         label = '[合并转发] ' + title if title else '[合并转发]'
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content=label, raw=raw)
 
     elif local_type == MSG_MINIAPP:
-        sender_wxid, xml = parse_sender_content(raw)
+        sender_wxid, xml = split_content(raw, sender_wxid)
         title = xml_text(xml, 'title')
         label = '[小程序] ' + title if title else '[小程序]'
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content=label, raw=raw)
 
     elif local_type == MSG_IMAGE:
-        sender_wxid, _ = parse_sender_content(raw)
+        sender_wxid, _ = split_content(raw, sender_wxid)
         # image_md5 (== .dat filename) lives in message_resource.MessageResourceInfo,
         # not in this XML. chat_extractor fills it via a post-pass.
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content='[图片]', raw=raw)
 
     elif local_type == MSG_VOICE:
-        sender_wxid, _ = parse_sender_content(raw)
+        sender_wxid, _ = split_content(raw, sender_wxid)
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content='[语音]', raw=raw)
 
     elif local_type == MSG_VIDEO:
-        sender_wxid, _ = parse_sender_content(raw)
+        sender_wxid, _ = split_content(raw, sender_wxid)
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content='[视频]', raw=raw)
 
     elif local_type == MSG_STICKER:
-        sender_wxid, _ = parse_sender_content(raw)
+        sender_wxid, _ = split_content(raw, sender_wxid)
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content='[表情包]', raw=raw)
 
     elif local_type in (MSG_CARD, MSG_GIF):
-        sender_wxid, _ = parse_sender_content(raw)
+        sender_wxid, _ = split_content(raw, sender_wxid)
         label = '[名片]' if local_type == MSG_CARD else '[GIF]'
         return Message(create_time=create_time, local_type=local_type,
                        sender_wxid=sender_wxid, content=label, raw=raw)

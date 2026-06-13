@@ -74,6 +74,26 @@ def get_conn(rel_path: str, cipher_key: str | None = None) -> Any:
     )
 
 
+def name2id_map(cur) -> dict[int, str]:
+    """Return ``{real_sender_id: wxid}`` from a message db's ``Name2Id`` table.
+
+    Each message db carries its own ``Name2Id`` table mapping the integer
+    ``real_sender_id`` column (a rowid) → wxid. This is the authoritative sender
+    source: the embedded ``wxid:\\n`` content prefix is absent on the owner's own
+    messages. Returns an empty map when the table is missing (e.g. synthetic
+    test DBs); callers should treat an unresolved sender as empty.
+    """
+    try:
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'"
+        )
+        if not cur.fetchone():
+            return {}
+        return {rowid: un for rowid, un in cur.execute("SELECT rowid, user_name FROM Name2Id")}
+    except Exception:
+        return {}
+
+
 def clear_cache() -> None:
     """Close and evict all cached connections (useful in tests)."""
     for conn in _db_conns.values():

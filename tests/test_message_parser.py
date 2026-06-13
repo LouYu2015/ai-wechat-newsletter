@@ -4,34 +4,13 @@ import pytest
 from wechat_daily.message_parser import (
     MSG_TEXT, MSG_QUOTE, MSG_TAP, MSG_IMAGE, MSG_SYSTEM,
     MSG_LINK_OPEN, MSG_FILE,
-    parse_row, parse_sender_content, format_quoted, decompress,
+    parse_row, split_content, format_quoted, decompress,
 )
-
-
-def test_parse_sender_content_normal():
-    raw = "wxid_abc123:\nhello world"
-    wxid, content = parse_sender_content(raw)
-    assert wxid == "wxid_abc123"
-    assert content == "hello world"
-
-
-def test_parse_sender_content_no_match():
-    raw = "no sender here"
-    wxid, content = parse_sender_content(raw)
-    assert wxid == ""
-    assert content == raw
-
-
-def test_parse_sender_content_space_in_candidate():
-    # Space in potential wxid → not a wxid
-    raw = "hello world:\ncontent"
-    wxid, content = parse_sender_content(raw)
-    assert wxid == ""
 
 
 def test_parse_row_text():
     raw = b"wxid_test:\nHello"
-    msg = parse_row(1000, MSG_TEXT, raw)
+    msg = parse_row(1000, MSG_TEXT, raw, "wxid_test")
     assert msg is not None
     assert msg.sender_wxid == "wxid_test"
     assert msg.content == "Hello"
@@ -40,13 +19,53 @@ def test_parse_row_text():
 
 def test_parse_row_text_empty_content():
     raw = b"wxid_test:\n"
-    msg = parse_row(1000, MSG_TEXT, raw)
+    msg = parse_row(1000, MSG_TEXT, raw, "wxid_test")
     assert msg is None
+
+
+def test_split_content_authoritative_sender_strips_prefix():
+    # Sender supplied (from real_sender_id) and the content carries its prefix.
+    wxid, content = split_content("wxid_real:\nhello", "wxid_real")
+    assert wxid == "wxid_real"
+    assert content == "hello"
+
+
+def test_split_content_owner_prefixless_kept_intact():
+    # The owner's own messages have no prefix; content must stay whole even when
+    # it happens to start with a 'token:\n'-looking line (legacy heuristic would
+    # have wrongly stripped it).
+    wxid, content = split_content("李雷:\n你好", "wxid_owner")
+    assert wxid == "wxid_owner"
+    assert content == "李雷:\n你好"
+
+
+def test_split_content_empty_sender_keeps_content_whole():
+    # With no authoritative sender there is nothing to strip — the prefix
+    # heuristic is gone, so content is returned untouched.
+    wxid, content = split_content("wxid_abc:\nhi", "")
+    assert wxid == ""
+    assert content == "wxid_abc:\nhi"
+
+
+def test_parse_row_uses_authoritative_sender_for_prefixless_owner_msg():
+    # The owner's own group message: no embedded prefix, sender comes from the
+    # DB's real_sender_id. Previously this resolved to '' and got dropped.
+    msg = parse_row(1000, MSG_TEXT, b"\xe4\xbd\xa0\xe5\xa5\xbd", "wxid_owner")
+    assert msg is not None
+    assert msg.sender_wxid == "wxid_owner"
+    assert msg.content == "你好"
+
+
+def test_parse_row_system_ignores_supplied_sender():
+    # System rows stay senderless even though the DB hands us a real_sender_id.
+    msg = parse_row(1000, MSG_SYSTEM, b"someone joined", "wxid_owner")
+    assert msg is not None
+    assert msg.sender_wxid == ""
 
 
 def test_parse_row_image():
     raw = b"wxid_img:\n<img/>"
-    msg = parse_row(1000, MSG_IMAGE, raw)
+    msg = parse_row(1000, MSG_IMAGE, raw, "wxid_img")
     assert msg is not None
     assert msg.content == "[图片]"
     assert msg.sender_wxid == "wxid_img"
@@ -54,14 +73,14 @@ def test_parse_row_image():
 
 def test_parse_row_system():
     raw = b"some system message"
-    msg = parse_row(1000, MSG_SYSTEM, raw)
+    msg = parse_row(1000, MSG_SYSTEM, raw, "")
     assert msg is not None
     assert msg.content == "some system message"
     assert msg.sender_wxid == ""
 
 
 def test_parse_row_unknown_type_returns_none():
-    msg = parse_row(1000, 99999, b"unknown")
+    msg = parse_row(1000, 99999, b"unknown", "")
     assert msg is None
 
 
@@ -92,7 +111,7 @@ def test_parse_row_link_card_with_url():
         b"<url>https://mp.weixin.qq.com/s?__biz=abc&amp;mid=123&amp;idx=1</url>"
         b"</appmsg></msg>"
     )
-    msg = parse_row(1000, MSG_LINK_OPEN, raw)
+    msg = parse_row(1000, MSG_LINK_OPEN, raw, "wxid_link")
     assert msg is not None
     assert msg.sender_wxid == "wxid_link"
     assert msg.content == (
@@ -112,7 +131,7 @@ def test_parse_row_link_card_extracts_description():
         b"<url>https://example.com/a</url>"
         b"</appmsg></msg>"
     )
-    msg = parse_row(1000, MSG_LINK_OPEN, raw)
+    msg = parse_row(1000, MSG_LINK_OPEN, raw, "wxid_link")
     assert msg is not None
     assert msg.link is not None
     assert msg.link.description == "这是摘要"
@@ -120,7 +139,7 @@ def test_parse_row_link_card_extracts_description():
 
 def test_parse_row_link_card_url_missing_falls_back_to_title():
     raw = b"wxid_link:\n<msg><appmsg><title>just a title</title></appmsg></msg>"
-    msg = parse_row(1000, MSG_LINK_OPEN, raw)
+    msg = parse_row(1000, MSG_LINK_OPEN, raw, "wxid_link")
     assert msg is not None
     assert msg.content == "[链接] just a title"
 
@@ -132,7 +151,7 @@ def test_parse_row_link_card_brackets_in_title_sanitized():
         b"<url>https://example.com/a</url>"
         b"</appmsg></msg>"
     )
-    msg = parse_row(1000, MSG_LINK_OPEN, raw)
+    msg = parse_row(1000, MSG_LINK_OPEN, raw, "wxid_link")
     assert msg is not None
     assert msg.content == "[链接] [［重磅］ hello](https://example.com/a)"
 
