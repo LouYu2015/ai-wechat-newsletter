@@ -41,7 +41,7 @@ from wechat_daily.message_parser import (
     parse_row,
 )
 from wechat_daily.privacy import tokenize_messages
-from wechat_daily.wechat_db import get_conn
+from wechat_daily.wechat_db import get_conn, name2id_map
 
 DB_RELS = ["message/message_0.db", "message/message_1.db"]
 
@@ -107,7 +107,8 @@ def fetch_messages(
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         order = "DESC" if sql_limit else "ASC"
         sql = (
-            f"SELECT create_time, local_type, message_content, local_id, server_id "
+            f"SELECT create_time, local_type, message_content, local_id, server_id, "
+            f"real_sender_id "
             f"FROM {GROUP_TABLE}{where} ORDER BY create_time {order}"
         )
         if sql_limit:
@@ -116,8 +117,13 @@ def fetch_messages(
             # extra so the final slice can still reach the requested count.
             params.append(sql_limit + 20)
         try:
+            # Each DB carries its own Name2Id table mapping the integer
+            # real_sender_id → wxid (authoritative sender, see chat_extractor).
+            # Resolve per-db before merging.
+            id2wxid = name2id_map(cur)
             cur.execute(sql, params)
-            raw_rows.extend(cur.fetchall())
+            for ct, lt, mc, lid, sid, rsid in cur.fetchall():
+                raw_rows.append((ct, lt, mc, lid, sid, id2wxid.get(rsid, '')))
         except Exception as e:
             import warnings
             warnings.warn(f"[query_chatlog] 跳过损坏数据库 {rel}: {e}")
@@ -125,8 +131,8 @@ def fetch_messages(
 
     messages: list[Message] = []
     image_keys: list[tuple[Message, int, int]] = []
-    for create_time, local_type, content, local_id, server_id in raw_rows:
-        msg = parse_row(create_time, local_type, content)
+    for create_time, local_type, content, local_id, server_id, sender_wxid in raw_rows:
+        msg = parse_row(create_time, local_type, content, sender_wxid)
         if msg is None:
             continue
         if msg.local_type == MSG_IMAGE and local_id is not None and server_id is not None:
