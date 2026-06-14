@@ -20,6 +20,7 @@ OpenAI 兼容接口（https://api.deepseek.com），把回复打印到 stdout。
     --system TEXT     system prompt（可选）
     --model NAME      默认 deepseek-v4-pro（经济款用 deepseek-v4-flash）
     --temperature F   默认 1.0
+    --no-thinking     关闭 thinking 模式（默认开启 V4 Pro 推理）
     --no-stream       一次性返回（默认流式输出，边生成边打印）
 
 回复正文打印到 stdout；运行信息（用量等）打印到 stderr。
@@ -115,6 +116,8 @@ def main() -> int:
                         help="模型，默认 deepseek-v4-pro（经济款用 deepseek-v4-flash）")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="采样温度，默认 1.0")
+    parser.add_argument("--no-thinking", action="store_true",
+                        help="关闭 thinking 模式（默认开启 V4 Pro 推理）")
     parser.add_argument("--no-stream", action="store_true",
                         help="一次性返回（默认流式）")
     args = parser.parse_args()
@@ -136,6 +139,7 @@ def main() -> int:
         "messages": build_messages(prompt, args.system),
         "temperature": args.temperature,
     }
+    payload["thinking"] = {"type": "disabled" if args.no_thinking else "enabled"}
 
     try:
         if args.no_stream:
