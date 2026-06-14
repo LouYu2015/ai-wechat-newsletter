@@ -38,15 +38,9 @@ S_HR = "margin:34px 0;border-top:1px solid #ececec;"
 S_REF_TITLE = "font-size:15px;color:#3f3f3f;"
 S_REF_URL = "font-size:13px;color:#8a8a8a;word-break:break-all;"
 
-GRAY_INTRO = (
-    '<section style="margin:0 0 24px;padding:12px 16px;background:#f6f7f9;'
-    'border-radius:10px;font-size:14px;color:#8a8a8a;line-height:1.7;">'
-    '<p style="margin:0;">※ 本栏目素材来自鸭哥创建的 AI 从业者微信群，群友均以匿名昵称出现。'
-    '完整每日日报开源在 GitHub：</p>'
-    '<p style="margin:2px 0 0;word-break:break-all;">https://louyu2015.github.io/AI-chatgroup-daily/</p>'
-    '<p style="margin:8px 0 0;">文章由作者和 Claude Opus 联合撰写。</p>'
-    '</section>'
-)
+# 顶部「素材声明」灰框样式。框内文字从 md 的第一个 `>` 引用块读取。
+S_INTRO_BOX = ("margin:0 0 24px;padding:12px 16px;background:#f6f7f9;"
+               "border-radius:10px;font-size:14px;color:#8a8a8a;line-height:1.7;")
 
 
 # ── 行内转换 ────────────────────────────────────────────────────────
@@ -77,6 +71,9 @@ def inline(text: str) -> str:
 
     text = _CODE_RE.sub(_stash_code, text)
 
+    # 1.5 自动链接 <https://…> → 纯文本 URL（公众号不支持超链接，去掉尖括号）
+    text = re.sub(r"<(https?://[^>\s]+)>", r"\1", text)
+
     # 2. 转义其余文本
     text = html.escape(text, quote=False)
 
@@ -105,9 +102,12 @@ def convert(md: str) -> tuple[str, str]:
     first_bq_used = False
     refs_mode = False
 
+    def is_bullet(s: str) -> bool:
+        return s.lstrip()[:2] in ("- ", "* ")
+
     def is_marker(s: str) -> bool:
         s = s.lstrip()
-        return (s.startswith("#") or s.startswith(">") or s.startswith("- ")
+        return (s.startswith("#") or s.startswith(">") or is_bullet(s)
                 or s.strip() == "---" or not s.strip())
 
     while i < n:
@@ -160,7 +160,12 @@ def convert(md: str) -> tuple[str, str]:
 
             if not first_bq_used:
                 first_bq_used = True
-                out.append(GRAY_INTRO)
+                # 顶部素材声明框：内容来自 md 第一个引用块的各段
+                ps = []
+                for k, p in enumerate(paras):
+                    mt = "margin:0;" if k == 0 else "margin:8px 0 0;"
+                    ps.append(f'<p style="{mt}word-break:break-all;">{inline(p)}</p>')
+                out.append(f'<section style="{S_INTRO_BOX}">{"".join(ps)}</section>')
             else:
                 ps = []
                 for k, p in enumerate(paras):
@@ -169,10 +174,10 @@ def convert(md: str) -> tuple[str, str]:
                 out.append(f'<section style="{S_QUOTE_BOX}">{"".join(ps)}</section>')
             continue
 
-        # 列表
-        if stripped.startswith("- "):
+        # 列表（支持 `- ` 和 `* ` 两种 bullet）
+        if is_bullet(stripped):
             items: list[str] = []
-            while i < n and lines[i].strip().startswith("- "):
+            while i < n and is_bullet(lines[i].strip()):
                 items.append(lines[i].strip()[2:])
                 i += 1
             lis = "".join(
