@@ -71,10 +71,12 @@ _LINK_RE = re.compile(r"(?<!!)\[(?P<text>[^\]\n]+)\]\((?P<href>[^)\n]+)\)")
 # cross-day refs. Anything else is a hallucinated caption, not a URL.
 _VALID_HREF_RE = re.compile(r"^\s*(?:https?://|/|#|\.{1,2}/|mailto:|\{\{)")
 
-# ASCII punctuation we strip from kramdown-style slugs. CJK characters are
-# preserved as-is; modern browsers handle them in URL fragments.
-_SLUG_PUNCT_RE = re.compile(r"[!\"#$%&'()*+,./:;<=>?@\[\\\]^_`{|}~。！？，、；：『』「」（）【】《》——]")
-_SLUG_DASHES_RE = re.compile(r"-+")
+# Characters dropped from a slug: anything that is not a word character (CJK
+# included), a hyphen, a space, or a tab — mirroring kramdown-parser-gfm's
+# NON_WORD_RE = /[^\p{Word}\- \t]/. CJK is preserved; browsers handle it in
+# URL fragments.
+_SLUG_DROP_RE = re.compile(r"[^\w\- \t]", re.UNICODE)
+_SLUG_SPACE_RE = re.compile(r"[ \t]")
 
 _TAG_INVALID_RE = re.compile(r"[^a-z0-9-]+")
 _TAG_DASHES_RE = re.compile(r"-{2,}")
@@ -266,17 +268,17 @@ def _collapse_blanks(text: str) -> str:
 # ── Cross-day reference expansion ───────────────────────────────────────────────
 
 def _slugify_heading(title: str) -> str:
-    """Best-effort kramdown-compatible slug for a Chinese/English heading.
+    """kramdown-parser-gfm-compatible slug for a Chinese/English heading.
 
-    Mirrors the common kramdown auto-id behaviour: lowercase, ASCII punctuation
-    stripped, whitespace collapsed to dashes, CJK characters preserved.
-    Anchors generated this way work for typical Jekyll posts; mismatches just
-    degrade to page-level navigation (browser ignores unknown fragments).
+    Mirrors ``generate_gfm_header_id`` exactly: lowercase, drop everything that
+    is not a word char / hyphen / space / tab, then turn each space or tab into
+    a single hyphen. No hyphen collapsing and no leading/trailing strip — a
+    heading like ``Claude `-p` 禁令`` keeps the double hyphen (``claude--p-禁令``)
+    that the rendered HTML id carries, so htmlproofer's hash check passes.
     """
     s = title.strip().lower()
-    s = re.sub(r"\s+", "-", s)
-    s = _SLUG_PUNCT_RE.sub("", s)
-    s = _SLUG_DASHES_RE.sub("-", s).strip("-")
+    s = _SLUG_DROP_RE.sub("", s)
+    s = _SLUG_SPACE_RE.sub("-", s)
     return s
 
 

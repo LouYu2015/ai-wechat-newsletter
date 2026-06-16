@@ -522,9 +522,17 @@ def test_slugify_strips_punctuation():
     assert _slugify_heading("Claude Opus 4.7 发布!") == "claude-opus-47-发布"
 
 
-def test_slugify_collapses_whitespace_and_dashes():
-    assert _slugify_heading("  multi   space  ") == "multi-space"
-    assert _slugify_heading("a---b") == "a-b"
+def test_slugify_preserves_repeated_hyphens():
+    # kramdown-parser-gfm turns each space into its own hyphen and never
+    # collapses runs of hyphens, so we must not collapse either.
+    assert _slugify_heading("  multi   space  ") == "multi---space"
+
+
+def test_slugify_inline_code_keeps_double_hyphen():
+    # An inline-code segment like `-p` surrounded by spaces yields a literal
+    # double hyphen in the rendered HTML id; the anchor must match it exactly.
+    assert _slugify_heading("Claude `-p` 禁令与远程控制困局") == \
+        "claude--p-禁令与远程控制困局"
 
 
 def test_slugify_strips_chinese_punctuation():
