@@ -1,7 +1,7 @@
 # 开发沙箱：跑项目 + 在里面跑 Claude Code。
 # - 只读挂载微信加密数据库（见 dev.sh），读写挂载项目目录到 /workspace
 # - Claude Code 用官方原生安装器装进持久卷，启动时自更新到最新版（见 entrypoint.sh）
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Node.js（部分 MCP / npx 工具会用到）──────────────────────────────────
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
