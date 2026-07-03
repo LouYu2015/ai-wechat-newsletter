@@ -110,6 +110,21 @@ def test_estimate_cost_realistic_mixed_call():
     assert cost == pytest.approx(0.575)
 
 
+def test_estimate_cost_batch_halves_everything():
+    """Batch API bills every token category at 50% of standard prices."""
+    usage = {
+        "input_tokens": 1_000_000,
+        "output_tokens": 1_000_000,
+        "cache_creation_input_tokens": 1_000_000,
+        "cache_read_input_tokens": 1_000_000,
+    }
+    full = estimate_cost("claude-opus-4-6", usage)
+    half = estimate_cost("claude-opus-4-6", usage, batch=True)
+    assert half == pytest.approx(full / 2)
+    # Sanity on the absolute number: (5 + 25 + 6.25 + 0.5) / 2 = 18.375
+    assert half == pytest.approx(18.375)
+
+
 # ── log_call ───────────────────────────────────────────────────────────────────
 
 
@@ -150,6 +165,19 @@ def test_log_call_appends_multiple_records(tmp_path):
     assert len(lines) == 2
     assert json.loads(lines[0])["stage"] == "extract"
     assert json.loads(lines[1])["stage"] == "link"
+
+
+def test_log_call_batch_flag_halves_cost_and_lands_on_ledger(tmp_path):
+    usage = _FakeUsage(input_tokens=100, output_tokens=50)
+    record = log_call(
+        date="2026-05-18", stage="extract", model="claude-opus-4-6",
+        usage=usage, duration_s=600.0, debug_dir=tmp_path, batch=True,
+    )
+    assert record.batch is True
+    # Half of the standard 0.00175.
+    assert record.estimated_cost_usd == pytest.approx(0.000875)
+    parsed = json.loads((tmp_path / "costs.jsonl").read_text(encoding="utf-8"))
+    assert parsed["batch"] is True
 
 
 def test_log_call_handles_none_usage(tmp_path):
