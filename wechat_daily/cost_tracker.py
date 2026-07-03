@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from .config import DEBUG_DIR, MODEL_PRICES
+from wechat_daily.config import DEBUG_DIR, MODEL_PRICES
 
 # ── Usage normalization ─────────────────────────────────────────────────────────
 

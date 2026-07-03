@@ -22,7 +22,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .config import DEBUG_DIR
+from wechat_daily.config import DEBUG_DIR
 
 # Match ``## title`` and ``### title`` lines. Anchored to start of line.
 _TITLE_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$", re.MULTILINE)

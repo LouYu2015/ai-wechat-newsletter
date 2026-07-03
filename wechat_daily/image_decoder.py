@@ -33,7 +33,7 @@ from typing import Optional
 
 from PIL import Image, ImageStat
 
-from .config import CHATLOG_MAC_DIR, GROUP_CHAT_ID, WECHAT_DATA_DIR
+from wechat_daily.config import CHATLOG_MAC_DIR, GROUP_CHAT_ID, WECHAT_DATA_DIR
 
 # Vendored upstream decoder (chatlog-mac/decode_image.py)
 sys.path.insert(0, str(CHATLOG_MAC_DIR))

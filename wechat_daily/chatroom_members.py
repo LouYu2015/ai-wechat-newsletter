@@ -14,8 +14,8 @@ without a 群昵称 fall back to ``contact.nick_name`` via ``ContactMap``.
 
 from __future__ import annotations
 
-from .config import GROUP_CHAT_ID
-from .wechat_db import get_conn
+from wechat_daily.config import GROUP_CHAT_ID
+from wechat_daily.wechat_db import get_conn
 
 
 class ChatroomMembers:

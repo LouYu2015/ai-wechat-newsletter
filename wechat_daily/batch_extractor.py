@@ -47,13 +47,9 @@ from typing import Callable
 
 import httpx
 
-from .config import debug_dir_for
-from .llm_extractor import (
-    ExtractionError,
-    build_request_params,
-    finalize_response,
-)
-from .models import DailyReport
+from wechat_daily.config import debug_dir_for
+from wechat_daily.llm_extractor import ExtractionError, build_request_params, finalize_response
+from wechat_daily.models import DailyReport
 
 STATE_VERSION = 1
 POLL_INTERVAL_S = 30.0

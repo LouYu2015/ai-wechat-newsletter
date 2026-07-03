@@ -12,9 +12,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .aliases import AliasDB
-    from .contacts import ContactMap
-    from .privacy import TokenMap
+    from wechat_daily.aliases import AliasDB
+    from wechat_daily.contacts import ContactMap
+    from wechat_daily.privacy import TokenMap
 
 
 def build_roster(

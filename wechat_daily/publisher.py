@@ -7,7 +7,7 @@ from pathlib import Path
 
 import markdown as md_lib
 
-from .config import PUBLIC_REPO_DIR, PUBLIC_REPO_URL, debug_dir_for
+from wechat_daily.config import PUBLIC_REPO_DIR, PUBLIC_REPO_URL, debug_dir_for
 
 
 def _run(

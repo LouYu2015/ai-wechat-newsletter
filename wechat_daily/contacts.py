@@ -12,8 +12,8 @@ wxid — used as alternates by privacy.tokenization and roster.build_roster.
 
 from __future__ import annotations
 
-from .chatroom_members import ChatroomMembers
-from .wechat_db import get_conn
+from wechat_daily.chatroom_members import ChatroomMembers
+from wechat_daily.wechat_db import get_conn
 
 
 class ContactMap:

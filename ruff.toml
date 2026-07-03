@@ -13,16 +13,22 @@ exclude = [
 
 [lint]
 select = [
-    "E4",  # import 位置/格式
-    "E7",  # 语句层面的常见错误（比较、缩进等）
-    "E9",  # 语法级错误
-    "F",   # pyflakes：未使用 import/变量、未定义名字等
-    "W",   # pycodestyle 警告：行尾空白等
-    "I",   # isort：import 分组与排序
+    "E4",     # import 位置/格式
+    "E7",     # 语句层面的常见错误（比较、缩进等）
+    "E9",     # 语法级错误
+    "F",      # pyflakes：未使用 import/变量、未定义名字等
+    "W",      # pycodestyle 警告：行尾空白等
+    "I",      # isort：import 分组与排序
+    "TID252", # 禁止相对导入（--fix 可自动转绝对导入）
 ]
 
 [lint.isort]
 known-first-party = ["wechat_daily"]
+
+[lint.flake8-tidy-imports]
+# "all"：同级（from .x）与上级（from ..x）相对导入一律禁止，全部写
+# from wechat_daily.x …（PEP 8 首选、Google 风格强制）。
+ban-relative-imports = "all"
 
 [lint.per-file-ignores]
 # 测试里的 fake/stub 类偶尔会故意 shadow 内置名（如 type 参数）。

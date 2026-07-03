@@ -14,8 +14,8 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .config import LINK_SUMMARY_MODEL
-from .message_parser import (
+from wechat_daily.config import LINK_SUMMARY_MODEL
+from wechat_daily.message_parser import (
     MSG_LINK_CARD,
     MSG_LINK_OPEN,
     MSG_SYSTEM,
@@ -594,8 +594,8 @@ def _summarize_deepseek(
     """
     import time
 
-    from . import deepseek_client
-    from .config import get_deepseek_key
+    from wechat_daily import deepseek_client
+    from wechat_daily.config import get_deepseek_key
 
     key = get_deepseek_key()
     if not key:

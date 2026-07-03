@@ -7,17 +7,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
-from .message_parser import (
-    MSG_IMAGE,
-    MSG_SYSTEM,
-    MSG_TAP,
-    Message,
-    QuotedMessage,
-)
+from wechat_daily.message_parser import MSG_IMAGE, MSG_SYSTEM, MSG_TAP, Message, QuotedMessage
 
 if TYPE_CHECKING:
-    from .aliases import AliasDB
-    from .contacts import ContactMap
+    from wechat_daily.aliases import AliasDB
+    from wechat_daily.contacts import ContactMap
 
 
 class LeakDetected(Exception):

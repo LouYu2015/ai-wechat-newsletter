@@ -14,7 +14,7 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Callable
 
-from .config import (
+from wechat_daily.config import (
     ALIAS_RESERVATION_DAYS,
     ALIASES_BACKUP_DIR,
     ALIASES_CURSOR_FILE,
@@ -22,8 +22,8 @@ from .config import (
     ANON_SALT_FILE,
     GROUP_TABLE,
 )
-from .message_parser import MSG_TEXT, decompress, split_content
-from .wechat_db import get_conn, name2id_map
+from wechat_daily.message_parser import MSG_TEXT, decompress, split_content
+from wechat_daily.wechat_db import get_conn, name2id_map
 
 # ── Word lists ──────────────────────────────────────────────────────────────────
 # 40 × 40 = 1600 combinations. Plenty of headroom for 500+ current users and

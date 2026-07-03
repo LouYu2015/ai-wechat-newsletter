@@ -141,9 +141,11 @@ Lint 工具用 [ruff](https://docs.astral.sh/ruff/)，配置在仓库根的 `ruf
 .venv/bin/ruff check --fix .
 ```
 
-import 的规范（ruff 的 `I` 规则会强制执行）：`from __future__ import annotations`
-最前；随后三组、组间空行——**标准库 → 第三方 → 本项目（`wechat_daily` /
-相对导入）**，组内按字母序；import 之间不夹代码。函数体内的延迟 import
+import 的规范（ruff 的 `I` / `TID252` 规则会强制执行）：`from __future__
+import annotations` 最前；随后三组、组间空行——**标准库 → 第三方 →
+本项目（`wechat_daily.…`）**，组内按字母序；import 之间不夹代码。
+**一律绝对导入**（`from wechat_daily.config import …`，禁止 `from .config
+import …`——TID252 会报错并可 `--fix` 自动转换）。函数体内的延迟 import
 （如 `import anthropic`）是刻意为之的启动加速，ruff 不会报。
 
 ### Claude Code 云端环境备注

@@ -19,9 +19,9 @@ import time
 
 import httpx
 
-from .config import CLAUDE_MODEL, debug_dir_for
-from .models import DailyReport
-from .prompts import SYSTEM_PROMPT, USER_INSTRUCTIONS
+from wechat_daily.config import CLAUDE_MODEL, debug_dir_for
+from wechat_daily.models import DailyReport
+from wechat_daily.prompts import SYSTEM_PROMPT, USER_INSTRUCTIONS
 
 # Body markdown ## / ### header line.
 _BODY_HEADER_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
@@ -63,7 +63,7 @@ def build_extract_user_content(
     appear as ``[图片]`` placeholders). *debug_text* is always the flat string
     used for the debug sidecar.
     """
-    from .prior_report import (
+    from wechat_daily.prior_report import (
         format_prior_report_titles_block,
         format_prior_reports_block,
     )

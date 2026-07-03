@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .config import CHATLOG_DIR, CHATLOG_MAC_DIR, WECHAT_DATA_DIR
+from wechat_daily.config import CHATLOG_DIR, CHATLOG_MAC_DIR, WECHAT_DATA_DIR
 
 _db_conns: dict[str, Any] = {}
 

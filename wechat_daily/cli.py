@@ -21,11 +21,11 @@ from rich.progress import (
 )
 from rich.text import Text
 
-from . import batch_extractor, cost_tracker
-from .aliases import AliasDB
-from .archiver import archive_old_files, get_pdf_path
-from .chat_extractor import extract_messages, find_missing_dates
-from .config import (
+from wechat_daily import batch_extractor, cost_tracker
+from wechat_daily.aliases import AliasDB
+from wechat_daily.archiver import archive_old_files, get_pdf_path
+from wechat_daily.chat_extractor import extract_messages, find_missing_dates
+from wechat_daily.config import (
     ARCHIVE_DIR,
     CLAUDE_MODEL,
     COMPARE_REPORT_MODEL,
@@ -33,30 +33,26 @@ from .config import (
     PROJECT_ROOT,
     debug_dir_for,
 )
-from .contacts import ContactMap
-from .lanes_ui import Lanes
-from .llm_extractor import (
-    ExtractionError,
-    build_extract_user_content,
-    extract_report,
-)
-from .pdf import convert_to_pdf
-from .prior_report import (
+from wechat_daily.contacts import ContactMap
+from wechat_daily.lanes_ui import Lanes
+from wechat_daily.llm_extractor import ExtractionError, build_extract_user_content, extract_report
+from wechat_daily.pdf import convert_to_pdf
+from wechat_daily.prior_report import (
     load_prior_report_titles,
     load_prior_reports,
     missing_prior_dates,
 )
-from .privacy import (
+from wechat_daily.privacy import (
     LeakDetected,
     format_tokenized_messages,
     format_tokenized_messages_blocks,
     leak_check,
     tokenize_messages,
 )
-from .publisher import commit, preview, push_pending, write_post
-from .renderer import render_group, render_public
-from .roster import build_roster, format_roster
-from .url_enricher import count_link_targets, enrich_link_messages
+from wechat_daily.publisher import commit, preview, push_pending, write_post
+from wechat_daily.renderer import render_group, render_public
+from wechat_daily.roster import build_roster, format_roster
+from wechat_daily.url_enricher import count_link_targets, enrich_link_messages
 
 console = Console()
 
@@ -470,7 +466,7 @@ def _run_streaming_extraction(
     import tempfile
     import time as _time
 
-    from .image_decoder import ImageDecoder
+    from wechat_daily.image_decoder import ImageDecoder
 
     console.rule(f"[bold]{rule_title}")
 
@@ -777,7 +773,7 @@ def _run_batch_extraction(
     import tempfile
     import time as _time
 
-    from .image_decoder import ImageDecoder
+    from wechat_daily.image_decoder import ImageDecoder
 
     console.rule("[bold]批量提取  [dim](Batch API，5 折计费，无流式预览)[/dim]")
 

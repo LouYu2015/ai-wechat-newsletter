@@ -29,13 +29,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from .config import PUBLIC_REPO_DIR
-from .models import DailyReport
-from .privacy import mark_leaks
+from wechat_daily.config import PUBLIC_REPO_DIR
+from wechat_daily.models import DailyReport
+from wechat_daily.privacy import mark_leaks
 
 if TYPE_CHECKING:
-    from .aliases import AliasDB
-    from .contacts import ContactMap
+    from wechat_daily.aliases import AliasDB
+    from wechat_daily.contacts import ContactMap
 
 
 # ── Regexes ─────────────────────────────────────────────────────────────────────
