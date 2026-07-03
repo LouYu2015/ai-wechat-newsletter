@@ -6,9 +6,7 @@ import json
 
 import pytest
 
-from wechat_daily.config import debug_dir_for
-from wechat_daily.llm_extractor import ExtractionError, extract_report
-from wechat_daily.models import DailyReport
+from wechat_daily import config, llm_extractor, models
 
 # ── Fake event/response/stream/client ───────────────────────────────────────────
 
@@ -90,13 +88,13 @@ def test_streams_text_into_markdown(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["intro\n\n", "## 行业新闻\n\n", "### x\nbody\n"])
 
-    report = extract_report("2026-04-30", "chat history", api_key="fake", client=client)
+    report = llm_extractor.extract_report("2026-04-30", "chat history", api_key="fake", client=client)
 
-    assert isinstance(report, DailyReport)
+    assert isinstance(report, models.DailyReport)
     assert report.date == "2026-04-30"
     assert report.markdown == "intro\n\n## 行业新闻\n\n### x\nbody\n"
     # Saved to debug (per-date folder: tmp_path/2026/04/2026-04-30/)
-    day = debug_dir_for("2026-04-30")
+    day = config.debug_dir_for("2026-04-30")
     assert (day / "extract.md").exists()
     assert (day / "extract.input.txt").exists()
 
@@ -105,7 +103,7 @@ def test_no_tool_use_in_request(monkeypatch, tmp_path):
     """Request must not include the old tool_use parameters."""
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
-    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
 
     call = client.messages.calls[0]
     assert "tools" not in call
@@ -116,11 +114,11 @@ def test_no_tool_use_in_request(monkeypatch, tmp_path):
 
 def test_default_model_is_opus(monkeypatch, tmp_path):
     """Without an explicit model, the main path uses the published model."""
-    from wechat_daily.config import CLAUDE_MODEL
+    from wechat_daily import config
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
-    extract_report("2026-04-30", "chat", api_key="fake", client=client)
-    assert client.messages.calls[0]["model"] == CLAUDE_MODEL
+    llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    assert client.messages.calls[0]["model"] == config.CLAUDE_MODEL
 
 
 def test_model_and_debug_suffix_forwarded(monkeypatch, tmp_path):
@@ -128,7 +126,7 @@ def test_model_and_debug_suffix_forwarded(monkeypatch, tmp_path):
     sidecars from the canonical un-suffixed ones (which feed next-day continuity)."""
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["intro\n\n### x\nbody\n"])
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "chat", api_key="fake", client=client,
         model="claude-fable-5", debug_suffix=".fable-5",
     )
@@ -137,7 +135,7 @@ def test_model_and_debug_suffix_forwarded(monkeypatch, tmp_path):
     # Adaptive thinking streams visible reasoning (Fable defaults to omitted).
     assert client.messages.calls[0]["thinking"] == {"type": "adaptive", "display": "summarized"}
     # Suffixed sidecar written; canonical extract.md left untouched.
-    day = debug_dir_for("2026-04-30")
+    day = config.debug_dir_for("2026-04-30")
     assert (day / "extract.fable-5.md").exists()
     assert not (day / "extract.md").exists()
 
@@ -146,9 +144,9 @@ def test_refusal_raises_and_writes_failure(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=[], stop_reason="refusal")
 
-    with pytest.raises(ExtractionError, match="拒绝"):
-        extract_report("2026-04-30", "chat", api_key="fake", client=client)
-    failure = debug_dir_for("2026-04-30") / "extract.FAILED.json"
+    with pytest.raises(llm_extractor.ExtractionError, match="拒绝"):
+        llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    failure = config.debug_dir_for("2026-04-30") / "extract.FAILED.json"
     assert failure.exists()
     payload = json.loads(failure.read_text(encoding="utf-8"))
     assert "拒绝" in payload["reason"]
@@ -158,16 +156,16 @@ def test_max_tokens_raises(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["partial"], stop_reason="max_tokens")
 
-    with pytest.raises(ExtractionError, match="截断"):
-        extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    with pytest.raises(llm_extractor.ExtractionError, match="截断"):
+        llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
 
 
 def test_empty_response_raises(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=[], stop_reason="end_turn")
 
-    with pytest.raises(ExtractionError, match="空"):
-        extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    with pytest.raises(llm_extractor.ExtractionError, match="空"):
+        llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
 
 
 def test_falls_back_to_response_text_blocks(monkeypatch, tmp_path):
@@ -179,7 +177,7 @@ def test_falls_back_to_response_text_blocks(monkeypatch, tmp_path):
         fallback_blocks=[_TextBlock("hello world")],
     )
 
-    report = extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    report = llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
     assert report.markdown == "hello world"
 
 
@@ -188,7 +186,7 @@ def test_roster_prepended(monkeypatch, tmp_path):
     client = _FakeClient(text_chunks=["x"])
 
     roster = "## 群友花名册\n- 沉稳的狐狸：鸭哥"
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "chat history", api_key="fake", client=client,
         roster_text=roster,
     )
@@ -203,7 +201,7 @@ def test_no_roster_when_none(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
-    extract_report("2026-04-30", "chat history", api_key="fake", client=client)
+    llm_extractor.extract_report("2026-04-30", "chat history", api_key="fake", client=client)
     user_msg = client.messages.calls[0]["messages"][0]["content"]
     # No <group_roster>...</group_roster> block emitted (the closing tag
     # only appears when the roster is actually rendered; the literal
@@ -218,7 +216,7 @@ def test_progress_cb_monotonic(monkeypatch, tmp_path):
     client = _FakeClient(text_chunks=chunks)
 
     calls: list[tuple[int, int]] = []
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "chat", api_key="fake", client=client,
         progress_cb=lambda received, attempt: calls.append((received, attempt)),
     )
@@ -232,8 +230,8 @@ def test_debug_md_contents_match(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["hello\n", "world\n"])
 
-    extract_report("2026-04-30", "chat", api_key="fake", client=client)
-    saved = (debug_dir_for("2026-04-30") / "extract.md").read_text(encoding="utf-8")
+    llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    saved = (config.debug_dir_for("2026-04-30") / "extract.md").read_text(encoding="utf-8")
     assert saved == "hello\nworld\n"
 
 
@@ -248,7 +246,7 @@ def test_usage_cb_receives_response_usage_and_input_chars(monkeypatch, tmp_path)
     client = _FakeClient(text_chunks=["x"], usage=_Usage())
     seen: list[tuple[object, int]] = []
 
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "chat history", api_key="fake", client=client,
         usage_cb=lambda usage, chars: seen.append((usage, chars)),
     )
@@ -266,8 +264,8 @@ def test_usage_cb_not_called_on_failure(monkeypatch, tmp_path):
     client = _FakeClient(text_chunks=[], stop_reason="refusal")
     seen = []
 
-    with pytest.raises(ExtractionError):
-        extract_report(
+    with pytest.raises(llm_extractor.ExtractionError):
+        llm_extractor.extract_report(
             "2026-04-30", "chat", api_key="fake", client=client,
             usage_cb=lambda usage, chars: seen.append((usage, chars)),
         )
@@ -287,7 +285,7 @@ def test_prior_reports_injected_before_chat_log(monkeypatch, tmp_path):
         ("2026-04-28", "## 行业新闻\n\n### 老话题\nold body\n"),
         ("2026-04-29", "## 工具\n\n### 另一话题\nbody\n"),
     ]
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "today's chat", api_key="fake", client=client,
         roster_text=roster,
         prior_reports=priors,
@@ -311,7 +309,7 @@ def test_prior_reports_omitted_when_none(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "chat history", api_key="fake", client=client,
     )
 
@@ -325,7 +323,7 @@ def test_prior_reports_empty_list_omits_block(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "chat history", api_key="fake", client=client,
         prior_reports=[],
     )
@@ -341,7 +339,7 @@ def test_prior_reports_with_chat_blocks(monkeypatch, tmp_path):
 
     priors = [("2026-04-29", "yesterday's body")]
     chat_blocks = [{"type": "text", "text": "[14:00] alice: hi\n"}]
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "ignored", api_key="fake", client=client,
         prior_reports=priors,
         chat_blocks=chat_blocks,
@@ -360,7 +358,7 @@ def test_system_prompt_documents_ref_placeholder(monkeypatch, tmp_path):
     """Sanity check: the [[ref:...]] syntax is taught in the system prompt."""
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
-    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
 
     system = client.messages.calls[0]["system"]
     assert "[[ref:" in system
@@ -380,7 +378,7 @@ def test_prior_report_titles_injected_before_prior_reports(monkeypatch, tmp_path
         ("2026-04-25", "## 方法论\n### 旧话题"),
     ]
     priors = [("2026-04-29", "## 工具\n\n### 近话题\nbody")]
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "today's chat", api_key="fake", client=client,
         prior_reports=priors,
         prior_report_titles=titles,
@@ -402,7 +400,7 @@ def test_prior_report_titles_alone_emitted(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "today's chat", api_key="fake", client=client,
         prior_report_titles=[("2026-04-24", "## A\n### B")],
     )
@@ -418,7 +416,7 @@ def test_prior_report_titles_omitted_when_none(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
-    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
 
     user_msg = client.messages.calls[0]["messages"][0]["content"]
     assert "</previous_report_titles>" not in user_msg
@@ -428,7 +426,7 @@ def test_prior_report_titles_empty_list_omits_block(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
-    extract_report(
+    llm_extractor.extract_report(
         "2026-04-30", "chat", api_key="fake", client=client,
         prior_report_titles=[],
     )
@@ -442,7 +440,7 @@ def test_system_prompt_documents_title_block(monkeypatch, tmp_path):
     knows what to do when it appears."""
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
-    extract_report("2026-04-30", "chat", api_key="fake", client=client)
+    llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
 
     system = client.messages.calls[0]["system"]
     assert "previous_report_titles" in system

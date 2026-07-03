@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from wechat_daily.chatroom_members import (
-    ChatroomMembers,
-    _parse_member,
-    _parse_member_buffer,
-)
+from wechat_daily import chatroom_members
 
 
 def _encode_varint(n: int) -> bytes:
@@ -46,30 +42,30 @@ def test_parse_buffer_extracts_only_members_with_display():
         + _member("wxid_bob", None, 1, "host")
         + _member("wxid_carol", "Carol-临时", 9, "host")
     )
-    out = _parse_member_buffer(buf)
+    out = chatroom_members._parse_member_buffer(buf)
     assert out == {"wxid_alice": "鸭哥", "wxid_carol": "Carol-临时"}
 
 
 def test_parse_buffer_empty_returns_empty():
-    assert _parse_member_buffer(b"") == {}
+    assert chatroom_members._parse_member_buffer(b"") == {}
 
 
 def test_parse_buffer_skips_member_with_empty_display():
     # field 2 present but empty string
     buf = _member("wxid_x", "", 1, "host")
-    assert _parse_member_buffer(buf) == {}
+    assert chatroom_members._parse_member_buffer(buf) == {}
 
 
 def test_parse_member_handles_field_order_and_types():
     body = _string_field(1, "wxid_z") + _string_field(2, "ZeeName") + _varint_field(3, 17)
-    out = _parse_member(body)
+    out = chatroom_members._parse_member(body)
     assert out[1] == "wxid_z"
     assert out[2] == "ZeeName"
     assert out[3] == 17
 
 
 def test_chatroom_members_lookup():
-    cm = ChatroomMembers.from_dict({"wxid_a": "鸭哥"})
+    cm = chatroom_members.ChatroomMembers.from_dict({"wxid_a": "鸭哥"})
     assert cm.display_name("wxid_a") == "鸭哥"
     assert cm.display_name("wxid_other") is None
     assert cm.items() == [("wxid_a", "鸭哥")]
@@ -77,7 +73,7 @@ def test_chatroom_members_lookup():
 
 def test_chatroom_members_from_buffer_round_trip():
     buf = _member("wxid_alice", "鸭哥", 1, "host") + _member("wxid_bob", None, 1, "host")
-    parsed = _parse_member_buffer(buf)
-    cm = ChatroomMembers.from_dict(parsed)
+    parsed = chatroom_members._parse_member_buffer(buf)
+    cm = chatroom_members.ChatroomMembers.from_dict(parsed)
     assert cm.display_name("wxid_alice") == "鸭哥"
     assert cm.display_name("wxid_bob") is None

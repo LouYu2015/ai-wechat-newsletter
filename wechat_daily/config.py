@@ -1,18 +1,18 @@
 """Constants, paths, and environment loading."""
 
 import os
-from pathlib import Path
+import pathlib
 
-from dotenv import load_dotenv
+import dotenv
 
 # ── Paths ───────────────────────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = pathlib.Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DEBUG_DIR = PROJECT_ROOT / "debug"
 OUTPUT_DIR = PROJECT_ROOT
 ARCHIVE_DIR = PROJECT_ROOT / "archive"
 
-def debug_dir_for(date_str: str) -> Path:
+def debug_dir_for(date_str: str) -> pathlib.Path:
     """Per-date debug archive folder, nested ``YYYY/MM/DD``.
 
     ``2026-06-07`` → ``debug/2026/06/07/``. All per-day debug artifacts
@@ -25,10 +25,10 @@ def debug_dir_for(date_str: str) -> Path:
     return DEBUG_DIR / year / month / day
 
 
-CHATLOG_DIR = Path.home() / "Documents/chatlog"
+CHATLOG_DIR = pathlib.Path.home() / "Documents/chatlog"
 CHATLOG_MAC_DIR = PROJECT_ROOT / "chatlog-mac"
 WECHAT_DATA_DIR = (
-    Path.home()
+    pathlib.Path.home()
     / "Library/Containers/com.tencent.xinWeChat"
     / "Data/Documents/xwechat_files"
 )
@@ -81,7 +81,7 @@ PUBLIC_REPO_DIR = DATA_DIR / "public_repo"
 # ── API Keys ────────────────────────────────────────────────────────────────────
 
 def load_env() -> None:
-    load_dotenv(PROJECT_ROOT / ".env")
+    dotenv.load_dotenv(PROJECT_ROOT / ".env")
 
 
 def get_anthropic_key() -> str:

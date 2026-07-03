@@ -7,13 +7,6 @@ import json
 import pytest
 
 from wechat_daily import cost_tracker
-from wechat_daily.cost_tracker import (
-    CostRecord,
-    estimate_cost,
-    log_call,
-    summarize,
-    usage_to_dict,
-)
 
 
 class _FakeUsage:
@@ -34,7 +27,7 @@ class _FakeUsage:
 
 def test_usage_to_dict_from_sdk_object():
     u = _FakeUsage(input_tokens=100, output_tokens=50, cache_read_input_tokens=20)
-    d = usage_to_dict(u)
+    d = cost_tracker.usage_to_dict(u)
     assert d["input_tokens"] == 100
     assert d["output_tokens"] == 50
     assert d["cache_read_input_tokens"] == 20
@@ -42,12 +35,12 @@ def test_usage_to_dict_from_sdk_object():
 
 
 def test_usage_to_dict_from_dict_passthrough():
-    d = usage_to_dict({"input_tokens": 5, "output_tokens": 7})
+    d = cost_tracker.usage_to_dict({"input_tokens": 5, "output_tokens": 7})
     assert d == {"input_tokens": 5, "output_tokens": 7}
 
 
 def test_usage_to_dict_handles_none():
-    assert usage_to_dict(None) == {}
+    assert cost_tracker.usage_to_dict(None) == {}
 
 
 def test_usage_to_dict_skips_missing_attrs():
@@ -57,7 +50,7 @@ def test_usage_to_dict_skips_missing_attrs():
         output_tokens = 20
         # no cache_* fields
 
-    d = usage_to_dict(Sparse())
+    d = cost_tracker.usage_to_dict(Sparse())
     assert d["input_tokens"] == 10
     assert d["output_tokens"] == 20
     # Missing fields are not in dict (treated as 0 by estimate_cost).
@@ -68,7 +61,7 @@ def test_usage_to_dict_skips_missing_attrs():
 
 def test_estimate_cost_opus_4_6_basic():
     # 1M input + 1M output = $5 + $25 = $30 for Opus 4.6
-    cost = estimate_cost("claude-opus-4-6", {
+    cost = cost_tracker.estimate_cost("claude-opus-4-6", {
         "input_tokens": 1_000_000, "output_tokens": 1_000_000,
     })
     assert cost == pytest.approx(30.0)
@@ -76,30 +69,30 @@ def test_estimate_cost_opus_4_6_basic():
 
 def test_estimate_cost_cache_read_at_one_tenth_of_input():
     # 1M cache reads on Opus = 0.50 per MTok = $0.50
-    cost = estimate_cost("claude-opus-4-6", {"cache_read_input_tokens": 1_000_000})
+    cost = cost_tracker.estimate_cost("claude-opus-4-6", {"cache_read_input_tokens": 1_000_000})
     assert cost == pytest.approx(0.50)
 
 
 def test_estimate_cost_cache_write_5m_at_one_and_a_quarter_input():
     # 1M cache writes on Opus = 6.25 per MTok = $6.25
-    cost = estimate_cost("claude-opus-4-6", {"cache_creation_input_tokens": 1_000_000})
+    cost = cost_tracker.estimate_cost("claude-opus-4-6", {"cache_creation_input_tokens": 1_000_000})
     assert cost == pytest.approx(6.25)
 
 
 def test_estimate_cost_unknown_model_returns_zero():
     """Unknown model = $0 (don't crash daily runs on a price-table miss)."""
-    cost = estimate_cost("claude-fictional-9", {"input_tokens": 1_000_000})
+    cost = cost_tracker.estimate_cost("claude-fictional-9", {"input_tokens": 1_000_000})
     assert cost == 0.0
 
 
 def test_estimate_cost_sonnet_and_haiku_rates():
     # Sonnet 4.6: 1M in + 1M out = $3 + $15 = $18
-    sonnet_cost = estimate_cost("claude-sonnet-4-6", {
+    sonnet_cost = cost_tracker.estimate_cost("claude-sonnet-4-6", {
         "input_tokens": 1_000_000, "output_tokens": 1_000_000,
     })
     assert sonnet_cost == pytest.approx(18.0)
     # Haiku 4.5: 1M in + 1M out = $1 + $5 = $6
-    haiku_cost = estimate_cost("claude-haiku-4-5", {
+    haiku_cost = cost_tracker.estimate_cost("claude-haiku-4-5", {
         "input_tokens": 1_000_000, "output_tokens": 1_000_000,
     })
     assert haiku_cost == pytest.approx(6.0)
@@ -107,7 +100,7 @@ def test_estimate_cost_sonnet_and_haiku_rates():
 
 def test_estimate_cost_realistic_mixed_call():
     # Realistic Opus daily-report call: 45k in, 14k out, no caching
-    cost = estimate_cost("claude-opus-4-6", {
+    cost = cost_tracker.estimate_cost("claude-opus-4-6", {
         "input_tokens": 45_000, "output_tokens": 14_000,
     })
     # 45e3 * 5e-6 + 14e3 * 25e-6 = 0.225 + 0.350 = 0.575
@@ -122,8 +115,8 @@ def test_estimate_cost_batch_halves_everything():
         "cache_creation_input_tokens": 1_000_000,
         "cache_read_input_tokens": 1_000_000,
     }
-    full = estimate_cost("claude-opus-4-6", usage)
-    half = estimate_cost("claude-opus-4-6", usage, batch=True)
+    full = cost_tracker.estimate_cost("claude-opus-4-6", usage)
+    half = cost_tracker.estimate_cost("claude-opus-4-6", usage, batch=True)
     assert half == pytest.approx(full / 2)
     # Sanity on the absolute number: (5 + 25 + 6.25 + 0.5) / 2 = 18.375
     assert half == pytest.approx(18.375)
@@ -134,12 +127,12 @@ def test_estimate_cost_batch_halves_everything():
 
 def test_log_call_appends_jsonl_record(tmp_path):
     usage = _FakeUsage(input_tokens=100, output_tokens=50)
-    record = log_call(
+    record = cost_tracker.log_call(
         date="2026-05-18", stage="extract", model="claude-opus-4-6",
         usage=usage, duration_s=12.3, input_chars=500,
         debug_dir=tmp_path,
     )
-    assert isinstance(record, CostRecord)
+    assert isinstance(record, cost_tracker.CostRecord)
     assert record.input_tokens == 100
     assert record.output_tokens == 50
     assert record.input_chars == 500
@@ -159,10 +152,10 @@ def test_log_call_appends_jsonl_record(tmp_path):
 
 def test_log_call_appends_multiple_records(tmp_path):
     """Successive calls append; they don't overwrite."""
-    log_call(date="2026-05-18", stage="extract", model="claude-opus-4-6",
+    cost_tracker.log_call(date="2026-05-18", stage="extract", model="claude-opus-4-6",
              usage=_FakeUsage(input_tokens=10), duration_s=1.0,
              debug_dir=tmp_path)
-    log_call(date="2026-05-18", stage="link", model="claude-sonnet-4-6",
+    cost_tracker.log_call(date="2026-05-18", stage="link", model="claude-sonnet-4-6",
              usage=_FakeUsage(input_tokens=20), duration_s=2.0,
              debug_dir=tmp_path)
     lines = (tmp_path / "costs.jsonl").read_text(encoding="utf-8").splitlines()
@@ -173,7 +166,7 @@ def test_log_call_appends_multiple_records(tmp_path):
 
 def test_log_call_batch_flag_halves_cost_and_lands_on_ledger(tmp_path):
     usage = _FakeUsage(input_tokens=100, output_tokens=50)
-    record = log_call(
+    record = cost_tracker.log_call(
         date="2026-05-18", stage="extract", model="claude-opus-4-6",
         usage=usage, duration_s=600.0, debug_dir=tmp_path, batch=True,
     )
@@ -186,7 +179,7 @@ def test_log_call_batch_flag_halves_cost_and_lands_on_ledger(tmp_path):
 
 def test_log_call_handles_none_usage(tmp_path):
     """Stream that failed to surface usage: log a zero-cost zero-token row."""
-    record = log_call(
+    record = cost_tracker.log_call(
         date="2026-05-18", stage="link", model="claude-sonnet-4-6",
         usage=None, duration_s=1.5, debug_dir=tmp_path,
     )
@@ -197,7 +190,7 @@ def test_log_call_handles_none_usage(tmp_path):
 
 def test_log_call_creates_debug_dir_if_missing(tmp_path):
     target = tmp_path / "nested" / "debug"
-    record = log_call(
+    record = cost_tracker.log_call(
         date="2026-05-18", stage="extract", model="claude-opus-4-6",
         usage=_FakeUsage(input_tokens=1), duration_s=0.1,
         debug_dir=target,
@@ -209,7 +202,7 @@ def test_log_call_creates_debug_dir_if_missing(tmp_path):
 # ── summarize ──────────────────────────────────────────────────────────────────
 
 
-def _record(**overrides) -> CostRecord:
+def _record(**overrides) -> cost_tracker.CostRecord:
     defaults = dict(
         ts="2026-05-18T10:00:00+08:00", date="2026-05-18", stage="extract",
         model="claude-opus-4-6", input_tokens=1000, output_tokens=200,
@@ -217,7 +210,7 @@ def _record(**overrides) -> CostRecord:
         duration_s=10.0, estimated_cost_usd=0.01, input_chars=2500, prices={},
     )
     defaults.update(overrides)
-    return CostRecord(**defaults)
+    return cost_tracker.CostRecord(**defaults)
 
 
 def test_summarize_returns_renderable_with_groups():
@@ -230,14 +223,14 @@ def test_summarize_returns_renderable_with_groups():
                 input_tokens=200, output_tokens=80,
                 estimated_cost_usd=0.002, duration_s=3.0, input_chars=600),
     ]
-    table = summarize(records)
+    table = cost_tracker.summarize(records)
     # Aggregation is verified directly via _aggregate; here just confirm a
     # table object with the expected number of data rows (1 group + 1 total).
     assert table.row_count == 2
 
 
 def test_summarize_empty_records_does_not_add_total_row():
-    table = summarize([])
+    table = cost_tracker.summarize([])
     assert table.row_count == 0
 
 

@@ -9,16 +9,16 @@ first frame from producing spurious caption "skips":
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 
 from PIL import Image
 
-from wechat_daily.image_decoder import ImageDecoder
+from wechat_daily import image_decoder
 
 
-def _bare_decoder(tmp_path: Path) -> ImageDecoder:
+def _bare_decoder(tmp_path: pathlib.Path) -> image_decoder.ImageDecoder:
     """An ImageDecoder with __init__ bypassed (no key/attach-dir discovery)."""
-    dec = ImageDecoder.__new__(ImageDecoder)
+    dec = image_decoder.ImageDecoder.__new__(image_decoder.ImageDecoder)
     dec._tmpdir = tmp_path
     dec._cache = {}
     return dec
@@ -44,7 +44,7 @@ def test_reencode_keeps_real_image(tmp_path):
     assert Image.open(out).size == (200, 200)
 
 
-def _make_dat_tree(attach: Path, md5: str, variants: tuple[str, ...]) -> None:
+def _make_dat_tree(attach: pathlib.Path, md5: str, variants: tuple[str, ...]) -> None:
     img_dir = attach / "2026-06" / "Img"
     img_dir.mkdir(parents=True, exist_ok=True)
     for suf in variants:
@@ -63,9 +63,9 @@ def test_hd_variant_preferred_over_dat(tmp_path, monkeypatch):
 
     tried: list[str] = []
 
-    def fake_decode_one(dat_path: Path, image_md5: str):
-        tried.append(Path(dat_path).name)
-        if Path(dat_path).name == f"{md5}_h.dat":    # HD → real content
+    def fake_decode_one(dat_path: pathlib.Path, image_md5: str):
+        tried.append(pathlib.Path(dat_path).name)
+        if pathlib.Path(dat_path).name == f"{md5}_h.dat":    # HD → real content
             return tmp_path / f"{md5}.jpg"
         return None
 
@@ -89,9 +89,9 @@ def test_fallback_dat_then_thumb_when_hd_blank(tmp_path, monkeypatch):
 
     tried: list[str] = []
 
-    def fake_decode_one(dat_path: Path, image_md5: str):
-        tried.append(Path(dat_path).name)
-        if Path(dat_path).name == f"{md5}_t.dat":
+    def fake_decode_one(dat_path: pathlib.Path, image_md5: str):
+        tried.append(pathlib.Path(dat_path).name)
+        if pathlib.Path(dat_path).name == f"{md5}_t.dat":
             return tmp_path / f"{md5}.jpg"
         return None  # HD + full both blank
 
@@ -112,9 +112,9 @@ def test_dat_used_when_no_hd_variant(tmp_path, monkeypatch):
 
     tried: list[str] = []
 
-    def fake_decode_one(dat_path: Path, image_md5: str):
-        tried.append(Path(dat_path).name)
-        return tmp_path / f"{md5}.jpg" if Path(dat_path).name == f"{md5}.dat" else None
+    def fake_decode_one(dat_path: pathlib.Path, image_md5: str):
+        tried.append(pathlib.Path(dat_path).name)
+        return tmp_path / f"{md5}.jpg" if pathlib.Path(dat_path).name == f"{md5}.dat" else None
 
     monkeypatch.setattr(dec, "_decode_one", fake_decode_one)
     assert dec.decode(md5) == tmp_path / f"{md5}.jpg"

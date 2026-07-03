@@ -1,25 +1,25 @@
 """Encrypted SQLite connection management (read-only, never writes to disk)."""
 
 import json
+import pathlib
 import sqlite3
 import subprocess
-from pathlib import Path
 from typing import Any
 
-from wechat_daily.config import CHATLOG_DIR, CHATLOG_MAC_DIR, WECHAT_DATA_DIR
+from wechat_daily import config
 
 _db_conns: dict[str, Any] = {}
 
 
-def _find_db_storage() -> Path | None:
-    if not WECHAT_DATA_DIR.exists():
+def _find_db_storage() -> pathlib.Path | None:
+    if not config.WECHAT_DATA_DIR.exists():
         return None
     result = subprocess.run(
-        ['find', str(WECHAT_DATA_DIR), '-name', 'db_storage', '-type', 'd', '-maxdepth', '5'],
+        ['find', str(config.WECHAT_DATA_DIR), '-name', 'db_storage', '-type', 'd', '-maxdepth', '5'],
         capture_output=True, text=True, timeout=5,
     )
     first = result.stdout.strip().split('\n')[0]
-    return Path(first) if first else None
+    return pathlib.Path(first) if first else None
 
 
 def get_conn(rel_path: str, cipher_key: str | None = None) -> Any:
@@ -40,7 +40,7 @@ def get_conn(rel_path: str, cipher_key: str | None = None) -> Any:
         return conn
 
     # Try encrypted source via sqlcipher3
-    keys_file = CHATLOG_MAC_DIR / "keys.json"
+    keys_file = config.CHATLOG_MAC_DIR / "keys.json"
     if keys_file.exists():
         try:
             import sqlcipher3
@@ -62,7 +62,7 @@ def get_conn(rel_path: str, cipher_key: str | None = None) -> Any:
             pass
 
     # Fallback: pre-decrypted file
-    dec = CHATLOG_DIR / rel_path
+    dec = config.CHATLOG_DIR / rel_path
     if dec.exists():
         conn = sqlite3.connect(str(dec))
         _db_conns[cache_key] = conn

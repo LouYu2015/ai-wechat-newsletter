@@ -16,18 +16,14 @@ Validates:
 
 from __future__ import annotations
 
-from wechat_daily.aliases import AliasDB, compute_default_anon
-from wechat_daily.contacts import ContactMap
-from wechat_daily.models import DailyReport
-from wechat_daily.privacy import leak_check
-from wechat_daily.renderer import render_group, render_public
+from wechat_daily import aliases, contacts, models, privacy, renderer
 
 SALT = b"\x42" * 32
 DATE = "2026-04-30"
 
 
-def _make_db() -> AliasDB:
-    db = AliasDB(users={}, reservations=[], salt=SALT)
+def _make_db() -> aliases.AliasDB:
+    db = aliases.AliasDB(users={}, reservations=[], salt=SALT)
     db.get_or_create_user("wxid_alice", "Alice")
     db.get_or_create_user("wxid_bob", "Bob")
     db.get_or_create_user("wxid_carol", "Carol")
@@ -36,15 +32,15 @@ def _make_db() -> AliasDB:
     return db
 
 
-def _make_contacts() -> ContactMap:
-    return ContactMap.from_dict({
+def _make_contacts() -> contacts.ContactMap:
+    return contacts.ContactMap.from_dict({
         "wxid_alice": "Alice",
         "wxid_bob": "Bob",
         "wxid_carol": "Carol",
     })
 
 
-def _make_report(db: AliasDB) -> DailyReport:
+def _make_report(db: aliases.AliasDB) -> models.DailyReport:
     a = db.token_of("wxid_alice")
     b = db.token_of("wxid_bob")
     c = db.token_of("wxid_carol")
@@ -66,7 +62,7 @@ def _make_report(db: AliasDB) -> DailyReport:
         f"> {c}：非常好用\n\n"
         f"---\n\ntags: model-release, coding, tool\n"
     )
-    return DailyReport(date=DATE, markdown=md)
+    return models.DailyReport(date=DATE, markdown=md)
 
 
 # ── Group version assertions ──────────────────────────────────────────────────
@@ -74,14 +70,14 @@ def _make_report(db: AliasDB) -> DailyReport:
 
 def test_group_contains_real_names():
     db = _make_db()
-    out = render_group(_make_report(db), db, _make_contacts(), command_log=[])
+    out = renderer.render_group(_make_report(db), db, _make_contacts(), command_log=[])
     assert "Bob" in out
     assert "Carol" in out
 
 
 def test_group_contains_all_sections():
     db = _make_db()
-    out = render_group(_make_report(db), db, _make_contacts(), command_log=[])
+    out = renderer.render_group(_make_report(db), db, _make_contacts(), command_log=[])
     assert "新模型发布" in out
     assert "有趣的互动" in out  # hidden section still renders in group version
     assert "实用工具推荐" in out
@@ -89,7 +85,7 @@ def test_group_contains_all_sections():
 
 def test_group_marks_hidden_section():
     db = _make_db()
-    out = render_group(_make_report(db), db, _make_contacts(), command_log=[])
+    out = renderer.render_group(_make_report(db), db, _make_contacts(), command_log=[])
     assert "🔒 有趣的互动" in out
     assert "公开版隐藏" in out
     assert "笑点依赖当事人具体身份" in out
@@ -98,13 +94,13 @@ def test_group_marks_hidden_section():
 def test_group_optout_token_replaced_with_real_name_in_internal():
     """In the internal version we still want to know who Alice is."""
     db = _make_db()
-    out = render_group(_make_report(db), db, _make_contacts(), command_log=[])
+    out = renderer.render_group(_make_report(db), db, _make_contacts(), command_log=[])
     assert "Alice" in out
 
 
 def test_group_has_instruction_log_subsections():
     db = _make_db()
-    out = render_group(_make_report(db), db, _make_contacts(), command_log=[])
+    out = renderer.render_group(_make_report(db), db, _make_contacts(), command_log=[])
     assert "本期指令执行记录" in out
     assert "可用指令说明" in out
     assert "规则提示" in out
@@ -115,14 +111,14 @@ def test_group_has_instruction_log_subsections():
 
 def test_public_uses_alias_not_real_name():
     db = _make_db()
-    out = render_public(_make_report(db), db)
+    out = renderer.render_public(_make_report(db), db)
     assert "Duckie" in out
     assert "Bob" not in out
 
 
 def test_public_drops_hidden_section():
     db = _make_db()
-    out = render_public(_make_report(db), db)
+    out = renderer.render_public(_make_report(db), db)
     assert "有趣的互动" not in out
     assert "笑点依赖当事人具体身份" not in out
     assert "[章节不公开" not in out
@@ -130,15 +126,15 @@ def test_public_drops_hidden_section():
 
 def test_public_includes_safe_sections():
     db = _make_db()
-    out = render_public(_make_report(db), db)
+    out = renderer.render_public(_make_report(db), db)
     assert "新模型发布" in out
     assert "实用工具推荐" in out
 
 
 def test_public_optout_token_to_某群友():
     db = _make_db()
-    out = render_public(_make_report(db), db)
-    alice_anon = compute_default_anon("wxid_alice", SALT)
+    out = renderer.render_public(_make_report(db), db)
+    alice_anon = aliases.compute_default_anon("wxid_alice", SALT)
     assert alice_anon not in out
     # Alice was only mentioned in the (now hidden) anecdote, so 某群友 may not
     # appear in the public output. The hard requirement is that her token and
@@ -148,7 +144,7 @@ def test_public_optout_token_to_某群友():
 
 def test_public_has_jekyll_front_matter():
     db = _make_db()
-    out = render_public(_make_report(db), db)
+    out = renderer.render_public(_make_report(db), db)
     assert out.startswith("---\n")
     assert "layout: post" in out
     assert 'license: "CC BY-NC 4.0"' in out
@@ -157,7 +153,7 @@ def test_public_has_jekyll_front_matter():
 
 def test_public_front_matter_carries_tags():
     db = _make_db()
-    out = render_public(_make_report(db), db)
+    out = renderer.render_public(_make_report(db), db)
     assert "  - model-release" in out
     assert "  - coding" in out
     assert "  - tool" in out
@@ -165,7 +161,7 @@ def test_public_front_matter_carries_tags():
 
 def test_public_no_instruction_log():
     db = _make_db()
-    out = render_public(_make_report(db), db)
+    out = renderer.render_public(_make_report(db), db)
     assert "指令执行记录" not in out
 
 
@@ -174,19 +170,19 @@ def test_public_no_instruction_log():
 
 def test_public_passes_leak_check():
     db = _make_db()
-    out = render_public(_make_report(db), db)
-    leak_check(out, db)
+    out = renderer.render_public(_make_report(db), db)
+    privacy.leak_check(out, db)
 
 
 def test_public_no_real_names():
     db = _make_db()
-    out = render_public(_make_report(db), db)
+    out = renderer.render_public(_make_report(db), db)
     for name in ["Alice", "Bob", "Carol"]:
         assert name not in out, f"Real name {name!r} leaked into public version"
 
 
 def test_public_no_optout_anon():
     db = _make_db()
-    out = render_public(_make_report(db), db)
-    alice_anon = compute_default_anon("wxid_alice", SALT)
+    out = renderer.render_public(_make_report(db), db)
+    alice_anon = aliases.compute_default_anon("wxid_alice", SALT)
     assert alice_anon not in out

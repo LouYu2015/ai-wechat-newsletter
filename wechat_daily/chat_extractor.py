@@ -2,28 +2,25 @@
 
 from __future__ import annotations
 
+import datetime
 import re
 import sys
-from datetime import datetime, timedelta
 
-from wechat_daily.config import ARCHIVE_DIR, CHATLOG_MAC_DIR, GROUP_TABLE
-from wechat_daily.contacts import ContactMap
-from wechat_daily.message_parser import MSG_IMAGE, MSG_SYSTEM, MSG_TAP, Message, parse_row
-from wechat_daily.wechat_db import get_conn, name2id_map
+from wechat_daily import config, contacts, message_parser, wechat_db
 
 
 def _db_rels() -> list[str]:
     return ["message/message_0.db", "message/message_1.db"]
 
 
-def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> list[Message]:
+def extract_messages(date_str: str, contact_map: contacts.ContactMap | None = None) -> list[message_parser.Message]:
     """Return raw Message objects for *date_str* (YYYY-MM-DD), window ±1h."""
     if contact_map is None:
-        contact_map = ContactMap.from_db()
+        contact_map = contacts.ContactMap.from_db()
 
-    date = datetime.strptime(date_str, '%Y-%m-%d')
-    start_ts = int((date - timedelta(hours=1)).timestamp())
-    end_ts = int((date + timedelta(days=1, hours=1)).timestamp())
+    date = datetime.datetime.strptime(date_str, '%Y-%m-%d')
+    start_ts = int((date - datetime.timedelta(hours=1)).timestamp())
+    end_ts = int((date + datetime.timedelta(days=1, hours=1)).timestamp())
 
     # Each message DB carries its own Name2Id table mapping the integer
     # ``real_sender_id`` column → wxid. This is the authoritative sender source
@@ -32,18 +29,18 @@ def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> li
     rows: list[tuple] = []
     for rel in _db_rels():
         try:
-            conn = get_conn(rel)
+            conn = wechat_db.get_conn(rel)
             cur = conn.cursor()
             cur.execute(
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{GROUP_TABLE}'"
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{config.GROUP_TABLE}'"
             )
             if not cur.fetchone():
                 continue
-            id2wxid = name2id_map(cur)
+            id2wxid = wechat_db.name2id_map(cur)
             cur.execute(
                 f"SELECT create_time, local_type, message_content, local_id, server_id, "
                 f"real_sender_id "
-                f"FROM {GROUP_TABLE} "
+                f"FROM {config.GROUP_TABLE} "
                 f"WHERE create_time >= ? AND create_time < ? ORDER BY create_time",
                 (start_ts, end_ts),
             )
@@ -58,13 +55,13 @@ def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> li
 
     rows.sort(key=lambda x: x[0])
 
-    messages: list[Message] = []
-    image_keys: list[tuple[Message, int, int]] = []
+    messages: list[message_parser.Message] = []
+    image_keys: list[tuple[message_parser.Message, int, int]] = []
     for create_time, local_type, message_content, local_id, server_id, sender_wxid in rows:
-        msg = parse_row(create_time, local_type, message_content, sender_wxid)
+        msg = message_parser.parse_row(create_time, local_type, message_content, sender_wxid)
         if msg is None:
             continue
-        if msg.local_type == MSG_IMAGE and local_id is not None and server_id is not None:
+        if msg.local_type == message_parser.MSG_IMAGE and local_id is not None and server_id is not None:
             image_keys.append((msg, local_id, server_id))
         messages.append(msg)
 
@@ -73,20 +70,20 @@ def extract_messages(date_str: str, contact_map: ContactMap | None = None) -> li
     return messages
 
 
-def _fill_image_md5s(image_keys: list[tuple[Message, int, int]]) -> None:
+def _fill_image_md5s(image_keys: list[tuple[message_parser.Message, int, int]]) -> None:
     """Resolve `image_md5` (= .dat filename) via message_resource.db.
 
     Mutates each Message in-place. Silently skips on any DB error so a missing
     `message_resource.db` just means no inline images.
     """
-    sys.path.insert(0, str(CHATLOG_MAC_DIR))
+    sys.path.insert(0, str(config.CHATLOG_MAC_DIR))
     try:
         from decode_image import extract_md5_from_packed_info
     except ImportError:
         return
 
     try:
-        conn = get_conn("message/message_resource.db")
+        conn = wechat_db.get_conn("message/message_resource.db")
     except FileNotFoundError:
         return
 
@@ -106,17 +103,17 @@ def _fill_image_md5s(image_keys: list[tuple[Message, int, int]]) -> None:
                 msg.image_md5 = md5.lower()
 
 
-def format_messages(messages: list[Message], contact_map: ContactMap) -> str:
+def format_messages(messages: list[message_parser.Message], contact_map: contacts.ContactMap) -> str:
     """Format a list of Message objects into chat history text (current behaviour)."""
     lines: list[str] = []
     for msg in messages:
-        ts = datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
+        ts = datetime.datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
 
-        if msg.local_type == MSG_TAP:
+        if msg.local_type == message_parser.MSG_TAP:
             lines.append(f"[{ts}] {msg.content}")
             continue
 
-        if msg.local_type == MSG_SYSTEM:
+        if msg.local_type == message_parser.MSG_SYSTEM:
             lines.append(f"[{ts}] [系统] {msg.content}")
             continue
 
@@ -134,7 +131,7 @@ def format_messages(messages: list[Message], contact_map: ContactMap) -> str:
 
 def extract_chat_from_db(date_str: str) -> str:
     """Top-level convenience: extract + format for *date_str*."""
-    contact_map = ContactMap.from_db()
+    contact_map = contacts.ContactMap.from_db()
     messages = extract_messages(date_str, contact_map)
     return format_messages(messages, contact_map)
 
@@ -142,8 +139,8 @@ def extract_chat_from_db(date_str: str) -> str:
 def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
     """Return sorted list of dates (YYYY-MM-DD) that lack an archive PDF."""
     existing: set[str] = set()
-    if ARCHIVE_DIR.exists():
-        for pdf in ARCHIVE_DIR.rglob("*.pdf"):
+    if config.ARCHIVE_DIR.exists():
+        for pdf in config.ARCHIVE_DIR.rglob("*.pdf"):
             m = re.match(r'^(\d{4}-\d{2}-\d{2})\b', pdf.stem)
             if m:
                 existing.add(m.group(1))
@@ -151,16 +148,16 @@ def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
     last_ts = 0
     for rel in _db_rels():
         try:
-            conn = get_conn(rel)
+            conn = wechat_db.get_conn(rel)
         except FileNotFoundError:
             continue
         cur = conn.cursor()
         cur.execute(
-            f"SELECT name FROM sqlite_master WHERE type='table' AND name='{GROUP_TABLE}'"
+            f"SELECT name FROM sqlite_master WHERE type='table' AND name='{config.GROUP_TABLE}'"
         )
         if not cur.fetchone():
             continue
-        cur.execute(f"SELECT MAX(create_time) FROM {GROUP_TABLE}")
+        cur.execute(f"SELECT MAX(create_time) FROM {config.GROUP_TABLE}")
         row = cur.fetchone()
         if row and row[0]:
             last_ts = max(last_ts, row[0])
@@ -168,21 +165,21 @@ def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
     if not last_ts:
         return []
 
-    last_dt = datetime.fromtimestamp(last_ts)
-    last_complete = (last_dt - timedelta(hours=1)).date() - timedelta(days=1)
+    last_dt = datetime.datetime.fromtimestamp(last_ts)
+    last_complete = (last_dt - datetime.timedelta(hours=1)).date() - datetime.timedelta(days=1)
     if allow_incomplete:
         # buffer zone（午夜前后 1 小时）内不推进到新一天
-        last_complete = max(last_complete, (last_dt - timedelta(hours=1)).date())
+        last_complete = max(last_complete, (last_dt - datetime.timedelta(hours=1)).date())
 
     if not existing:
         return [last_complete.strftime('%Y-%m-%d')]
 
-    max_archive = datetime.strptime(max(existing), '%Y-%m-%d').date()
+    max_archive = datetime.datetime.strptime(max(existing), '%Y-%m-%d').date()
     missing: list[str] = []
-    current = max_archive + timedelta(days=1)
+    current = max_archive + datetime.timedelta(days=1)
     while current <= last_complete:
         date_str = current.strftime('%Y-%m-%d')
         if date_str not in existing:
             missing.append(date_str)
-        current += timedelta(days=1)
+        current += datetime.timedelta(days=1)
     return missing

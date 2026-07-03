@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from wechat_daily import batch_extractor as bx
-from wechat_daily.config import debug_dir_for
+from wechat_daily import config
 
 # ── Fakes ───────────────────────────────────────────────────────────────────────
 
@@ -360,7 +360,7 @@ def test_process_results_success_writes_sidecars_and_usage(debug_dir):
     assert outcome.reports["main"].markdown == "# 主版"
     assert outcome.reports["compare"].markdown == "# 对比版"
 
-    day = debug_dir_for("2026-07-02")
+    day = config.debug_dir_for("2026-07-02")
     assert (day / "extract.md").read_text(encoding="utf-8") == "# 主版"
     assert (day / "extract.fable-5.md").read_text(encoding="utf-8") == "# 对比版"
     assert (day / "extract.thinking.md").exists()
@@ -375,7 +375,7 @@ def test_process_results_refusal_is_terminal_error(debug_dir):
     )
     assert not retryable
     assert "main" in outcome.errors
-    assert (debug_dir_for("2026-07-02") / "extract.FAILED.json").exists()
+    assert (config.debug_dir_for("2026-07-02") / "extract.FAILED.json").exists()
 
 
 def test_process_results_server_error_and_expired_are_retryable(debug_dir):

@@ -19,9 +19,7 @@ import time
 
 import httpx
 
-from wechat_daily.config import CLAUDE_MODEL, debug_dir_for
-from wechat_daily.models import DailyReport
-from wechat_daily.prompts import SYSTEM_PROMPT, USER_INSTRUCTIONS
+from wechat_daily import config, models, prompts
 
 # Body markdown ## / ### header line.
 _BODY_HEADER_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
@@ -63,21 +61,18 @@ def build_extract_user_content(
     appear as ``[图片]`` placeholders). *debug_text* is always the flat string
     used for the debug sidecar.
     """
-    from wechat_daily.prior_report import (
-        format_prior_report_titles_block,
-        format_prior_reports_block,
-    )
+    from wechat_daily import prior_report
 
     parts: list[str] = []
     if roster_text:
         parts.append(f"<group_roster>\n{roster_text}\n</group_roster>\n\n")
     if prior_report_titles:
-        parts.append(format_prior_report_titles_block(prior_report_titles) + "\n")
+        parts.append(prior_report.format_prior_report_titles_block(prior_report_titles) + "\n")
     if prior_reports:
-        parts.append(format_prior_reports_block(prior_reports) + "\n")
+        parts.append(prior_report.format_prior_reports_block(prior_reports) + "\n")
     parts.append(f'<chat_log date="{date_str}">\n')
     prefix = "".join(parts)
-    suffix = "\n</chat_log>\n\n---\n\n" + USER_INSTRUCTIONS.format(date_str=date_str)
+    suffix = "\n</chat_log>\n\n---\n\n" + prompts.USER_INSTRUCTIONS.format(date_str=date_str)
 
     if chat_blocks is not None:
         user_content: str | list[dict] = [
@@ -118,7 +113,7 @@ def build_request_params(model: str, user_content: str | list[dict]) -> dict:
         "max_tokens": MAX_OUTPUT_TOKENS,
         "thinking": {"type": "adaptive", "display": "summarized"},
         "output_config": {"effort": "high"},
-        "system": SYSTEM_PROMPT,
+        "system": prompts.SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": user_content}],
     }
 
@@ -193,9 +188,9 @@ def extract_report(
     chat_blocks: list[dict] | None = None,
     prior_reports: list[tuple[str, str]] | None = None,
     prior_report_titles: list[tuple[str, str]] | None = None,
-    model: str = CLAUDE_MODEL,
+    model: str = config.CLAUDE_MODEL,
     debug_suffix: str = "",
-) -> DailyReport:
+) -> models.DailyReport:
     """Stream a markdown daily report from Claude; return DailyReport(date, markdown).
 
     *model* selects the Anthropic model. Defaults to the published main version
@@ -312,7 +307,7 @@ def extract_report(
             )
             if usage_cb:
                 usage_cb(getattr(response, "usage", None), len(debug_text))
-            return DailyReport(date=date_str, markdown=markdown)
+            return models.DailyReport(date=date_str, markdown=markdown)
 
         except ExtractionError:
             raise
@@ -344,7 +339,7 @@ def _save_extract(
     colliding with the canonical un-suffixed ones. Files land in the per-date
     folder ``debug/{date}/`` (see :func:`wechat_daily.config.debug_dir_for`).
     """
-    d = debug_dir_for(date_str)
+    d = config.debug_dir_for(date_str)
     d.mkdir(exist_ok=True, parents=True)
     (d / f"extract{suffix}.md").write_text(markdown, encoding="utf-8")
     # Sidecar: the FULL LLM input (roster + tokenized chat) for post-mortem
@@ -365,7 +360,7 @@ def _save_failure(
 ) -> None:
     """Persist failure details to ``debug/{date}/`` for post-mortem inspection."""
     import json
-    d = debug_dir_for(date_str)
+    d = config.debug_dir_for(date_str)
     d.mkdir(exist_ok=True, parents=True)
     path = d / f"extract{suffix}.FAILED.json"
     payload = {

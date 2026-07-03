@@ -18,11 +18,11 @@ Two granularities are exposed:
 
 from __future__ import annotations
 
+import datetime
+import pathlib
 import re
-from datetime import datetime, timedelta
-from pathlib import Path
 
-from wechat_daily.config import DEBUG_DIR
+from wechat_daily import config
 
 # Match ``## title`` and ``### title`` lines. Anchored to start of line.
 _TITLE_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$", re.MULTILINE)
@@ -53,7 +53,7 @@ def _normalize_to_ref_placeholders(markdown: str) -> str:
     return _EXPANDED_REF_RE.sub(sub, markdown)
 
 
-def _extract_path(date_str: str, debug_dir: Path | None = None) -> Path:
+def _extract_path(date_str: str, debug_dir: pathlib.Path | None = None) -> pathlib.Path:
     """Canonical extract path for *date_str*.
 
     New layout is the per-date folder ``debug/{date}/extract.md``; we fall back
@@ -61,7 +61,7 @@ def _extract_path(date_str: str, debug_dir: Path | None = None) -> Path:
     so continuity keeps working across the layout switch (yesterday's flat file
     still loads today).
     """
-    base = debug_dir or DEBUG_DIR
+    base = debug_dir or config.DEBUG_DIR
     year, month, day = date_str.split("-")
     new = base / year / month / day / "extract.md"
     if new.exists():
@@ -72,9 +72,9 @@ def _extract_path(date_str: str, debug_dir: Path | None = None) -> Path:
 
 def expected_dates(date_str: str, n_days: int) -> list[str]:
     """Return [date-n, …, date-1] in ascending order."""
-    base = datetime.strptime(date_str, "%Y-%m-%d").date()
+    base = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
     return [
-        (base - timedelta(days=i)).strftime("%Y-%m-%d")
+        (base - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
         for i in range(n_days, 0, -1)
     ]
 
@@ -82,7 +82,7 @@ def expected_dates(date_str: str, n_days: int) -> list[str]:
 def load_prior_reports(
     date_str: str,
     n_days: int = 3,
-    debug_dir: Path | None = None,
+    debug_dir: pathlib.Path | None = None,
 ) -> list[tuple[str, str]]:
     """Return ``[(YYYY-MM-DD, raw_markdown), …]`` for the *n_days* preceding *date_str*.
 
@@ -106,7 +106,7 @@ def load_prior_reports(
 def missing_prior_dates(
     date_str: str,
     n_days: int = 3,
-    debug_dir: Path | None = None,
+    debug_dir: pathlib.Path | None = None,
 ) -> list[str]:
     """Return the subset of expected_dates(...) that have no usable extract on disk."""
     have = {d for d, _ in load_prior_reports(date_str, n_days, debug_dir)}
@@ -145,7 +145,7 @@ def extract_titles_outline(markdown: str) -> str:
 def load_prior_report_titles(
     date_str: str,
     n_days: int,
-    debug_dir: Path | None = None,
+    debug_dir: pathlib.Path | None = None,
     skip_dates: set[str] | frozenset[str] | None = None,
 ) -> list[tuple[str, str]]:
     """Return ``[(YYYY-MM-DD, outline), …]`` for the *n_days* preceding *date_str*.

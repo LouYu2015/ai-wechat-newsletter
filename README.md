@@ -141,12 +141,22 @@ Lint 工具用 [ruff](https://docs.astral.sh/ruff/)，配置在仓库根的 `ruf
 .venv/bin/ruff check --fix .
 ```
 
-import 的规范（ruff 的 `I` / `TID252` 规则会强制执行）：`from __future__
-import annotations` 最前；随后三组、组间空行——**标准库 → 第三方 →
-本项目（`wechat_daily.…`）**，组内按字母序；import 之间不夹代码。
-**一律绝对导入**（`from wechat_daily.config import …`，禁止 `from .config
-import …`——TID252 会报错并可 `--fix` 自动转换）。函数体内的延迟 import
-（如 `import anthropic`）是刻意为之的启动加速，ruff 不会报。
+import 的规范（Google Python 风格；`I` / `TID252` 由 ruff 强制，模块化
+风格靠约定与 review 维持）：
+
+- `from __future__ import annotations` 最前；随后三组、组间空行——
+  **标准库 → 第三方 → 本项目**，组内按字母序；import 之间不夹代码；
+- **一律绝对导入**：禁止 `from .config import …`（TID252 会报错并可
+  `--fix` 自动转换）；
+- **只 import 模块，不 import 名字**：写 `from wechat_daily import config`
+  + `config.CLAUDE_MODEL`，`import datetime` + `datetime.datetime`，
+  `import rich.progress` + `rich.progress.Progress`——调用点自带来源，
+  测试 monkeypatch 只需 patch 定义处一份（如 `wechat_daily.config.X`）。
+  例外：`typing` / `collections.abc` 的名字可直接导入（Google 惯例）；
+  `from x import y` 当 `y` 本身是模块时合法（如 `from PIL import Image`）；
+  命名冲突可用别名（如 `import markdown as md_lib`，因函数参数占了
+  `markdown` 这个名字）；
+- 函数体内的延迟 import（如 `import anthropic`）是刻意的启动加速。
 
 ### Claude Code 云端环境备注
 

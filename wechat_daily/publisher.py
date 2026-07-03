@@ -2,50 +2,50 @@
 
 from __future__ import annotations
 
+import pathlib
 import subprocess
-from pathlib import Path
 
 import markdown as md_lib
 
-from wechat_daily.config import PUBLIC_REPO_DIR, PUBLIC_REPO_URL, debug_dir_for
+from wechat_daily import config
 
 
 def _run(
     cmd: list[str],
-    cwd: Path | None = None,
+    cwd: pathlib.Path | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, check=check, capture_output=True, text=True)
 
 
-def ensure_repo() -> Path:
+def ensure_repo() -> pathlib.Path:
     """Return the local public repo path, cloning if necessary.
 
     Raises RuntimeError if an existing repo has a mismatched remote URL,
     preventing silent commits to the wrong repository.
     """
-    if (PUBLIC_REPO_DIR / ".git").exists():
+    if (config.PUBLIC_REPO_DIR / ".git").exists():
         result = _run(
             ['git', 'remote', 'get-url', 'origin'],
-            cwd=PUBLIC_REPO_DIR, check=False,
+            cwd=config.PUBLIC_REPO_DIR, check=False,
         )
         if result.returncode == 0:
             actual = result.stdout.strip()
-            if actual != PUBLIC_REPO_URL:
+            if actual != config.PUBLIC_REPO_URL:
                 raise RuntimeError(
                     f"公开仓库 remote URL 不匹配！\n"
-                    f"期望: {PUBLIC_REPO_URL}\n"
+                    f"期望: {config.PUBLIC_REPO_URL}\n"
                     f"实际: {actual}\n"
-                    f"请检查或删除 {PUBLIC_REPO_DIR}"
+                    f"请检查或删除 {config.PUBLIC_REPO_DIR}"
                 )
-        return PUBLIC_REPO_DIR
+        return config.PUBLIC_REPO_DIR
 
-    PUBLIC_REPO_DIR.parent.mkdir(parents=True, exist_ok=True)
-    _run(['git', 'clone', PUBLIC_REPO_URL, str(PUBLIC_REPO_DIR)])
-    return PUBLIC_REPO_DIR
+    config.PUBLIC_REPO_DIR.parent.mkdir(parents=True, exist_ok=True)
+    _run(['git', 'clone', config.PUBLIC_REPO_URL, str(config.PUBLIC_REPO_DIR)])
+    return config.PUBLIC_REPO_DIR
 
 
-def write_post(date_str: str, markdown: str) -> Path:
+def write_post(date_str: str, markdown: str) -> pathlib.Path:
     """Write the public Markdown post into _posts/YYYY/MM/."""
     repo = ensure_repo()
     year, month, _ = date_str.split('-')
@@ -120,10 +120,10 @@ def push_pending() -> bool:
     return True
 
 
-def preview(date_str: str, markdown: str, open_browser: bool = True) -> Path:
+def preview(date_str: str, markdown: str, open_browser: bool = True) -> pathlib.Path:
     """Generate a standalone HTML preview. Opens browser unless open_browser=False."""
     import subprocess as sp
-    debug_day = debug_dir_for(date_str)
+    debug_day = config.debug_dir_for(date_str)
     debug_day.mkdir(exist_ok=True, parents=True)
     html_body = md_lib.markdown(
         markdown,

@@ -18,13 +18,13 @@ summary, useful as a proxy for tokenizer efficiency across models.
 
 from __future__ import annotations
 
+import dataclasses
+import datetime
 import json
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
+import pathlib
 from typing import Any, Iterable
 
-from wechat_daily.config import DEBUG_DIR, MODEL_PRICES
+from wechat_daily import config
 
 # ── Usage normalization ─────────────────────────────────────────────────────────
 
@@ -86,7 +86,7 @@ def estimate_cost(model: str, usage: dict[str, int], *, batch: bool = False) -> 
     daily run. The CLI displays the raw model name so over-reporting wouldn't
     silently mislead.
     """
-    prices = MODEL_PRICES.get(model)
+    prices = config.MODEL_PRICES.get(model)
     if not prices:
         return 0.0
     n_input = usage.get("input_tokens", 0)
@@ -105,7 +105,7 @@ def estimate_cost(model: str, usage: dict[str, int], *, batch: bool = False) -> 
 # ── Record + log ────────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclasses.dataclass
 class CostRecord:
     """One Anthropic API call's token usage + estimated cost."""
 
@@ -120,7 +120,7 @@ class CostRecord:
     duration_s: float
     estimated_cost_usd: float
     input_chars: int | None = None
-    prices: dict[str, float] = field(default_factory=dict)
+    prices: dict[str, float] = dataclasses.field(default_factory=dict)
     batch: bool = False
 
 
@@ -132,7 +132,7 @@ def log_call(
     usage: Any,
     duration_s: float,
     input_chars: int | None = None,
-    debug_dir: Path | None = None,
+    debug_dir: pathlib.Path | None = None,
     batch: bool = False,
 ) -> CostRecord:
     """Append one cost record to ``debug/costs.jsonl`` and return it.
@@ -148,7 +148,7 @@ def log_call(
     u = usage_to_dict(usage)
     cost = estimate_cost(model, u, batch=batch)
     record = CostRecord(
-        ts=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        ts=datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
         date=date,
         stage=stage,
         model=model,
@@ -159,13 +159,13 @@ def log_call(
         duration_s=round(duration_s, 2),
         estimated_cost_usd=round(cost, 6),
         input_chars=input_chars,
-        prices=dict(MODEL_PRICES.get(model, {})),
+        prices=dict(config.MODEL_PRICES.get(model, {})),
         batch=batch,
     )
-    path = (debug_dir or DEBUG_DIR) / "costs.jsonl"
+    path = (debug_dir or config.DEBUG_DIR) / "costs.jsonl"
     path.parent.mkdir(exist_ok=True, parents=True)
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+        f.write(json.dumps(dataclasses.asdict(record), ensure_ascii=False) + "\n")
     return record
 
 
@@ -211,9 +211,9 @@ def summarize(records: Iterable[CostRecord]):
     ``input_tokens / input_chars`` when both are known — useful as a proxy
     for tokenizer efficiency across models.
     """
-    from rich.table import Table
+    import rich.table
 
-    table = Table(title="模型用量与成本估算")
+    table = rich.table.Table(title="模型用量与成本估算")
     table.add_column("日期", style="cyan")
     table.add_column("阶段", style="dim")
     table.add_column("模型")

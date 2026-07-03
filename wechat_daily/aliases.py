@@ -5,25 +5,16 @@ Phase 1 implementation.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import re
 import secrets
 import shutil
 import unicodedata
-from datetime import datetime, timezone
 from typing import Callable
 
-from wechat_daily.config import (
-    ALIAS_RESERVATION_DAYS,
-    ALIASES_BACKUP_DIR,
-    ALIASES_CURSOR_FILE,
-    ALIASES_FILE,
-    ANON_SALT_FILE,
-    GROUP_TABLE,
-)
-from wechat_daily.message_parser import MSG_TEXT, decompress, split_content
-from wechat_daily.wechat_db import get_conn, name2id_map
+from wechat_daily import config, message_parser, wechat_db
 
 # ── Word lists ──────────────────────────────────────────────────────────────────
 # 40 × 40 = 1600 combinations. Plenty of headroom for 500+ current users and
@@ -101,9 +92,9 @@ def _alias_width(alias: str) -> int:
 # ── Default anon derivation ─────────────────────────────────────────────────────
 
 def _load_or_create_salt() -> bytes:
-    ANON_SALT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if ANON_SALT_FILE.exists():
-        raw = ANON_SALT_FILE.read_text().strip()
+    config.ANON_SALT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if config.ANON_SALT_FILE.exists():
+        raw = config.ANON_SALT_FILE.read_text().strip()
         if len(raw) == 64:
             try:
                 return bytes.fromhex(raw)
@@ -111,12 +102,12 @@ def _load_or_create_salt() -> bytes:
                 pass
         print(f"\033[93m[WARNING] anon_salt.txt 格式无效（长度={len(raw)}），将重新生成盐（仅影响新用户）\033[0m")
     salt = secrets.token_bytes(32)
-    ANON_SALT_FILE.write_text(salt.hex())
+    config.ANON_SALT_FILE.write_text(salt.hex())
     # Also back up the salt immediately
-    ALIASES_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    backup = ALIASES_BACKUP_DIR / "anon_salt.txt"
+    config.ALIASES_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    backup = config.ALIASES_BACKUP_DIR / "anon_salt.txt"
     if not backup.exists():
-        shutil.copy2(ANON_SALT_FILE, backup)
+        shutil.copy2(config.ANON_SALT_FILE, backup)
     return salt
 
 
@@ -148,12 +139,12 @@ class AliasDB:
         users: dict[str, dict],
         reservations: list[dict],
         salt: bytes,
-        clock: Callable[[], datetime] | None = None,
+        clock: Callable[[], datetime.datetime] | None = None,
     ) -> None:
         self._users = users
         self._reservations = reservations
         self._salt = salt
-        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._clock = clock or (lambda: datetime.datetime.now(datetime.timezone.utc))
         self._command_log: list[dict] = []  # records for this run
 
     # ── Factory ──────────────────────────────────────────────────────────────
@@ -161,11 +152,11 @@ class AliasDB:
     @classmethod
     def load(cls, clock=None) -> "AliasDB":
         salt = _load_or_create_salt()
-        if not ALIASES_FILE.exists():
+        if not config.ALIASES_FILE.exists():
             return cls({}, [], salt, clock)
 
         try:
-            data = json.loads(ALIASES_FILE.read_text(encoding='utf-8'))
+            data = json.loads(config.ALIASES_FILE.read_text(encoding='utf-8'))
             return cls(
                 users=data.get('users', {}),
                 reservations=data.get('alias_reservations', []),
@@ -178,9 +169,9 @@ class AliasDB:
 
     @classmethod
     def _load_from_backup(cls, salt: bytes, clock=None) -> "AliasDB":
-        if not ALIASES_BACKUP_DIR.exists():
+        if not config.ALIASES_BACKUP_DIR.exists():
             return cls({}, [], salt, clock)
-        candidates = sorted(ALIASES_BACKUP_DIR.glob("*.json"), reverse=True)
+        candidates = sorted(config.ALIASES_BACKUP_DIR.glob("*.json"), reverse=True)
         for f in candidates:
             if f.name == "anon_salt.txt":
                 continue
@@ -203,7 +194,7 @@ class AliasDB:
         """Backup current file, then write updated aliases.json."""
         self._backup()
         self._expire_reservations()
-        ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        config.ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = {
             'version': 1,
             'token_format_version': 2,
@@ -211,17 +202,17 @@ class AliasDB:
             'users': self._users,
             'alias_reservations': self._reservations,
         }
-        ALIASES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        config.ALIASES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
     def _backup(self) -> None:
-        ALIASES_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        config.ALIASES_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         today = self._clock().strftime('%Y-%m-%d')
-        daily_backup = ALIASES_BACKUP_DIR / f"{today}.json"
-        if ALIASES_FILE.exists() and not daily_backup.exists():
-            shutil.copy2(ALIASES_FILE, daily_backup)
+        daily_backup = config.ALIASES_BACKUP_DIR / f"{today}.json"
+        if config.ALIASES_FILE.exists() and not daily_backup.exists():
+            shutil.copy2(config.ALIASES_FILE, daily_backup)
         # Rotate: delete backups older than 30 days
-        cutoff = self._now_ts() - ALIAS_RESERVATION_DAYS * 86400
-        for f in ALIASES_BACKUP_DIR.glob("*.json"):
+        cutoff = self._now_ts() - config.ALIAS_RESERVATION_DAYS * 86400
+        for f in config.ALIASES_BACKUP_DIR.glob("*.json"):
             if f.stat().st_mtime < cutoff:
                 f.unlink(missing_ok=True)
 
@@ -305,7 +296,7 @@ class AliasDB:
         return self._clock().timestamp()
 
     def _expire_reservations(self) -> None:
-        cutoff = self._now_ts() - ALIAS_RESERVATION_DAYS * 86400
+        cutoff = self._now_ts() - config.ALIAS_RESERVATION_DAYS * 86400
         self._reservations = [
             r for r in self._reservations if r['released_at'] >= cutoff
         ]
@@ -319,7 +310,7 @@ class AliasDB:
 
     def _is_reserved(self, alias: str, requester_wxid: str) -> bool:
         """True if alias is in reservation period and requester is NOT the original holder."""
-        cutoff = self._now_ts() - ALIAS_RESERVATION_DAYS * 86400
+        cutoff = self._now_ts() - config.ALIAS_RESERVATION_DAYS * 86400
         for r in self._reservations:
             if r['alias'] == alias and r['released_at'] >= cutoff:
                 if r['released_by_wxid'] != requester_wxid:
@@ -433,29 +424,29 @@ class AliasDB:
         Updates aliases in-place. Returns list of command log entries.
         """
         cursor_ts = 0
-        if ALIASES_CURSOR_FILE.exists():
+        if config.ALIASES_CURSOR_FILE.exists():
             try:
-                cursor_ts = int(ALIASES_CURSOR_FILE.read_text().strip())
+                cursor_ts = int(config.ALIASES_CURSOR_FILE.read_text().strip())
             except Exception:
                 pass
 
         rows: list[tuple] = []
         for rel in ["message/message_0.db", "message/message_1.db"]:
             try:
-                conn = get_conn(rel)
+                conn = wechat_db.get_conn(rel)
             except FileNotFoundError:
                 continue
             cur = conn.cursor()
             cur.execute(
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{GROUP_TABLE}'"
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{config.GROUP_TABLE}'"
             )
             if not cur.fetchone():
                 continue
-            id2wxid = name2id_map(cur)
+            id2wxid = wechat_db.name2id_map(cur)
             cur.execute(
-                f"SELECT create_time, message_content, real_sender_id FROM {GROUP_TABLE} "
+                f"SELECT create_time, message_content, real_sender_id FROM {config.GROUP_TABLE} "
                 f"WHERE local_type = ? AND create_time > ? ORDER BY create_time",
-                (MSG_TEXT, cursor_ts),
+                (message_parser.MSG_TEXT, cursor_ts),
             )
             for ct, mc, rsid in cur.fetchall():
                 rows.append((ct, mc, id2wxid.get(rsid, '')))
@@ -464,8 +455,8 @@ class AliasDB:
 
         max_ts = cursor_ts
         for create_time, message_content, wxid in rows:
-            raw = decompress(message_content)
-            _, content = split_content(raw, wxid)
+            raw = message_parser.decompress(message_content)
+            _, content = message_parser.split_content(raw, wxid)
             if not wxid:
                 continue
             content = content.strip().split('\n')[0].strip()  # first line only
@@ -481,8 +472,8 @@ class AliasDB:
             max_ts = max(max_ts, create_time)
 
         if max_ts > cursor_ts:
-            ALIASES_CURSOR_FILE.parent.mkdir(parents=True, exist_ok=True)
-            ALIASES_CURSOR_FILE.write_text(str(max_ts))
+            config.ALIASES_CURSOR_FILE.parent.mkdir(parents=True, exist_ok=True)
+            config.ALIASES_CURSOR_FILE.write_text(str(max_ts))
 
         return list(self._command_log)
 

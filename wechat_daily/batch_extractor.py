@@ -37,19 +37,17 @@ can say "提交时 412 条 → 现在 450 条" and be instantly interpretable.
 
 from __future__ import annotations
 
+import dataclasses
+import datetime
 import hashlib
 import json
+import pathlib
 import time
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Callable
 
 import httpx
 
-from wechat_daily.config import debug_dir_for
-from wechat_daily.llm_extractor import ExtractionError, build_request_params, finalize_response
-from wechat_daily.models import DailyReport
+from wechat_daily import config, llm_extractor, models
 
 STATE_VERSION = 1
 POLL_INTERVAL_S = 30.0
@@ -72,7 +70,7 @@ class BatchTimeout(Exception):
 # ── State file ───────────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclasses.dataclass
 class BatchState:
     """Persisted snapshot of one in-flight (or consumed) report batch."""
 
@@ -86,11 +84,11 @@ class BatchState:
     version: int = STATE_VERSION
 
 
-def state_path(date_str: str) -> Path:
-    return debug_dir_for(date_str) / "batch_state.json"
+def state_path(date_str: str) -> pathlib.Path:
+    return config.debug_dir_for(date_str) / "batch_state.json"
 
 
-def content_snapshot_path(date_str: str) -> Path:
+def content_snapshot_path(date_str: str) -> pathlib.Path:
     """Full submitted ``user_content`` (block list incl. base64 images).
 
     Written at submit time so a resumed run's RETRY round can replay input
@@ -99,7 +97,7 @@ def content_snapshot_path(date_str: str) -> Path:
     reduced to placeholders there). Large (base64 images), therefore deleted
     by :func:`mark_consumed`; it only lives while the batch is in flight.
     """
-    return debug_dir_for(date_str) / "batch_content.json"
+    return config.debug_dir_for(date_str) / "batch_content.json"
 
 
 def save_content_snapshot(date_str: str, user_content) -> None:
@@ -166,7 +164,7 @@ def save_state(state: BatchState) -> None:
     path = state_path(state.date)
     path.parent.mkdir(exist_ok=True, parents=True)
     path.write_text(
-        json.dumps(asdict(state), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(dataclasses.asdict(state), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -264,7 +262,7 @@ def submit_batch(
         requests=[
             {
                 "custom_id": custom_id,
-                "params": build_request_params(model, user_content),
+                "params": llm_extractor.build_request_params(model, user_content),
             }
             for custom_id, model in requests.items()
         ]
@@ -276,7 +274,7 @@ def submit_batch(
     state = BatchState(
         batch_id=batch.id,
         date=date_str,
-        submitted_at=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        submitted_at=datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
         raw_msg_count=count,
         raw_msg_sha256=sha,
         requests=dict(requests),
@@ -361,12 +359,12 @@ def fetch_results(client, batch_id: str, *, max_attempts: int = 5) -> dict[str, 
 # ── Orchestration ───────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclasses.dataclass
 class BatchOutcome:
     """What one full batch round produced, per custom_id."""
 
-    reports: dict[str, DailyReport] = field(default_factory=dict)
-    errors: dict[str, str] = field(default_factory=dict)  # custom_id → reason
+    reports: dict[str, models.DailyReport] = dataclasses.field(default_factory=dict)
+    errors: dict[str, str] = dataclasses.field(default_factory=dict)  # custom_id → reason
 
 
 def process_results(
@@ -402,15 +400,15 @@ def process_results(
         if rtype == "succeeded":
             message = result.result.message
             try:
-                markdown = finalize_response(
+                markdown = llm_extractor.finalize_response(
                     date_str, debug_text, message, suffix=suffix,
                 )
-            except ExtractionError as e:
+            except llm_extractor.ExtractionError as e:
                 outcome.errors[custom_id] = str(e)
                 continue
             if usage_cb:
                 usage_cb(custom_id, model, getattr(message, "usage", None))
-            outcome.reports[custom_id] = DailyReport(date=date_str, markdown=markdown)
+            outcome.reports[custom_id] = models.DailyReport(date=date_str, markdown=markdown)
         elif rtype == "errored":
             err = result.result.error
             err_type = getattr(getattr(err, "error", err), "type", "")
@@ -479,7 +477,7 @@ def run_batch(
             requests=[
                 {
                     "custom_id": cid,
-                    "params": build_request_params(model, user_content),
+                    "params": llm_extractor.build_request_params(model, user_content),
                 }
                 for cid, model in retryable.items()
             ]

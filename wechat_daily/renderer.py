@@ -22,20 +22,17 @@ caught by manual review of the group version before publishing.
 
 from __future__ import annotations
 
+import datetime
+import functools
+import pathlib
 import re
 import sys
-from datetime import datetime
-from functools import lru_cache
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from wechat_daily.config import PUBLIC_REPO_DIR
-from wechat_daily.models import DailyReport
-from wechat_daily.privacy import mark_leaks
+from wechat_daily import config, models, privacy
 
 if TYPE_CHECKING:
-    from wechat_daily.aliases import AliasDB
-    from wechat_daily.contacts import ContactMap
+    from wechat_daily import aliases, contacts
 
 
 # ── Regexes ─────────────────────────────────────────────────────────────────────
@@ -291,8 +288,8 @@ def _expand_refs_group(text: str) -> str:
     return _REF_RE.sub(lambda m: f"「{m.group(4).strip()}」", text)
 
 
-@lru_cache(maxsize=None)
-def _post_heading_slugs(post_path: Path) -> frozenset[str]:
+@functools.lru_cache(maxsize=None)
+def _post_heading_slugs(post_path: pathlib.Path) -> frozenset[str]:
     """Slug set for every ``##``/``###`` heading in *post_path*.
 
     The check matters because htmlproofer validates hash fragments against the
@@ -318,7 +315,7 @@ def _post_heading_slugs(post_path: Path) -> frozenset[str]:
 
 def _expand_refs_public(
     text: str,
-    posts_dir: Path | None = None,
+    posts_dir: pathlib.Path | None = None,
 ) -> str:
     """Public version: expand to ``[「title」]({{ '/daily/Y/M/D/daily/#slug' | relative_url }})``.
 
@@ -335,7 +332,7 @@ def _expand_refs_public(
     the wrong date — better to drop the URL silently than ship a dangling hash
     that htmlproofer rejects.
     """
-    base = posts_dir if posts_dir is not None else (PUBLIC_REPO_DIR / "_posts")
+    base = posts_dir if posts_dir is not None else (config.PUBLIC_REPO_DIR / "_posts")
 
     def sub(m: re.Match[str]) -> str:
         y, mo, d, raw_title = m.group(1), m.group(2), m.group(3), m.group(4).strip()
@@ -359,7 +356,7 @@ def _expand_refs_public(
 
 def _validate_final_refs_public(
     text: str,
-    posts_dir: Path | None = None,
+    posts_dir: pathlib.Path | None = None,
 ) -> str:
     """Second pass: re-check every final-form cross-day link against headings.
 
@@ -372,7 +369,7 @@ def _validate_final_refs_public(
     against the target post's headings, and degrades mismatches to plain
     `「title」` with the same warning.
     """
-    base = posts_dir if posts_dir is not None else (PUBLIC_REPO_DIR / "_posts")
+    base = posts_dir if posts_dir is not None else (config.PUBLIC_REPO_DIR / "_posts")
 
     def sub(m: re.Match[str]) -> str:
         title = m.group("title").strip()
@@ -476,7 +473,7 @@ def _mention(name: str) -> str:
 
 
 def _build_token_replacer(
-    alias_db: "AliasDB",
+    alias_db: aliases.AliasDB,
     resolve_fn: Callable[[str], str],
     extra_tokens: list[str] | None = None,
 ) -> Callable[[str], str]:
@@ -529,9 +526,9 @@ def _insert_toc(markdown: str) -> str:
 # ── Group version ────────────────────────────────────────────────────────────────
 
 def render_group(
-    report: DailyReport,
-    alias_db: "AliasDB",
-    contact_map: "ContactMap",
+    report: models.DailyReport,
+    alias_db: aliases.AliasDB,
+    contact_map: contacts.ContactMap,
     command_log: list[dict] | None = None,
     token_map=None,
 ) -> str:
@@ -559,7 +556,7 @@ def render_group(
     # inside the token 「开朗的企鹅」) don't get a <mark> inserted that breaks
     # the subsequent token regex match. Token-resolved <u>…</u> regions are
     # skipped inside mark_leaks.
-    body = mark_leaks(body, contact_map)
+    body = privacy.mark_leaks(body, contact_map)
 
     parts = [
         f"# {report.date} 群聊日报",
@@ -583,13 +580,13 @@ def render_group(
 
 def _render_command_log(
     log: list[dict],
-    alias_db: "AliasDB",
-    contact_map: "ContactMap",
+    alias_db: aliases.AliasDB,
+    contact_map: contacts.ContactMap,
 ) -> str:
     lines = ["## 本期指令执行记录", "", "### 今日生效指令"]
     if log:
         for entry in log:
-            ts_str = datetime.fromtimestamp(entry['ts']).strftime('%H:%M')
+            ts_str = datetime.datetime.fromtimestamp(entry['ts']).strftime('%H:%M')
             wxid = entry['wxid']
             real_name = contact_map.by_wxid(wxid)
             if real_name == wxid:
@@ -618,8 +615,8 @@ def _render_command_log(
 # ── Public version ───────────────────────────────────────────────────────────────
 
 def render_public(
-    report: DailyReport,
-    alias_db: "AliasDB",
+    report: models.DailyReport,
+    alias_db: aliases.AliasDB,
     token_map=None,
 ) -> str:
     """Render the public version: anonymized, hidden sections fully removed."""
@@ -643,7 +640,7 @@ def render_public(
     text_resolver = _build_token_replacer(alias_db, token_to_public, extra)
     body = text_resolver(body)
 
-    publish_dt = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    publish_dt = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
     year, month, day = report.date.split("-")
     permalink = f"/daily/{year}/{month}/{day}/daily/"
 

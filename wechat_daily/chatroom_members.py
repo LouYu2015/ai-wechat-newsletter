@@ -14,8 +14,7 @@ without a 群昵称 fall back to ``contact.nick_name`` via ``ContactMap``.
 
 from __future__ import annotations
 
-from wechat_daily.config import GROUP_CHAT_ID
-from wechat_daily.wechat_db import get_conn
+from wechat_daily import config, wechat_db
 
 
 class ChatroomMembers:
@@ -23,8 +22,8 @@ class ChatroomMembers:
         self._data = data
 
     @classmethod
-    def from_db(cls, group_chat_id: str = GROUP_CHAT_ID) -> "ChatroomMembers":
-        conn = get_conn("contact/contact.db")
+    def from_db(cls, group_chat_id: str = config.GROUP_CHAT_ID) -> "ChatroomMembers":
+        conn = wechat_db.get_conn("contact/contact.db")
         cur = conn.cursor()
         cur.execute(
             "SELECT ext_buffer FROM chat_room WHERE username = ?",

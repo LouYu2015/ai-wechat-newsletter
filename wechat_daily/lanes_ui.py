@@ -19,18 +19,18 @@ inside ``__rich__``; nothing but the Live refresh thread renders. Drive it with:
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
-from dataclasses import dataclass
 
-from rich.console import Group
-from rich.text import Text
+import rich.console
+import rich.text
 
 _SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _WIDTH = 52
 
 
-@dataclass
+@dataclasses.dataclass
 class _Lane:
     label: str
     phase: str = ""
@@ -108,17 +108,17 @@ class Lanes:
             self._frozen = True
 
     # ── rendering (called from the Live refresh thread) ──────────────────────
-    def __rich__(self) -> Group:
+    def __rich__(self) -> rich.console.Group:
         with self._lock:
             elapsed = time.monotonic() - self._t0
             glyph = "✓" if self._frozen else _SPIN[int(elapsed * 12) % len(_SPIN)]
 
             # Every row is forced to a single ellipsized line so a long summary
             # tail can never wrap and shove the layout around.
-            def _line(style: str = "") -> Text:
-                return Text(style=style, no_wrap=True, overflow="ellipsis")
+            def _line(style: str = "") -> rich.text.Text:
+                return rich.text.Text(style=style, no_wrap=True, overflow="ellipsis")
 
-            rows: list[Text] = []
+            rows: list[rich.text.Text] = []
             head = _line()
             head.append(f"{self.title} ", style="bold")
             if self.subtitle:
@@ -159,7 +159,7 @@ class Lanes:
             foot.append(f"    ⏱ {int(elapsed) // 60}:{int(elapsed) % 60:02d}", style="dim")
             rows.append(_line("dim").append("─" * _WIDTH))
             rows.append(foot)
-            return Group(*rows)
+            return rich.console.Group(*rows)
 
 
 def _clip(text: str, limit: int) -> str:

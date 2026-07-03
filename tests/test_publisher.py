@@ -1,19 +1,19 @@
 """Unit tests for publisher.py using a fake git remote."""
 
+import pathlib
 import subprocess
-from pathlib import Path
 
 import pytest
 
 
-def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+def _git(args: list[str], cwd: pathlib.Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         ['git'] + args, cwd=cwd, check=True,
         capture_output=True, text=True,
     )
 
 
-def _setup_fake_remote(tmp_path: Path) -> tuple[Path, Path]:
+def _setup_fake_remote(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     """Create a bare remote and a local clone; return (remote_path, local_path)."""
     remote = tmp_path / "remote.git"
     remote.mkdir()
@@ -40,14 +40,11 @@ def _setup_fake_remote(tmp_path: Path) -> tuple[Path, Path]:
     return remote, local
 
 
-def _patch_publisher(monkeypatch, tmp_path: Path):
+def _patch_publisher(monkeypatch, tmp_path: pathlib.Path):
     """Redirect publisher to use a temp repo."""
     import wechat_daily.config as cfg
-    import wechat_daily.publisher as pub
 
     remote, local = _setup_fake_remote(tmp_path)
-    monkeypatch.setattr(pub, 'PUBLIC_REPO_URL', str(remote))
-    monkeypatch.setattr(pub, 'PUBLIC_REPO_DIR', local)
     monkeypatch.setattr(cfg, 'PUBLIC_REPO_URL', str(remote))
     monkeypatch.setattr(cfg, 'PUBLIC_REPO_DIR', local)
 
@@ -70,10 +67,11 @@ def test_ensure_repo_returns_existing(monkeypatch, tmp_path):
 
 
 def test_ensure_repo_detects_wrong_url(monkeypatch, tmp_path):
+    import wechat_daily.config as cfg
     import wechat_daily.publisher as pub
     _, local = _patch_publisher(monkeypatch, tmp_path)
     # Change the expected URL to something different
-    monkeypatch.setattr(pub, 'PUBLIC_REPO_URL', 'git@github.com:other/repo.git')
+    monkeypatch.setattr(cfg, 'PUBLIC_REPO_URL', 'git@github.com:other/repo.git')
     with pytest.raises(RuntimeError, match="不匹配"):
         pub.ensure_repo()
 

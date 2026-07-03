@@ -26,17 +26,17 @@ instance so the same md5 isn't redecoded twice in one run.
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 import sys
-from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageStat
 
-from wechat_daily.config import CHATLOG_MAC_DIR, GROUP_CHAT_ID, WECHAT_DATA_DIR
+from wechat_daily import config
 
 # Vendored upstream decoder (chatlog-mac/decode_image.py)
-sys.path.insert(0, str(CHATLOG_MAC_DIR))
+sys.path.insert(0, str(config.CHATLOG_MAC_DIR))
 import decode_image as _vendor_decode  # noqa: E402
 
 _LONG_EDGE_LIMIT = 1568   # cap to avoid Anthropic's >20-image / 2000² rule
@@ -51,12 +51,12 @@ _BLANK_STDDEV = 1.0
 class ImageDecoder:
     """Decode V2 .dat → JPEG, scoped to one daily report run."""
 
-    def __init__(self, tmpdir: Path) -> None:
-        self._tmpdir = Path(tmpdir)
+    def __init__(self, tmpdir: pathlib.Path) -> None:
+        self._tmpdir = pathlib.Path(tmpdir)
         self._tmpdir.mkdir(parents=True, exist_ok=True)
-        self._cache: dict[str, Optional[Path]] = {}
+        self._cache: dict[str, Optional[pathlib.Path]] = {}
 
-        keys_path = CHATLOG_MAC_DIR / "image_keys.json"
+        keys_path = config.CHATLOG_MAC_DIR / "image_keys.json"
         if keys_path.exists():
             data = json.loads(keys_path.read_text(encoding="utf-8"))
             self._aes_key = data.get("aes_key")
@@ -66,12 +66,12 @@ class ImageDecoder:
             self._xor_key = 0x88
 
         import hashlib
-        group_hash = hashlib.md5(GROUP_CHAT_ID.encode()).hexdigest()
+        group_hash = hashlib.md5(config.GROUP_CHAT_ID.encode()).hexdigest()
         # Find <wxid>/msg/attach/<group_hash>; pick the most recently modified wxid dir
-        self._attach_dir: Optional[Path] = None
-        if WECHAT_DATA_DIR.exists():
+        self._attach_dir: Optional[pathlib.Path] = None
+        if config.WECHAT_DATA_DIR.exists():
             wxids = sorted(
-                (p for p in WECHAT_DATA_DIR.glob("wxid_*") if (p / "msg" / "attach").is_dir()),
+                (p for p in config.WECHAT_DATA_DIR.glob("wxid_*") if (p / "msg" / "attach").is_dir()),
                 key=lambda p: p.stat().st_mtime, reverse=True,
             )
             for wx in wxids:
@@ -80,7 +80,7 @@ class ImageDecoder:
                     self._attach_dir = cand
                     break
 
-    def decode(self, image_md5: str) -> Optional[Path]:
+    def decode(self, image_md5: str) -> Optional[pathlib.Path]:
         """Return path to a JPEG in tmpdir, or None if every fallback failed."""
         if image_md5 in self._cache:
             return self._cache[image_md5]
@@ -88,7 +88,7 @@ class ImageDecoder:
         self._cache[image_md5] = result
         return result
 
-    def _decode_uncached(self, image_md5: str) -> Optional[Path]:
+    def _decode_uncached(self, image_md5: str) -> Optional[pathlib.Path]:
         if not self._attach_dir or not self._aes_key:
             return None
 
@@ -114,7 +114,7 @@ class ImageDecoder:
                 return jpeg
         return None
 
-    def _decode_one(self, dat_path: Path, image_md5: str) -> Optional[Path]:
+    def _decode_one(self, dat_path: pathlib.Path, image_md5: str) -> Optional[pathlib.Path]:
         decrypted_tmp = self._tmpdir / f"{image_md5}.raw.tmp"
         result_path, fmt = _vendor_decode.decrypt_dat_file(
             str(dat_path), str(decrypted_tmp),
@@ -123,7 +123,7 @@ class ImageDecoder:
         if not result_path:
             return None
 
-        decrypted = Path(result_path)
+        decrypted = pathlib.Path(result_path)
         try:
             if fmt == "hevc":
                 jpeg_path = self._wxgf_to_jpeg(decrypted, image_md5)
@@ -136,7 +136,7 @@ class ImageDecoder:
                 pass
         return jpeg_path
 
-    def _wxgf_to_jpeg(self, hevc_path: Path, image_md5: str) -> Optional[Path]:
+    def _wxgf_to_jpeg(self, hevc_path: pathlib.Path, image_md5: str) -> Optional[pathlib.Path]:
         """Strip wxgf header, take first HEVC frame via ffmpeg, then re-encode JPEG."""
         data = hevc_path.read_bytes()
         idx = data.find(b"\x00\x00\x00\x01")
@@ -165,8 +165,8 @@ class ImageDecoder:
                 pass
 
     def _reencode_jpeg(
-        self, src: Path, image_md5: str, src_is_tmp: bool = False,
-    ) -> Optional[Path]:
+        self, src: pathlib.Path, image_md5: str, src_is_tmp: bool = False,
+    ) -> Optional[pathlib.Path]:
         """Resize to long edge ≤ 1568, save as JPEG q=85."""
         try:
             im = Image.open(src)

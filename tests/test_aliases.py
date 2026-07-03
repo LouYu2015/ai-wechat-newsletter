@@ -1,51 +1,51 @@
 """Unit tests for aliases.py."""
 
+import datetime
 import json
 import time
-from datetime import datetime, timezone
 
-from wechat_daily.aliases import ADJECTIVES, ANIMALS, AliasDB, compute_default_anon
+from wechat_daily import aliases
 
 SALT = b'\x00' * 32
 
 
 def _fixed_clock(ts: float):
     def clock():
-        return datetime.fromtimestamp(ts, tz=timezone.utc)
+        return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
     return clock
 
 
-def _make_db(**kwargs) -> AliasDB:
-    return AliasDB(users={}, reservations=[], salt=SALT, **kwargs)
+def _make_db(**kwargs) -> aliases.AliasDB:
+    return aliases.AliasDB(users={}, reservations=[], salt=SALT, **kwargs)
 
 
 # ── default_anon ────────────────────────────────────────────────────────────────
 
 def test_default_anon_stable():
-    a = compute_default_anon("wxid_alice", SALT)
-    b = compute_default_anon("wxid_alice", SALT)
+    a = aliases.compute_default_anon("wxid_alice", SALT)
+    b = aliases.compute_default_anon("wxid_alice", SALT)
     assert a == b
 
 
 def test_default_anon_different_wxids():
-    a = compute_default_anon("wxid_alice", SALT)
-    b = compute_default_anon("wxid_bob", SALT)
+    a = aliases.compute_default_anon("wxid_alice", SALT)
+    b = aliases.compute_default_anon("wxid_bob", SALT)
     assert a != b
 
 
 def test_default_anon_different_salts():
-    a = compute_default_anon("wxid_alice", b'\x00' * 32)
-    b = compute_default_anon("wxid_alice", b'\xff' * 32)
+    a = aliases.compute_default_anon("wxid_alice", b'\x00' * 32)
+    b = aliases.compute_default_anon("wxid_alice", b'\xff' * 32)
     assert a != b
 
 
 def test_default_anon_format():
-    name = compute_default_anon("wxid_test", SALT)
+    name = aliases.compute_default_anon("wxid_test", SALT)
     # Format: "{形容词}的{动物}" (no numeric suffix)
     parts = name.split("的")
     assert len(parts) == 2
-    assert parts[0] in ADJECTIVES
-    assert parts[1] in ANIMALS
+    assert parts[0] in aliases.ADJECTIVES
+    assert parts[1] in aliases.ANIMALS
 
 
 def test_allocation_resolves_collisions():
@@ -55,7 +55,7 @@ def test_allocation_resolves_collisions():
     db.get_or_create_user("wxid_a")
     # Force a collision: pre-seed another user with the same anon
     db._users["wxid_seed"] = {
-        'default_anon': compute_default_anon("wxid_a", SALT),
+        'default_anon': aliases.compute_default_anon("wxid_a", SALT),
         'real_name_seen': 'seed', 'public_alias': None, 'optout': False,
         'last_command_ts': None, 'last_command': None,
     }
@@ -67,21 +67,21 @@ def test_allocation_resolves_collisions():
 
 
 def test_token_persisted_across_reload(monkeypatch, tmp_path):
-    import wechat_daily.aliases as mod
+    import wechat_daily.config as mod
     monkeypatch.setattr(mod, "ALIASES_FILE", tmp_path / "aliases.json")
     monkeypatch.setattr(mod, "ALIASES_CURSOR_FILE", tmp_path / "cursor")
     monkeypatch.setattr(mod, "ANON_SALT_FILE", tmp_path / "salt.txt")
     monkeypatch.setattr(mod, "ALIASES_BACKUP_DIR", tmp_path / "backup")
     mod.ANON_SALT_FILE.write_text(SALT.hex())
 
-    db = AliasDB.load()
+    db = aliases.AliasDB.load()
     db.get_or_create_user("wxid_a")
     db.get_or_create_user("wxid_b")
     db.save()
     a_token = db._users["wxid_a"]["default_anon"]
     b_token = db._users["wxid_b"]["default_anon"]
 
-    db2 = AliasDB.load()
+    db2 = aliases.AliasDB.load()
     assert db2._users["wxid_a"]["default_anon"] == a_token
     assert db2._users["wxid_b"]["default_anon"] == b_token
 
@@ -182,7 +182,7 @@ def test_alias_reserved_word():
 def test_alias_conflicts_with_default_anon():
     db = _make_db()
     db.get_or_create_user("wxid_a")
-    default = compute_default_anon("wxid_a", SALT)
+    default = aliases.compute_default_anon("wxid_a", SALT)
     db.get_or_create_user("wxid_b")
     ok, msg = db.apply_command("wxid_b", f"/alias {default}", 1000)
     assert not ok
@@ -220,24 +220,24 @@ def test_public_name_falls_back_to_default_anon():
     db = _make_db()
     db.get_or_create_user("wxid_a")
     name = db.public_name_of("wxid_a")
-    assert name == compute_default_anon("wxid_a", SALT)
+    assert name == aliases.compute_default_anon("wxid_a", SALT)
 
 
 # ── Persistence ────────────────────────────────────────────────────────────────
 
 def test_save_and_load(monkeypatch, tmp_path):
-    import wechat_daily.aliases as aliases_mod
+    import wechat_daily.config as aliases_mod
     monkeypatch.setattr(aliases_mod, "ALIASES_FILE", tmp_path / "aliases.json")
     monkeypatch.setattr(aliases_mod, "ALIASES_CURSOR_FILE", tmp_path / "aliases.cursor")
     monkeypatch.setattr(aliases_mod, "ANON_SALT_FILE", tmp_path / "anon_salt.txt")
     monkeypatch.setattr(aliases_mod, "ALIASES_BACKUP_DIR", tmp_path / "backup")
 
-    db = AliasDB(users={}, reservations=[], salt=SALT)
+    db = aliases.AliasDB(users={}, reservations=[], salt=SALT)
     db.get_or_create_user("wxid_a", "Alice")
     db.apply_command("wxid_a", "/alias TestName", 1000)
     db.save()
 
-    db2 = AliasDB.load()
+    db2 = aliases.AliasDB.load()
     assert db2._users.get("wxid_a", {}).get("public_alias") == "TestName"
 
 
@@ -266,7 +266,7 @@ def test_alias_nfc_normalized():
 # ── Backup recovery ────────────────────────────────────────────────────────────
 
 def _patch_aliases_paths(monkeypatch, tmp_path):
-    import wechat_daily.aliases as mod
+    import wechat_daily.config as mod
     monkeypatch.setattr(mod, "ALIASES_FILE", tmp_path / "aliases.json")
     monkeypatch.setattr(mod, "ALIASES_CURSOR_FILE", tmp_path / "cursor")
     monkeypatch.setattr(mod, "ANON_SALT_FILE", tmp_path / "salt.txt")
@@ -286,7 +286,7 @@ def test_load_recovers_from_backup_when_aliases_corrupt(monkeypatch, tmp_path):
         "version": 1,
         "users": {
             "wxid_a": {
-                "default_anon": compute_default_anon("wxid_a", SALT),
+                "default_anon": aliases.compute_default_anon("wxid_a", SALT),
                 "real_name_seen": "Alice",
                 "public_alias": "FromBackup",
                 "optout": False,
@@ -302,7 +302,7 @@ def test_load_recovers_from_backup_when_aliases_corrupt(monkeypatch, tmp_path):
     # Salt file must exist so load doesn't regenerate it
     mod.ANON_SALT_FILE.write_text(SALT.hex())
 
-    db = AliasDB.load()
+    db = aliases.AliasDB.load()
     assert db._users.get("wxid_a", {}).get("public_alias") == "FromBackup"
 
 
@@ -315,7 +315,7 @@ def test_load_picks_latest_backup_by_name(monkeypatch, tmp_path):
         (backup_dir / name).write_text(json.dumps({
             "version": 1,
             "users": {"wxid_a": {
-                "default_anon": compute_default_anon("wxid_a", SALT),
+                "default_anon": aliases.compute_default_anon("wxid_a", SALT),
                 "real_name_seen": "Alice",
                 "public_alias": alias,
                 "optout": False,
@@ -332,7 +332,7 @@ def test_load_picks_latest_backup_by_name(monkeypatch, tmp_path):
     mod.ALIASES_FILE.write_text("garbage", encoding='utf-8')
     mod.ANON_SALT_FILE.write_text(SALT.hex())
 
-    db = AliasDB.load()
+    db = aliases.AliasDB.load()
     assert db._users["wxid_a"]["public_alias"] == "Newest"
 
 
@@ -346,7 +346,7 @@ def test_load_skips_broken_backup_tries_next(monkeypatch, tmp_path):
     (backup_dir / "2026-04-09.json").write_text(json.dumps({
         "version": 1,
         "users": {"wxid_a": {
-            "default_anon": compute_default_anon("wxid_a", SALT),
+            "default_anon": aliases.compute_default_anon("wxid_a", SALT),
             "real_name_seen": "Alice",
             "public_alias": "OlderGood",
             "optout": False,
@@ -359,13 +359,13 @@ def test_load_skips_broken_backup_tries_next(monkeypatch, tmp_path):
     mod.ALIASES_FILE.write_text("corrupt", encoding='utf-8')
     mod.ANON_SALT_FILE.write_text(SALT.hex())
 
-    db = AliasDB.load()
+    db = aliases.AliasDB.load()
     assert db._users["wxid_a"]["public_alias"] == "OlderGood"
 
 
 def test_load_empty_when_both_file_and_backup_missing(monkeypatch, tmp_path):
     _patch_aliases_paths(monkeypatch, tmp_path)
-    db = AliasDB.load()
+    db = aliases.AliasDB.load()
     assert db._users == {}
     assert db._reservations == []
 

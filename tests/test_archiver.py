@@ -1,11 +1,11 @@
 """Unit tests for archiver."""
 
+import datetime
+import pathlib
 import tempfile
-from datetime import datetime, timedelta
-from pathlib import Path
 
 
-def _make_pdf(archive_dir: Path, date_str: str) -> Path:
+def _make_pdf(archive_dir: pathlib.Path, date_str: str) -> pathlib.Path:
     p = archive_dir / f"{date_str} 群聊日报.pdf"
     p.write_bytes(b"%PDF-1.4 fake")
     return p
@@ -13,14 +13,14 @@ def _make_pdf(archive_dir: Path, date_str: str) -> Path:
 
 def test_archive_old_files_moves_old(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
-        archive_dir = Path(tmp) / "archive"
+        archive_dir = pathlib.Path(tmp) / "archive"
         archive_dir.mkdir()
 
         import wechat_daily.archiver as archiver_mod
-        monkeypatch.setattr(archiver_mod, "ARCHIVE_DIR", archive_dir)
+        monkeypatch.setattr("wechat_daily.config.ARCHIVE_DIR", archive_dir)
 
-        old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-        recent_date = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+        old_date = (datetime.datetime.now() - datetime.timedelta(days=10)).strftime("%Y-%m-%d")
+        recent_date = (datetime.datetime.now() - datetime.timedelta(days=2)).strftime("%Y-%m-%d")
 
         _make_pdf(archive_dir, old_date)
         _make_pdf(archive_dir, recent_date)
@@ -39,20 +39,20 @@ def test_archive_old_files_moves_old(monkeypatch):
 def test_archive_old_files_no_archive_dir(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         import wechat_daily.archiver as archiver_mod
-        monkeypatch.setattr(archiver_mod, "ARCHIVE_DIR", Path(tmp) / "nonexistent")
+        monkeypatch.setattr("wechat_daily.config.ARCHIVE_DIR", pathlib.Path(tmp) / "nonexistent")
         moved = archiver_mod.archive_old_files()
         assert moved == 0
 
 
 def test_archive_old_files_no_duplicates(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
-        archive_dir = Path(tmp) / "archive"
+        archive_dir = pathlib.Path(tmp) / "archive"
         archive_dir.mkdir()
 
         import wechat_daily.archiver as archiver_mod
-        monkeypatch.setattr(archiver_mod, "ARCHIVE_DIR", archive_dir)
+        monkeypatch.setattr("wechat_daily.config.ARCHIVE_DIR", archive_dir)
 
-        old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+        old_date = (datetime.datetime.now() - datetime.timedelta(days=10)).strftime("%Y-%m-%d")
         _make_pdf(archive_dir, old_date)
         archiver_mod.archive_old_files()
 
@@ -69,11 +69,11 @@ def test_archive_old_files_no_duplicates(monkeypatch):
 
 def test_get_pdf_path_unique(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
-        archive_dir = Path(tmp) / "archive"
+        archive_dir = pathlib.Path(tmp) / "archive"
         archive_dir.mkdir()
 
         import wechat_daily.archiver as archiver_mod
-        monkeypatch.setattr(archiver_mod, "ARCHIVE_DIR", archive_dir)
+        monkeypatch.setattr("wechat_daily.config.ARCHIVE_DIR", archive_dir)
 
         p1 = archiver_mod.get_pdf_path("2026-04-17")
         p1.write_bytes(b"pdf")

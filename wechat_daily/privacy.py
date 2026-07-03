@@ -2,30 +2,29 @@
 
 from __future__ import annotations
 
+import dataclasses
+import datetime
 import re
-from dataclasses import dataclass
-from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
-from wechat_daily.message_parser import MSG_IMAGE, MSG_SYSTEM, MSG_TAP, Message, QuotedMessage
+from wechat_daily import message_parser
 
 if TYPE_CHECKING:
-    from wechat_daily.aliases import AliasDB
-    from wechat_daily.contacts import ContactMap
+    from wechat_daily import aliases, contacts
 
 
 class LeakDetected(Exception):
     """Raised when a real nickname is found in the public Markdown."""
 
 
-@dataclass
+@dataclasses.dataclass
 class TokenMap:
     """Bidirectional mapping: wxid ↔ token (= default_anon)."""
     _fwd: dict[str, str]  # wxid → token
     _rev: dict[str, str]  # token → wxid
 
     @classmethod
-    def build(cls, wxids: list[str], alias_db: "AliasDB") -> "TokenMap":
+    def build(cls, wxids: list[str], alias_db: aliases.AliasDB) -> TokenMap:
         fwd: dict[str, str] = {}
         rev: dict[str, str] = {}
         for wxid in wxids:
@@ -45,7 +44,7 @@ class TokenMap:
         return list(self._rev.keys())
 
 
-def _nickname_pairs(contact_map: "ContactMap") -> list[tuple[str, str]]:
+def _nickname_pairs(contact_map: contacts.ContactMap) -> list[tuple[str, str]]:
     """Return [(nickname, wxid)] sorted by nickname length desc.
 
     Pulls 群昵称 + 微信昵称 from ContactMap and keeps anything ≥ 2 codepoints.
@@ -91,7 +90,7 @@ def _compile_nickname_pattern(
 
 
 def build_replace_state(
-    contact_map: "ContactMap",
+    contact_map: contacts.ContactMap,
     token_map: TokenMap,
     only_wxids: set[str] | None = None,
 ) -> tuple["re.Pattern[str] | None", dict[str, str]]:
@@ -112,8 +111,8 @@ def build_replace_state(
 
 
 def _scan_mentioned_wxids(
-    messages: list["Message"],
-    contact_map: "ContactMap",
+    messages: list[message_parser.Message],
+    contact_map: contacts.ContactMap,
 ) -> set[str]:
     """Return the set of wxids whose nickname actually appears in any message
     body, quoted content, or quoted speaker. Drives lazy token allocation."""
@@ -189,8 +188,8 @@ def _replace_unprotected(
 
 def _tap_has_optout_party(
     content: str,
-    contact_map: "ContactMap",
-    alias_db: "AliasDB",
+    contact_map: contacts.ContactMap,
+    alias_db: aliases.AliasDB,
 ) -> bool:
     """True iff a TAP message mentions an optout user's nickname.
 
@@ -215,11 +214,11 @@ def _tap_has_optout_party(
 
 
 def tokenize_messages(
-    messages: list[Message],
-    contact_map: "ContactMap",
-    alias_db: "AliasDB",
+    messages: list[message_parser.Message],
+    contact_map: contacts.ContactMap,
+    alias_db: aliases.AliasDB,
     progress_cb: Callable[[int, int], None] | None = None,
-) -> tuple[list[Message], TokenMap]:
+) -> tuple[list[message_parser.Message], TokenMap]:
     """Apply full token-ization to a message list.
 
     Returns (tokenized_messages, token_map).
@@ -242,29 +241,29 @@ def tokenize_messages(
         contact_map, token_map, only_wxids=all_wxids,
     )
 
-    result: list[Message] = []
+    result: list[message_parser.Message] = []
     total = len(messages)
 
     # Optout run-length merging
-    optout_run: list[Message] = []
+    optout_run: list[message_parser.Message] = []
 
     def flush_optout_run() -> None:
         if not optout_run:
             return
         first = optout_run[0]
         last = optout_run[-1]
-        ts_start = datetime.fromtimestamp(first.create_time).strftime('%H:%M')
+        ts_start = datetime.datetime.fromtimestamp(first.create_time).strftime('%H:%M')
         if len(optout_run) == 1:
-            placeholder = Message(
+            placeholder = message_parser.Message(
                 create_time=first.create_time,
                 local_type=first.local_type,
                 sender_wxid='',
                 content=f"[{ts_start}] [此消息已隐藏]",
             )
         else:
-            ts_end = datetime.fromtimestamp(last.create_time).strftime('%H:%M')
+            ts_end = datetime.datetime.fromtimestamp(last.create_time).strftime('%H:%M')
             n = len(optout_run)
-            placeholder = Message(
+            placeholder = message_parser.Message(
                 create_time=first.create_time,
                 local_type=first.local_type,
                 sender_wxid='',
@@ -277,24 +276,24 @@ def tokenize_messages(
         sender = msg.sender_wxid
 
         # ── TAP: redact if either party is optout ───────────────────────────
-        if msg.local_type == MSG_TAP:
+        if msg.local_type == message_parser.MSG_TAP:
             flush_optout_run()
             content = msg.content
             if _tap_has_optout_party(content, contact_map, alias_db):
-                result.append(Message(
+                result.append(message_parser.Message(
                     create_time=msg.create_time, local_type=msg.local_type,
                     sender_wxid='', content='[某人做了个动作]',
                 ))
             else:
-                result.append(Message(
+                result.append(message_parser.Message(
                     create_time=msg.create_time, local_type=msg.local_type,
                     sender_wxid='',
                     content=_replace_names(content, pattern, mapping),
                 ))
-        elif msg.local_type == MSG_SYSTEM:
+        elif msg.local_type == message_parser.MSG_SYSTEM:
             # ── System messages: tokenize names, pass through ───────────────
             flush_optout_run()
-            result.append(Message(
+            result.append(message_parser.Message(
                 create_time=msg.create_time, local_type=msg.local_type,
                 sender_wxid='',
                 content=_replace_names(msg.content, pattern, mapping),
@@ -311,21 +310,21 @@ def tokenize_messages(
             quoted = msg.quoted
             if quoted:
                 if quoted.speaker_wxid and alias_db.is_optout(quoted.speaker_wxid):
-                    quoted = QuotedMessage(
+                    quoted = message_parser.QuotedMessage(
                         speaker_wxid=quoted.speaker_wxid,
                         speaker_name='',
                         content='[引用内容已隐藏]',
                         ref_type=quoted.ref_type,
                     )
                 else:
-                    quoted = QuotedMessage(
+                    quoted = message_parser.QuotedMessage(
                         speaker_wxid=quoted.speaker_wxid,
                         speaker_name=_replace_names(quoted.speaker_name, pattern, mapping),
                         content=_replace_names(quoted.content, pattern, mapping),
                         ref_type=quoted.ref_type,
                     )
 
-            result.append(Message(
+            result.append(message_parser.Message(
                 create_time=msg.create_time,
                 local_type=msg.local_type,
                 sender_wxid=token,
@@ -345,7 +344,7 @@ def tokenize_messages(
 
 
 def _format_one_line(
-    msg: Message, captions: dict[str, str] | None = None,
+    msg: message_parser.Message, captions: dict[str, str] | None = None,
 ) -> str | None:
     """Render one Message as a chat-history line, or None to skip.
 
@@ -354,11 +353,11 @@ def _format_one_line(
     placeholder becomes ``[图片：<caption>]``. The Claude block path passes
     ``None`` so it keeps bare placeholders + real inline images.
     """
-    ts = datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
+    ts = datetime.datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
 
-    if msg.local_type == MSG_TAP:
+    if msg.local_type == message_parser.MSG_TAP:
         return f"[{ts}] {msg.content}"
-    if msg.local_type == MSG_SYSTEM:
+    if msg.local_type == message_parser.MSG_SYSTEM:
         return f"[{ts}] [系统] {msg.content}"
 
     name = msg.sender_wxid  # already a token, or '' for placeholders
@@ -373,7 +372,7 @@ def _format_one_line(
         return None
 
     content = msg.content
-    if captions and msg.local_type == MSG_IMAGE and msg.image_md5:
+    if captions and msg.local_type == message_parser.MSG_IMAGE and msg.image_md5:
         cap = captions.get(msg.image_md5)
         if cap:
             content = content.replace('[图片]', f'[图片：{cap}]')
@@ -388,7 +387,7 @@ def _format_one_line(
 
 
 def format_tokenized_messages(
-    messages: list[Message], captions: dict[str, str] | None = None,
+    messages: list[message_parser.Message], captions: dict[str, str] | None = None,
 ) -> str:
     """Format tokenized messages into plain-text chat history for LLM consumption.
 
@@ -404,7 +403,7 @@ def format_tokenized_messages(
 
 
 def format_tokenized_messages_blocks(
-    messages: list[Message],
+    messages: list[message_parser.Message],
     image_decoder,  # ImageDecoder; duck-typed `.decode(md5) -> Path | None`
 ) -> list[dict]:
     """Same content as `format_tokenized_messages`, but as Anthropic content blocks.
@@ -429,7 +428,7 @@ def format_tokenized_messages_blocks(
             continue
         text_buf.append(line)
 
-        if msg.local_type == MSG_IMAGE and msg.image_md5:
+        if msg.local_type == message_parser.MSG_IMAGE and msg.image_md5:
             jpeg = image_decoder.decode(msg.image_md5)
             if jpeg is not None:
                 flush_text()
@@ -455,7 +454,7 @@ LEAK_MARK_CLOSE = '</mark>'
 
 def leak_check(
     markdown: str,
-    alias_db: "AliasDB",
+    alias_db: aliases.AliasDB,
 ) -> None:
     """Raise LeakDetected on the three hard-gate violations.
 
@@ -495,7 +494,7 @@ _PROTECT_RE = re.compile(
 
 
 def _mark_leaks_threshold_pairs(
-    contact_map: "ContactMap",
+    contact_map: contacts.ContactMap,
 ) -> list[tuple[str, str]]:
     """Stricter filter than ``_nickname_pairs``: ASCII ≥ 4, CJK/other ≥ 3.
 
@@ -519,7 +518,7 @@ def _mark_leaks_threshold_pairs(
     return out
 
 
-def mark_leaks(markdown: str, contact_map: "ContactMap") -> str:
+def mark_leaks(markdown: str, contact_map: contacts.ContactMap) -> str:
     """Wrap occurrences of known real-name variants with a leak-warn mark.
 
     Called by the group renderer *after* token replacement, so the input

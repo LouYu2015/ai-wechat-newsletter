@@ -12,8 +12,7 @@ wxid — used as alternates by privacy.tokenization and roster.build_roster.
 
 from __future__ import annotations
 
-from wechat_daily.chatroom_members import ChatroomMembers
-from wechat_daily.wechat_db import get_conn
+from wechat_daily import chatroom_members, wechat_db
 
 
 class ContactMap:
@@ -26,8 +25,8 @@ class ContactMap:
         self._group = group_displays or {}
 
     @classmethod
-    def from_db(cls, members: ChatroomMembers | None = None) -> "ContactMap":
-        conn = get_conn("contact/contact.db")
+    def from_db(cls, members: chatroom_members.ChatroomMembers | None = None) -> "ContactMap":
+        conn = wechat_db.get_conn("contact/contact.db")
         cur = conn.cursor()
         cur.execute(
             "SELECT username, nick_name FROM contact "
@@ -35,7 +34,7 @@ class ContactMap:
         )
         wechat = {row[0]: row[1] for row in cur.fetchall()}
         if members is None:
-            members = ChatroomMembers.from_db()
+            members = chatroom_members.ChatroomMembers.from_db()
         return cls(wechat, dict(members.items()))
 
     @classmethod

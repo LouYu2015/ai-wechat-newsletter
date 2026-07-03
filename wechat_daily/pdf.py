@@ -9,16 +9,15 @@ output may not honor the configured font.
 
 from __future__ import annotations
 
+import pathlib
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path
 
-import markdown as md_lib
-from markdown.extensions.toc import TocExtension
+import markdown.extensions.toc
 
 # Chrome-family binaries to try, in order. macOS paths first (font stack targets
 # macOS); falls back to anything on PATH for portability.
@@ -36,7 +35,7 @@ _CHROME_PATH_NAMES = (
 
 def _find_chrome() -> str | None:
     for path in _CHROME_CANDIDATES:
-        if Path(path).exists():
+        if pathlib.Path(path).exists():
             return path
     for name in _CHROME_PATH_NAMES:
         found = shutil.which(name)
@@ -120,9 +119,9 @@ def _build_full_html(markdown_text: str) -> str:
     The CSS is inlined in a ``<style>`` tag so the exact same document renders
     identically through Chrome or WeasyPrint.
     """
-    converter = md_lib.Markdown(extensions=[
+    converter = markdown.Markdown(extensions=[
         "tables", "fenced_code", "nl2br",
-        TocExtension(slugify=_toc_slugify, toc_depth="2-3"),
+        markdown.extensions.toc.TocExtension(slugify=_toc_slugify, toc_depth="2-3"),
     ])
     html_body = converter.convert(markdown_text)
     html_body = html_body.replace('<div class="toc">', '<div class="toc" id="toc">', 1)
@@ -141,7 +140,7 @@ def _build_full_html(markdown_text: str) -> str:
 </html>"""
 
 
-def _render_with_chrome(chrome: str, full_html: str, output_path: Path) -> bool:
+def _render_with_chrome(chrome: str, full_html: str, output_path: pathlib.Path) -> bool:
     """Render via headless Chrome. Returns True on success, False otherwise.
 
     On macOS, headless Chrome writes the PDF within a few seconds but frequently
@@ -152,9 +151,9 @@ def _render_with_chrome(chrome: str, full_html: str, output_path: Path) -> bool:
         output_path.unlink()
 
     with tempfile.TemporaryDirectory() as tmp:
-        html_path = Path(tmp) / "report.html"
+        html_path = pathlib.Path(tmp) / "report.html"
         html_path.write_text(full_html, encoding="utf-8")
-        user_dir = Path(tmp) / "chrome"
+        user_dir = pathlib.Path(tmp) / "chrome"
         try:
             proc = subprocess.Popen([
                 chrome, "--headless", "--disable-gpu", "--no-sandbox",
@@ -189,7 +188,7 @@ def _render_with_chrome(chrome: str, full_html: str, output_path: Path) -> bool:
     return _looks_like_pdf(output_path)
 
 
-def _looks_like_pdf(path: Path) -> bool:
+def _looks_like_pdf(path: pathlib.Path) -> bool:
     try:
         with path.open("rb") as fh:
             return path.stat().st_size > 1000 and fh.read(5).startswith(b"%PDF")
@@ -197,13 +196,13 @@ def _looks_like_pdf(path: Path) -> bool:
         return False
 
 
-def _render_with_weasyprint(full_html: str, output_path: Path) -> None:
+def _render_with_weasyprint(full_html: str, output_path: pathlib.Path) -> None:
     from weasyprint import HTML
 
     HTML(string=full_html).write_pdf(str(output_path))
 
 
-def convert_to_pdf(markdown_text: str, output_path: Path) -> None:
+def convert_to_pdf(markdown_text: str, output_path: pathlib.Path) -> None:
     """Convert Markdown text to PDF with Chinese font support.
 
     Primary path is headless Chrome (faithful macOS font rendering); falls back

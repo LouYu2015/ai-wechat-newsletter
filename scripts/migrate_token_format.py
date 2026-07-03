@@ -21,42 +21,41 @@ ADJECTIVES/ANIMALS 词表扩到 40×40=1600 后，命名空间足够给现有 50
 
 from __future__ import annotations
 
+import datetime
 import json
+import pathlib
 import shutil
 import sys
 import time
-from datetime import datetime, timezone
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-from wechat_daily.aliases import AliasDB, _load_or_create_salt
-from wechat_daily.config import ALIASES_BACKUP_DIR, ALIASES_FILE
+from wechat_daily import aliases, config
 
 
 def migrate() -> None:
-    if not ALIASES_FILE.exists():
-        print(f"[错误] aliases.json 不存在: {ALIASES_FILE}")
+    if not config.ALIASES_FILE.exists():
+        print(f"[错误] aliases.json 不存在: {config.ALIASES_FILE}")
         sys.exit(1)
 
     # 1. 备份
-    ALIASES_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    config.ALIASES_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
-    backup_path = ALIASES_BACKUP_DIR / f"pre_token_v2_{ts}.json"
-    shutil.copy2(ALIASES_FILE, backup_path)
+    backup_path = config.ALIASES_BACKUP_DIR / f"pre_token_v2_{ts}.json"
+    shutil.copy2(config.ALIASES_FILE, backup_path)
     print(f"[1/3] 已备份当前 aliases.json → {backup_path}")
 
     # 2. 加载 + 重新分配
-    raw = json.loads(ALIASES_FILE.read_text(encoding="utf-8"))
+    raw = json.loads(config.ALIASES_FILE.read_text(encoding="utf-8"))
     users: dict[str, dict] = raw.get("users", {})
     reservations = raw.get("alias_reservations", [])
-    salt = _load_or_create_salt()
+    salt = aliases._load_or_create_salt()
 
     # 先把所有 default_anon 清空，否则 allocator 会把现存的旧名当作"已占用"
     for u in users.values():
         u["default_anon"] = ""
 
-    db = AliasDB(users=users, reservations=reservations, salt=salt)
+    db = aliases.AliasDB(users=users, reservations=reservations, salt=salt)
 
     reassigned: list[tuple[str, str]] = []
     for wxid in sorted(users.keys()):
@@ -68,11 +67,11 @@ def migrate() -> None:
     out = {
         "version": raw.get("version", 1),
         "token_format_version": 2,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "users": users,
         "alias_reservations": reservations,
     }
-    ALIASES_FILE.write_text(
+    config.ALIASES_FILE.write_text(
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(f"[2/3] 已重新分配 {len(reassigned)} 个用户的 default_anon")

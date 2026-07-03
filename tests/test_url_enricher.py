@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import httpx
 
-from wechat_daily.config import LINK_SUMMARY_MODEL
-from wechat_daily.message_parser import MSG_LINK_OPEN, MSG_TEXT, LinkMeta, Message
-from wechat_daily.url_enricher import enrich_link_messages, fetch_url_text
+from wechat_daily import config, message_parser, url_enricher
 
 
 class FakeHTTP:
@@ -82,12 +80,12 @@ class FakeAnthropic:
 
 
 def _link_msg(title="Title", url="https://example.com/a", des="card des"):
-    return Message(
+    return message_parser.Message(
         create_time=1000,
-        local_type=MSG_LINK_OPEN,
+        local_type=message_parser.MSG_LINK_OPEN,
         sender_wxid="wxid",
         content=f"[链接] [{title}]({url})",
-        link=LinkMeta(title=title, url=url, description=des),
+        link=message_parser.LinkMeta(title=title, url=url, description=des),
     )
 
 
@@ -132,7 +130,7 @@ def test_enrich_reports_lane_events_keyed_by_url():
     url = "https://example.com/long"
     body = "正文很长。" * 200  # > SHORT_THRESHOLD → summary path
     rep = _RecordReporter()
-    enrich_link_messages(
+    url_enricher.enrich_link_messages(
         [_link_msg(url=url)],
         api_key="k",
         reporter=rep,
@@ -156,7 +154,7 @@ def test_enrich_parallel_maps_each_summary_to_its_own_message():
         routes[url] = (body, "text/plain")
         msgs.append(_link_msg(title=f"T{i}", url=url))
 
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         msgs,
         api_key="k",
         http_client=FakeHTTP(routes),
@@ -180,7 +178,7 @@ def test_fetch_wechat_js_content():
     </div></body></html>
     """
     client = FakeHTTP({url: (html, "text/html")})
-    text, og = fetch_url_text(url, client)
+    text, og = url_enricher.fetch_url_text(url, client)
     assert "第一段正文" in text
     assert "第二段正文" in text
     assert "ignore" not in text
@@ -196,7 +194,7 @@ def test_fetch_x_uses_fxtwitter():
             "application/json",
         )
     })
-    text, og = fetch_url_text(url, client)
+    text, og = url_enricher.fetch_url_text(url, client)
     assert client.urls == [api]
     assert text == "Theo: tweet body"
     assert og == ""
@@ -206,7 +204,7 @@ def test_fetch_github_blob_uses_raw_url():
     url = "https://github.com/acme/repo/blob/main/README.md"
     raw = "https://raw.githubusercontent.com/acme/repo/main/README.md"
     client = FakeHTTP({raw: ("# README\nbody", "text/plain")})
-    assert fetch_url_text(url, client) == ("# README\nbody", "")
+    assert url_enricher.fetch_url_text(url, client) == ("# README\nbody", "")
     assert client.urls == [raw]
 
 
@@ -245,7 +243,7 @@ def test_fetch_superlinear_uses_circle_internal_api():
             "application/json",
         ),
     })
-    text, og = fetch_url_text(url, client)
+    text, og = url_enricher.fetch_url_text(url, client)
     assert client.urls == [url, spaces, post]
     assert "章节标题" in text
     assert "正文 @Person 内容" in text
@@ -260,7 +258,7 @@ def test_enrich_summarizes_fetched_text():
     client = FakeHTTP({url: (html, "text/html")})
     anthropic = FakeAnthropic("摘要结果")
 
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -272,7 +270,7 @@ def test_enrich_summarizes_fetched_text():
     call = anthropic.messages.calls[0]
     # An injected client is always honored (the Anthropic fallback path); the
     # model passed through is whatever LINK_SUMMARY_MODEL is configured to.
-    assert call["model"] == LINK_SUMMARY_MODEL
+    assert call["model"] == config.LINK_SUMMARY_MODEL
     assert "thinking" not in call
 
 
@@ -289,7 +287,7 @@ def test_enrich_usage_cb_called_per_summary():
     anthropic = FakeAnthropic("摘要结果", usage=_Usage())
 
     seen: list[tuple] = []
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -313,7 +311,7 @@ def test_enrich_usage_cb_not_called_on_short_path():
         des="卡片摘要",
     )
     seen = []
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         [msg], api_key="fake",
         http_client=FakeHTTP({}),
         anthropic_client=FakeAnthropic(),
@@ -329,7 +327,7 @@ def test_enrich_uses_short_path_when_fetch_returns_empty():
         url="https://www.xiaohongshu.com/discovery/item/1",
         des="卡片摘要",
     )
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=FakeHTTP({}),
@@ -346,16 +344,16 @@ def test_enrich_short_path_skips_llm_when_total_below_threshold():
         '<meta property="og:description" content="只有 og 描述这一段">'
         '</head><body><article><p>正文太短</p></article></body></html>'
     )
-    msg = Message(
+    msg = message_parser.Message(
         create_time=1000,
-        local_type=MSG_TEXT,
+        local_type=message_parser.MSG_TEXT,
         sender_wxid="wxid",
         content=f"看看这个 {url}",
     )
     client = FakeHTTP({url: (html, "text/html")})
     anthropic = FakeAnthropic("不应被调用")
 
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -371,16 +369,16 @@ def test_enrich_short_path_skips_llm_when_total_below_threshold():
 
 def test_enrich_failed_when_no_inputs():
     url = "https://example.com/empty"
-    msg = Message(
+    msg = message_parser.Message(
         create_time=1000,
-        local_type=MSG_TEXT,
+        local_type=message_parser.MSG_TEXT,
         sender_wxid="wxid",
         content=f"参考 {url}",
     )
     # Empty HTML body → no main text, no og.
     client = FakeHTTP({url: ("<html></html>", "text/html")})
 
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -400,7 +398,7 @@ def test_summarize_prompt_includes_card_and_og_tags():
     client = FakeHTTP({url: (html, "text/html")})
     anthropic = FakeAnthropic("摘要")
 
-    enrich_link_messages(
+    url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -417,15 +415,15 @@ def test_summarize_prompt_includes_card_and_og_tags():
 
 def test_enrich_extracts_inline_plain_url():
     url = "https://example.com/inline"
-    msg = Message(
+    msg = message_parser.Message(
         create_time=1000,
-        local_type=MSG_TEXT,
+        local_type=message_parser.MSG_TEXT,
         sender_wxid="wxid",
         content=f"可以看看这个 {url}",
     )
     client = FakeHTTP({url: ("<article><p>" + ("正文 " * 500) + "</p></article>", "text/html")})
 
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -439,15 +437,15 @@ def test_enrich_extracts_inline_plain_url():
 
 def test_enrich_extracts_inline_markdown_link_title():
     url = "https://example.com/md"
-    msg = Message(
+    msg = message_parser.Message(
         create_time=1000,
-        local_type=MSG_TEXT,
+        local_type=message_parser.MSG_TEXT,
         sender_wxid="wxid",
         content=f"推荐 [好文章]({url})",
     )
     client = FakeHTTP({url: ("<article><p>" + ("正文 " * 500) + "</p></article>", "text/html")})
 
-    enrich_link_messages(
+    url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -461,15 +459,15 @@ def test_enrich_extracts_inline_markdown_link_title():
 def test_enrich_deduplicates_card_and_inline_url():
     url = "https://example.com/same"
     card = _link_msg(url=url)
-    text = Message(
+    text = message_parser.Message(
         create_time=1001,
-        local_type=MSG_TEXT,
+        local_type=message_parser.MSG_TEXT,
         sender_wxid="wxid",
         content=f"同一个链接 {url}",
     )
     client = FakeHTTP({url: ("<article><p>" + ("正文 " * 500) + "</p></article>", "text/html")})
 
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         [card, text],
         api_key="fake",
         http_client=client,
@@ -487,9 +485,9 @@ def test_inline_url_stops_at_chinese_punctuation_and_text():
     whitespace used to be swallowed whole (e.g. the trailing 「，关键是…」 ended
     up inside the URL), which then 404'd in fetch and logged FAILED."""
     url = "https://github.com/zarazhangrui/beautiful-html-templates"
-    msg = Message(
+    msg = message_parser.Message(
         create_time=1000,
-        local_type=MSG_TEXT,
+        local_type=message_parser.MSG_TEXT,
         sender_wxid="wxid",
         content=f"{url}，关键是贼方便。昨天我碰巧看到，写材料的时候就用了。",
     )
@@ -498,7 +496,7 @@ def test_inline_url_stops_at_chinese_punctuation_and_text():
         ("# README\n" + ("body " * 200), "text/plain"),
     })
     # Without the regex fix this would request the URL+Chinese-tail and fail.
-    enrich_link_messages(
+    url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -514,7 +512,7 @@ def test_douyin_is_skipped_like_xiaohongshu():
         des="抖音卡片摘要",
     )
     client = FakeHTTP({})  # No routes — fetch must not be attempted.
-    stats = enrich_link_messages(
+    stats = url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -531,7 +529,7 @@ def test_default_client_sends_browser_like_headers():
     httpx.Client should ship full browser-like headers."""
     import httpx as _httpx
 
-    from wechat_daily.url_enricher import _DEFAULT_HEADERS
+    from wechat_daily import url_enricher
 
     captured: dict[str, str] = {}
 
@@ -549,9 +547,9 @@ def test_default_client_sends_browser_like_headers():
         )
 
     transport = _httpx.MockTransport(handler)
-    msg = Message(
+    msg = message_parser.Message(
         create_time=1000,
-        local_type=MSG_TEXT,
+        local_type=message_parser.MSG_TEXT,
         sender_wxid="wxid",
         content="https://openai.com/index/openai-launches-the-deployment-company/",
     )
@@ -559,9 +557,9 @@ def test_default_client_sends_browser_like_headers():
         transport=transport,
         timeout=5.0,
         follow_redirects=True,
-        headers=_DEFAULT_HEADERS,
+        headers=url_enricher._DEFAULT_HEADERS,
     ) as client:
-        enrich_link_messages(
+        url_enricher.enrich_link_messages(
             [msg],
             api_key="fake",
             http_client=client,
@@ -578,9 +576,9 @@ def test_default_client_sends_browser_like_headers():
 def test_enrich_appends_multiple_inline_link_contexts():
     url1 = "https://example.com/one"
     url2 = "https://example.com/two"
-    msg = Message(
+    msg = message_parser.Message(
         create_time=1000,
-        local_type=MSG_TEXT,
+        local_type=message_parser.MSG_TEXT,
         sender_wxid="wxid",
         content=f"两个链接 {url1} {url2}",
     )
@@ -590,7 +588,7 @@ def test_enrich_appends_multiple_inline_link_contexts():
     })
     anthropic = FakeAnthropic("摘要")
 
-    enrich_link_messages(
+    url_enricher.enrich_link_messages(
         [msg],
         api_key="fake",
         http_client=client,
@@ -605,9 +603,8 @@ def test_enrich_routes_to_deepseek_when_no_client(monkeypatch):
     """With LINK_SUMMARY_MODEL=deepseek-* and no injected client, summaries go
     through deepseek_client.stream_chat (thinking disabled), not Anthropic."""
     import wechat_daily.config as cfg
-    import wechat_daily.url_enricher as ue
 
-    monkeypatch.setattr(ue, "LINK_SUMMARY_MODEL", "deepseek-v4-pro")
+    monkeypatch.setattr(cfg, "LINK_SUMMARY_MODEL", "deepseek-v4-pro")
     monkeypatch.setattr(cfg, "get_deepseek_key", lambda: "fake-key")
 
     calls: list[dict] = []
@@ -625,7 +622,7 @@ def test_enrich_routes_to_deepseek_when_no_client(monkeypatch):
     msg = _link_msg(url=url)
     client = FakeHTTP({url: (html, "text/html")})
 
-    stats = enrich_link_messages([msg], api_key="ignored", http_client=client)
+    stats = url_enricher.enrich_link_messages([msg], api_key="ignored", http_client=client)
 
     assert stats.summarized == 1
     assert msg.link_context == "DS 摘要"

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import html
 import re
 import subprocess
-from dataclasses import dataclass, field
 from typing import Optional
 
 # ── Message type constants ──────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ MSG_MINIAPP   = 154618822705
 MSG_TAP       = 266287972401
 
 
-@dataclass
+@dataclasses.dataclass
 class QuotedMessage:
     speaker_wxid: str    # may be empty
     speaker_name: str    # display name from <displayname>
@@ -34,24 +34,24 @@ class QuotedMessage:
     ref_type: str        # raw <type> value
 
 
-@dataclass
+@dataclasses.dataclass
 class LinkMeta:
     title: str = ""
     url: str = ""
     description: str = ""
 
 
-@dataclass
+@dataclasses.dataclass
 class Message:
     create_time: int
     local_type: int
     sender_wxid: str
     content: str                        # human-readable text
     quoted: Optional[QuotedMessage] = None
-    raw: str = field(default="", repr=False)  # original decompressed blob
+    raw: str = dataclasses.field(default="", repr=False)  # original decompressed blob
     image_md5: Optional[str] = None     # for MSG_IMAGE: <img md5="..."> in XML
     link: Optional[LinkMeta] = None
-    inline_links: list[LinkMeta] = field(default_factory=list)
+    inline_links: list[LinkMeta] = dataclasses.field(default_factory=list)
     link_context: str = ""              # fetched/summarized public webpage context
 
 

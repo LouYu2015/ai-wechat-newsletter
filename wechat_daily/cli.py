@@ -3,66 +3,47 @@
 from __future__ import annotations
 
 import argparse
+import collections
+import datetime
 import os
+import pathlib
 import sys
-from collections import deque
-from datetime import datetime
-from pathlib import Path
 
-from dotenv import load_dotenv
-from rich.console import Console, Group
-from rich.live import Live
-from rich.panel import Panel
-from rich.progress import (
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
-from rich.text import Text
+import dotenv
+import rich.console
+import rich.live
+import rich.panel
+import rich.progress
+import rich.text
 
-from wechat_daily import batch_extractor, cost_tracker
-from wechat_daily.aliases import AliasDB
-from wechat_daily.archiver import archive_old_files, get_pdf_path
-from wechat_daily.chat_extractor import extract_messages, find_missing_dates
-from wechat_daily.config import (
-    ARCHIVE_DIR,
-    CLAUDE_MODEL,
-    COMPARE_REPORT_MODEL,
-    LINK_SUMMARY_MODEL,
-    PROJECT_ROOT,
-    debug_dir_for,
+from wechat_daily import (
+    aliases,
+    archiver,
+    batch_extractor,
+    chat_extractor,
+    config,
+    contacts,
+    cost_tracker,
+    lanes_ui,
+    llm_extractor,
+    pdf,
+    prior_report,
+    privacy,
+    publisher,
+    renderer,
+    roster,
+    url_enricher,
 )
-from wechat_daily.contacts import ContactMap
-from wechat_daily.lanes_ui import Lanes
-from wechat_daily.llm_extractor import ExtractionError, build_extract_user_content, extract_report
-from wechat_daily.pdf import convert_to_pdf
-from wechat_daily.prior_report import (
-    load_prior_report_titles,
-    load_prior_reports,
-    missing_prior_dates,
-)
-from wechat_daily.privacy import (
-    LeakDetected,
-    format_tokenized_messages,
-    format_tokenized_messages_blocks,
-    leak_check,
-    tokenize_messages,
-)
-from wechat_daily.publisher import commit, preview, push_pending, write_post
-from wechat_daily.renderer import render_group, render_public
-from wechat_daily.roster import build_roster, format_roster
-from wechat_daily.url_enricher import count_link_targets, enrich_link_messages
 
-console = Console()
+console = rich.console.Console()
 
 
 # ── API key helpers ─────────────────────────────────────────────────────────────
 
 def _ensure_anthropic_key() -> str:
     """Ensure ANTHROPIC_API_KEY is present; prompt and persist to .env if not."""
-    env_path = PROJECT_ROOT / ".env"
-    load_dotenv(env_path)
+    env_path = config.PROJECT_ROOT / ".env"
+    dotenv.load_dotenv(env_path)
     key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if key:
         return key
@@ -85,8 +66,8 @@ def _ensure_anthropic_key() -> str:
 def _ensure_deepseek_key() -> str:
     """Ensure DEEPSEEK_API_KEY is in the environment (link summaries + compare
     report both need it); prompt and persist to .env if missing."""
-    env_path = PROJECT_ROOT / ".env"
-    load_dotenv(env_path)
+    env_path = config.PROJECT_ROOT / ".env"
+    dotenv.load_dotenv(env_path)
     key = os.getenv("DEEPSEEK_API_KEY", "").strip()
     if key:
         return key
@@ -113,8 +94,8 @@ def _ensure_deepseek_key() -> str:
 def _run_db_pipeline(
     date_str: str,
     anthropic_key: str,
-    alias_db: AliasDB,
-    contact_map: ContactMap,
+    alias_db: aliases.AliasDB,
+    contact_map: contacts.ContactMap,
     prior_days: int = 3,
     prior_title_days: int = 7,
     prompt_on_missing_prior: bool = True,
@@ -143,11 +124,11 @@ def _run_db_pipeline(
     resumable batch state exists (``--resume`` / ``--resubmit``).
     """
 
-    target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    target_date = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
 
     # ── A: Extract raw messages ─────────────────────────────────────────────
     console.rule(f"[bold]数据库提取  [cyan]{date_str}[/cyan]")
-    messages = extract_messages(date_str, contact_map)
+    messages = chat_extractor.extract_messages(date_str, contact_map)
     if not messages:
         console.print(f"[yellow]  {date_str} 当天无消息，跳过[/yellow]")
         return
@@ -169,30 +150,30 @@ def _run_db_pipeline(
     # ── A2: Fetch/summarize link-card targets before tokenization ───────────
     # Skipped when resuming a submitted batch — the LLM input is already
     # server-side; re-summarizing links would only burn DeepSeek tokens.
-    link_count = count_link_targets(messages)
+    link_count = url_enricher.count_link_targets(messages)
     if link_count and batch_state is not None:
         console.print(
             f"[dim]续接批次：跳过链接增强（{link_count} 个链接的摘要已包含在已提交的输入里）[/dim]\n"
         )
     elif link_count:
         console.rule(
-            f"[bold]链接增强  [dim]({LINK_SUMMARY_MODEL}, no thinking)[/dim]"
+            f"[bold]链接增强  [dim]({config.LINK_SUMMARY_MODEL}, no thinking)[/dim]"
         )
-        link_lanes = Lanes(
-            "链接增强", total=link_count, subtitle=LINK_SUMMARY_MODEL,
+        link_lanes = lanes_ui.Lanes(
+            "链接增强", total=link_count, subtitle=config.LINK_SUMMARY_MODEL,
             status_labels={"summary": "摘要", "short": "太短", "failed": "失败"},
         )
 
         def _link_usage_cb(usage, duration_s: float, input_chars: int) -> None:
             record = cost_tracker.log_call(
-                date=date_str, stage="link", model=LINK_SUMMARY_MODEL,
+                date=date_str, stage="link", model=config.LINK_SUMMARY_MODEL,
                 usage=usage, duration_s=duration_s, input_chars=input_chars,
             )
             if cost_records is not None:
                 cost_records.append(record)
 
-        with Live(link_lanes, console=console, refresh_per_second=12, transient=False):
-            stats = enrich_link_messages(
+        with rich.live.Live(link_lanes, console=console, refresh_per_second=12, transient=False):
+            stats = url_enricher.enrich_link_messages(
                 messages,
                 anthropic_key,
                 reporter=link_lanes,
@@ -208,11 +189,11 @@ def _run_db_pipeline(
     # ── B: Tokenize + optout masking ────────────────────────────────────────
     console.rule("[bold]隐私处理（token化 + optout遮蔽）")
     total_msgs = len(messages)
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold blue]token化中..."),
-        TextColumn("[dim]{task.completed}/{task.total} 条[/dim]"),
-        TimeElapsedColumn(),
+    with rich.progress.Progress(
+        rich.progress.SpinnerColumn(),
+        rich.progress.TextColumn("[bold blue]token化中..."),
+        rich.progress.TextColumn("[dim]{task.completed}/{task.total} 条[/dim]"),
+        rich.progress.TimeElapsedColumn(),
         console=console,
         transient=True,
     ) as _prog:
@@ -221,12 +202,12 @@ def _run_db_pipeline(
         def _tok_cb(current: int, _total: int) -> None:
             _prog.update(_task, completed=current)
 
-        tokenized, token_map = tokenize_messages(
+        tokenized, token_map = privacy.tokenize_messages(
             messages, contact_map, alias_db, progress_cb=_tok_cb
         )
-    chat_history = format_tokenized_messages(tokenized)
-    roster_entries = build_roster(token_map, contact_map, alias_db)
-    roster_text = format_roster(roster_entries)
+    chat_history = privacy.format_tokenized_messages(tokenized)
+    roster_entries = roster.build_roster(token_map, contact_map, alias_db)
+    roster_text = roster.format_roster(roster_entries)
     n_images = sum(1 for m in tokenized if m.image_md5)
     console.print(
         f"[green]token化完毕[/green] "
@@ -238,8 +219,8 @@ def _run_db_pipeline(
     prior_reports: list[tuple[str, str]] = []
     prior_report_titles: list[tuple[str, str]] = []
     if prior_days > 0:
-        prior_reports = load_prior_reports(date_str, n_days=prior_days)
-        gaps = missing_prior_dates(date_str, n_days=prior_days)
+        prior_reports = prior_report.load_prior_reports(date_str, n_days=prior_days)
+        gaps = prior_report.missing_prior_dates(date_str, n_days=prior_days)
         if prior_reports:
             console.print(
                 f"[dim]载入前 {len(prior_reports)} 天完整日报："
@@ -271,7 +252,7 @@ def _run_db_pipeline(
     title_window = max(prior_title_days, prior_days)
     if title_window > prior_days:
         covered = {d for d, _ in prior_reports}
-        prior_report_titles = load_prior_report_titles(
+        prior_report_titles = prior_report.load_prior_report_titles(
             date_str, n_days=title_window, skip_dates=covered,
         )
         if prior_report_titles:
@@ -313,11 +294,11 @@ def _run_db_pipeline(
             prior_reports=prior_reports,
             prior_report_titles=prior_report_titles,
             cost_records=cost_records,
-            model=CLAUDE_MODEL,
+            model=config.CLAUDE_MODEL,
             stage="extract",
             debug_suffix="",
             accent="blue",
-            rule_title=f"Claude 结构化提取  [dim]({CLAUDE_MODEL})[/dim]",
+            rule_title=f"Claude 结构化提取  [dim]({config.CLAUDE_MODEL})[/dim]",
             spinner_label="Claude 正在分析群聊...",
             show_decode_stats=True,
         )
@@ -339,25 +320,25 @@ def _run_db_pipeline(
     # Only include commands from today's date in the instruction log
     day_log = [
         e for e in alias_db.command_log()
-        if datetime.fromtimestamp(e['ts']).date() == target_date
+        if datetime.datetime.fromtimestamp(e['ts']).date() == target_date
     ]
-    group_md = render_group(report, alias_db, contact_map, day_log, token_map=token_map)
+    group_md = renderer.render_group(report, alias_db, contact_map, day_log, token_map=token_map)
 
-    debug_day = debug_dir_for(date_str)
+    debug_day = config.debug_dir_for(date_str)
     debug_day.mkdir(exist_ok=True, parents=True)
     md_path = debug_day / "group.md"
     md_path.write_text(group_md, encoding='utf-8')
 
-    pdf_path = get_pdf_path(date_str)
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold blue]{task.description}"),
-        TimeElapsedColumn(),
+    pdf_path = archiver.get_pdf_path(date_str)
+    with rich.progress.Progress(
+        rich.progress.SpinnerColumn(),
+        rich.progress.TextColumn("[bold blue]{task.description}"),
+        rich.progress.TimeElapsedColumn(),
         console=console,
         transient=False,
     ) as progress:
         task = progress.add_task("Markdown → PDF...", total=None)
-        convert_to_pdf(group_md, pdf_path)
+        pdf.convert_to_pdf(group_md, pdf_path)
         progress.update(task, description=f"PDF 已保存: {pdf_path.name}")
 
     console.print(f"[green]群内版:[/green] [cyan]{pdf_path}[/cyan]")
@@ -384,11 +365,11 @@ def _run_db_pipeline(
             prior_reports=prior_reports,
             prior_report_titles=prior_report_titles,
             cost_records=cost_records,
-            model=COMPARE_REPORT_MODEL,
+            model=config.COMPARE_REPORT_MODEL,
             stage="extract-compare",
             debug_suffix=_COMPARE_DEBUG_SUFFIX,
             accent="magenta",
-            rule_title=f"对比提取  [dim]({COMPARE_REPORT_MODEL}) — 仅本地，不发布[/dim]",
+            rule_title=f"对比提取  [dim]({config.COMPARE_REPORT_MODEL}) — 仅本地，不发布[/dim]",
             spinner_label="Fable 对比生成...",
             show_decode_stats=False,
         )
@@ -403,11 +384,11 @@ def _run_db_pipeline(
 
     # ── E: Render public version + leak check ───────────────────────────────
     console.rule("[bold]渲染公开版 + 泄漏检测")
-    public_md = render_public(report, alias_db, token_map=token_map)
+    public_md = renderer.render_public(report, alias_db, token_map=token_map)
 
     try:
-        leak_check(public_md, alias_db)
-    except LeakDetected as e:
+        privacy.leak_check(public_md, alias_db)
+    except privacy.LeakDetected as e:
         console.print(f"[bold red]泄漏检测失败，公开版已中止:[/bold red] {e}")
         _save_leak_debug(date_str, str(e), public_md)
         console.print("[yellow]群内版 PDF 不受影响。[/yellow]")
@@ -416,15 +397,15 @@ def _run_db_pipeline(
     console.print("[green]泄漏检测通过[/green]\n")
 
     # ── F: Write public post + local commit (NO push — -y handles that) ─────
-    post_path = write_post(date_str, public_md)
-    committed = commit(date_str)
+    post_path = publisher.write_post(date_str, public_md)
+    committed = publisher.commit(date_str)
     if committed:
         console.print(f"[green]公开版已本地 commit:[/green] [dim]{post_path}[/dim]")
     else:
         console.print(f"[dim]公开版内容未变，跳过 commit: {post_path}[/dim]")
 
     # Preview (open browser so author can spot-check before next -y push)
-    preview_path = preview(date_str, public_md, open_browser=True)
+    preview_path = publisher.preview(date_str, public_md, open_browser=True)
     console.print(f"[dim]预览: {preview_path}[/dim]")
 
     console.print(
@@ -466,47 +447,48 @@ def _run_streaming_extraction(
     import tempfile
     import time as _time
 
-    from wechat_daily.image_decoder import ImageDecoder
+    from wechat_daily import image_decoder
+
 
     console.rule(f"[bold]{rule_title}")
 
-    headers: list[Text] = []  # permanent header / status lines
-    thinking_lines: deque[str] = deque(maxlen=8)
-    body_lines: deque[str] = deque(maxlen=8)
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn(f"[bold {accent}]{spinner_label}"),
-        TextColumn("[dim]{task.description}[/dim]"),
-        TimeElapsedColumn(),
+    headers: list[rich.text.Text] = []  # permanent header / status lines
+    thinking_lines: collections.deque[str] = collections.deque(maxlen=8)
+    body_lines: collections.deque[str] = collections.deque(maxlen=8)
+    progress = rich.progress.Progress(
+        rich.progress.SpinnerColumn(),
+        rich.progress.TextColumn(f"[bold {accent}]{spinner_label}"),
+        rich.progress.TextColumn("[dim]{task.description}[/dim]"),
+        rich.progress.TimeElapsedColumn(),
         console=console,
     )
     task = progress.add_task("连接中...", total=None)
     state = {"text": 0, "thinking": 0, "thinking_partial": "", "body_partial": ""}
 
-    def _tail_texts(lines: deque[str], partial: str, n: int, style: str) -> list[Text]:
+    def _tail_texts(lines: collections.deque[str], partial: str, n: int, style: str) -> list[rich.text.Text]:
         visible = list(lines)
         if partial:
             visible.append(partial)
         width = max(1, console.width)
-        rows: list[Text] = []
+        rows: list[rich.text.Text] = []
         for s in visible:
-            rows.extend(Text(s, style=style).wrap(console, width))
+            rows.extend(rich.text.Text(s, style=style).wrap(console, width))
         return rows[-n:]
 
-    def render() -> Group:
+    def render() -> rich.console.Group:
         parts: list = list(headers)
         th = _tail_texts(thinking_lines, state["thinking_partial"], 8, "dim italic")
         bd = _tail_texts(body_lines, state["body_partial"], 8, "")
         if th:
-            parts.append(Text("─ thinking ─", style="dim cyan"))
+            parts.append(rich.text.Text("─ thinking ─", style="dim cyan"))
             parts.extend(th)
         if bd:
-            parts.append(Text("─ 正文 ─", style=accent))
+            parts.append(rich.text.Text("─ 正文 ─", style=accent))
             parts.extend(bd)
         parts.append(progress)
-        return Group(*parts)
+        return rich.console.Group(*parts)
 
-    with Live(render(), console=console, refresh_per_second=10, transient=False) as live:
+    with rich.live.Live(render(), console=console, refresh_per_second=10, transient=False) as live:
         def refresh() -> None:
             live.update(render())
 
@@ -544,11 +526,11 @@ def _run_streaming_extraction(
             refresh()
 
         def header_cb(_kind: str, level: int, title: str, _attempt: int) -> None:
-            headers.append(Text(f"{'  ' * level}{title}", style="bold"))
+            headers.append(rich.text.Text(f"{'  ' * level}{title}", style="bold"))
             refresh()
 
         def attempt_cb(attempt: int) -> None:
-            headers.append(Text(f"--- 第 {attempt}/3 次重试 ---", style="yellow"))
+            headers.append(rich.text.Text(f"--- 第 {attempt}/3 次重试 ---", style="yellow"))
             thinking_lines.clear()
             body_lines.clear()
             state["thinking_partial"] = ""
@@ -569,8 +551,8 @@ def _run_streaming_extraction(
 
         try:
             with tempfile.TemporaryDirectory(prefix="wechat_daily_imgs_") as td:
-                decoder = ImageDecoder(Path(td))
-                chat_blocks = format_tokenized_messages_blocks(tokenized, decoder)
+                decoder = image_decoder.ImageDecoder(pathlib.Path(td))
+                chat_blocks = privacy.format_tokenized_messages_blocks(tokenized, decoder)
                 if show_decode_stats:
                     n_images = sum(1 for m in tokenized if m.image_md5)
                     n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
@@ -581,18 +563,18 @@ def _run_streaming_extraction(
                         # image. Surface the shortfall so the author knows.
                         n_missing = n_images - n_decoded
                         if n_missing:
-                            headers.append(Text(
+                            headers.append(rich.text.Text(
                                 f"图片解码 {n_decoded}/{n_images} 张成功"
                                 f"（{n_missing} 张无法解码，已降级为 [图片] 占位）",
                                 style="yellow",
                             ))
                         else:
-                            headers.append(Text(
+                            headers.append(rich.text.Text(
                                 f"图片解码 {n_decoded}/{n_images} 张成功",
                                 style="dim",
                             ))
                         refresh()
-                return extract_report(
+                return llm_extractor.extract_report(
                     date_str, chat_history, anthropic_key, progress_cb,
                     roster_text=roster_text or None,
                     thinking_cb=thinking_cb,
@@ -606,7 +588,7 @@ def _run_streaming_extraction(
                     model=model,
                     debug_suffix=debug_suffix,
                 )
-        except ExtractionError as e:
+        except llm_extractor.ExtractionError as e:
             console.print(f"[red]提取失败（{model}）：{e}[/red]")
             return None
         except Exception as e:
@@ -620,8 +602,8 @@ def _render_compare_report(
     compare_report,
     *,
     date_str: str,
-    alias_db: AliasDB,
-    contact_map: ContactMap,
+    alias_db: aliases.AliasDB,
+    contact_map: contacts.ContactMap,
     token_map: dict,
     target_date,
 ) -> None:
@@ -632,30 +614,30 @@ def _render_compare_report(
     """
     day_log = [
         e for e in alias_db.command_log()
-        if datetime.fromtimestamp(e['ts']).date() == target_date
+        if datetime.datetime.fromtimestamp(e['ts']).date() == target_date
     ]
-    compare_group_md = render_group(
+    compare_group_md = renderer.render_group(
         compare_report, alias_db, contact_map, day_log, token_map=token_map,
     )
 
-    debug_day = debug_dir_for(date_str)
+    debug_day = config.debug_dir_for(date_str)
     debug_day.mkdir(exist_ok=True, parents=True)
     md_path = debug_day / f"group{_COMPARE_DEBUG_SUFFIX}.md"
     md_path.write_text(compare_group_md, encoding="utf-8")
 
-    ARCHIVE_DIR.mkdir(exist_ok=True)
+    config.ARCHIVE_DIR.mkdir(exist_ok=True)
     # Always exactly one "(fable-5)" file per date, overwriting stale ones on
     # re-runs (matching how the canonical path overwrites debug/{date}.md).
-    compare_pdf_path = ARCHIVE_DIR / f"{date_str} 群聊日报 (fable-5).pdf"
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold magenta]{task.description}"),
-        TimeElapsedColumn(),
+    compare_pdf_path = config.ARCHIVE_DIR / f"{date_str} 群聊日报 (fable-5).pdf"
+    with rich.progress.Progress(
+        rich.progress.SpinnerColumn(),
+        rich.progress.TextColumn("[bold magenta]{task.description}"),
+        rich.progress.TimeElapsedColumn(),
         console=console,
         transient=False,
     ) as progress:
         task = progress.add_task("Fable Markdown → PDF...", total=None)
-        convert_to_pdf(compare_group_md, compare_pdf_path)
+        pdf.convert_to_pdf(compare_group_md, compare_pdf_path)
         progress.update(task, description=f"PDF 已保存: {compare_pdf_path.name}")
 
     console.print(f"[magenta]Fable 对比版:[/magenta] [cyan]{compare_pdf_path}[/cyan]")
@@ -773,19 +755,19 @@ def _run_batch_extraction(
     import tempfile
     import time as _time
 
-    from wechat_daily.image_decoder import ImageDecoder
+    from wechat_daily import image_decoder
 
     console.rule("[bold]批量提取  [dim](Batch API，5 折计费，无流式预览)[/dim]")
 
-    requests = {"main": CLAUDE_MODEL}
+    requests = {"main": config.CLAUDE_MODEL}
     if run_compare:
-        requests["compare"] = COMPARE_REPORT_MODEL
+        requests["compare"] = config.COMPARE_REPORT_MODEL
     if state is not None:
         # Resume: regenerate exactly what was submitted, whatever today's
         # flags say (--no-compare doesn't drop an already-paid-for request).
         requests = dict(state.requests)
 
-    debug_day = debug_dir_for(date_str)
+    debug_day = config.debug_dir_for(date_str)
     debug_day.mkdir(exist_ok=True, parents=True)
     input_snapshot = debug_day / "batch_input.txt"
 
@@ -825,8 +807,8 @@ def _run_batch_extraction(
                 "[dim]已加载提交时的输入快照（含图片与链接摘要），重试轮与原输入字节一致。[/dim]"
             )
         else:
-            decoder = ImageDecoder(Path(td))
-            chat_blocks = format_tokenized_messages_blocks(tokenized, decoder)
+            decoder = image_decoder.ImageDecoder(pathlib.Path(td))
+            chat_blocks = privacy.format_tokenized_messages_blocks(tokenized, decoder)
             n_images = sum(1 for m in tokenized if m.image_md5)
             n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
             if n_images:
@@ -835,7 +817,7 @@ def _run_batch_extraction(
                 note = f"（{n_missing} 张无法解码，已降级为 [图片] 占位）" if n_missing else ""
                 console.print(f"[{style}]图片解码 {n_decoded}/{n_images} 张成功{note}[/{style}]")
 
-            user_content, debug_text = build_extract_user_content(
+            user_content, debug_text = llm_extractor.build_extract_user_content(
                 date_str=date_str,
                 tokenized_chat=chat_history,
                 roster_text=roster_text or None,
@@ -856,11 +838,11 @@ def _run_batch_extraction(
                     "[dim]未找到提交时的输入快照，重试轮输入与 debug sidecar 将缺少链接摘要（不影响已生成结果）。[/dim]"
                 )
 
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]Batch 处理中..."),
-            TextColumn("[dim]{task.description}[/dim]"),
-            TimeElapsedColumn(),
+        progress = rich.progress.Progress(
+            rich.progress.SpinnerColumn(),
+            rich.progress.TextColumn("[bold blue]Batch 处理中..."),
+            rich.progress.TextColumn("[dim]{task.description}[/dim]"),
+            rich.progress.TimeElapsedColumn(),
             console=console,
         )
         task = progress.add_task("提交/连接中...", total=None)
@@ -918,7 +900,7 @@ def _run_batch_extraction(
 
 def _save_leak_debug(date_str: str, error: str, public_md: str) -> None:
     import json
-    debug_day = debug_dir_for(date_str)
+    debug_day = config.debug_dir_for(date_str)
     debug_day.mkdir(exist_ok=True, parents=True)
     path = debug_day / "leak.json"
     path.write_text(
@@ -984,7 +966,7 @@ def main() -> None:
     if args.resume and args.resubmit:
         parser.error("--resume 与 --resubmit 互斥，请二选一")
 
-    console.print(Panel.fit(
+    console.print(rich.panel.Panel.fit(
         "[bold cyan]微信群聊日报生成器[/bold cyan]\n"
         "[dim]WeChat Group Chat Daily Report Generator[/dim]",
         border_style="cyan",
@@ -1002,7 +984,7 @@ def main() -> None:
         if args.y:
             console.rule("[bold]Step 2  推送上次未推送的公开版")
             try:
-                pushed = push_pending()
+                pushed = publisher.push_pending()
                 console.print(
                     "[green]已推送。[/green]\n" if pushed
                     else "[dim]无待推送 commit。[/dim]\n"
@@ -1012,12 +994,12 @@ def main() -> None:
 
         # Step 3: Load contacts + alias DB; scan commands incrementally
         console.rule("[bold]Step 3  加载联系人与别名数据库")
-        contact_map = ContactMap.from_db()
-        alias_db = AliasDB.load()
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]正在扫描新指令 (/alias /optout /optin)..."),
-            TimeElapsedColumn(),
+        contact_map = contacts.ContactMap.from_db()
+        alias_db = aliases.AliasDB.load()
+        with rich.progress.Progress(
+            rich.progress.SpinnerColumn(),
+            rich.progress.TextColumn("[bold blue]正在扫描新指令 (/alias /optout /optin)..."),
+            rich.progress.TimeElapsedColumn(),
             console=console,
             transient=True,
         ) as _prog:
@@ -1027,13 +1009,13 @@ def main() -> None:
         console.print("[green]别名数据库已更新[/green]\n")
 
         # Step 4: Archive old PDFs
-        moved = archive_old_files()
+        moved = archiver.archive_old_files()
         if moved:
             console.print(f"[dim]已将 {moved} 个旧日报归档至年/月子目录[/dim]\n")
 
         # Step 5: Find missing dates
         console.rule("[bold]Step 4  检测缺失日期")
-        missing = find_missing_dates(allow_incomplete=args.allow_incomplete)
+        missing = chat_extractor.find_missing_dates(allow_incomplete=args.allow_incomplete)
         if not missing:
             console.print("[green]archive 已是最新，无需生成新日报。[/green]")
             return
@@ -1064,7 +1046,7 @@ def main() -> None:
             console.print()
             console.print(cost_tracker.summarize(cost_records))
 
-        console.print(Panel.fit(
+        console.print(rich.panel.Panel.fit(
             f"[bold green]完成！[/bold green]\n共生成 [cyan]{len(missing)}[/cyan] 份日报",
             border_style="green",
             title="Success",

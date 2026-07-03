@@ -2,27 +2,19 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import dataclasses
+import datetime
 import html
+import html.parser
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
-from datetime import datetime
-from html.parser import HTMLParser
+import urllib.parse
 from typing import Callable
-from urllib.parse import urlparse
 
 import httpx
 
-from wechat_daily.config import LINK_SUMMARY_MODEL
-from wechat_daily.message_parser import (
-    MSG_LINK_CARD,
-    MSG_LINK_OPEN,
-    MSG_SYSTEM,
-    MSG_TAP,
-    LinkMeta,
-    Message,
-)
+from wechat_daily import config, message_parser
 
 ProgressCB = Callable[[int, int, str, str], None]
 
@@ -122,7 +114,7 @@ _SUMMARY_PROMPT_NO_CONTEXT = """\
 """
 
 
-@dataclass
+@dataclasses.dataclass
 class EnrichStats:
     total: int = 0
     fetched: int = 0     # debug-only: URLs where http fetch returned non-empty text
@@ -134,7 +126,7 @@ class EnrichStats:
 SHORT_THRESHOLD = 800
 
 
-class _TextExtractor(HTMLParser):
+class _TextExtractor(html.parser.HTMLParser):
     def __init__(self, target_id: str | None = None) -> None:
         super().__init__(convert_charrefs=True)
         self.target_id = target_id
@@ -190,7 +182,7 @@ class _TextExtractor(HTMLParser):
 
 
 def enrich_link_messages(
-    messages: list[Message],
+    messages: list[message_parser.Message],
     api_key: str,
     reporter=None,
     http_client: httpx.Client | None = None,
@@ -233,7 +225,7 @@ def enrich_link_messages(
 
     workers = max(1, min(max_workers, len(targets)))
 
-    def _work(item: tuple[int, tuple[int, Message, LinkMeta]]) -> dict:
+    def _work(item: tuple[int, tuple[int, message_parser.Message, message_parser.LinkMeta]]) -> dict:
         """Fetch + summarize one target; report lane events keyed by url.
 
         Pure w.r.t. shared report state: only mutates the reporter (thread-safe)
@@ -298,7 +290,7 @@ def enrich_link_messages(
                 "context": ctx or None, "usage": None}
 
     try:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             # pool.map preserves input order → results are in target order, so
             # applying them below reproduces the sequential loop's behavior.
             results = list(pool.map(_work, enumerate(targets)))
@@ -342,11 +334,11 @@ def _log_failed(url: str, label: str) -> None:
     print(f"[link-enrich] FAILED url={url} label={label}", file=sys.stderr)
 
 
-def count_link_targets(messages: list[Message]) -> int:
+def count_link_targets(messages: list[message_parser.Message]) -> int:
     return len(_collect_link_targets(messages))
 
 
-def _append_link_context(msg: Message, context: str) -> None:
+def _append_link_context(msg: message_parser.Message, context: str) -> None:
     context = _clean_text(context)
     if not context:
         return
@@ -357,14 +349,14 @@ def _append_link_context(msg: Message, context: str) -> None:
 
 
 def _collect_link_targets(
-    messages: list[Message],
-) -> list[tuple[int, Message, LinkMeta]]:
-    targets: list[tuple[int, Message, LinkMeta]] = []
+    messages: list[message_parser.Message],
+) -> list[tuple[int, message_parser.Message, message_parser.LinkMeta]]:
+    targets: list[tuple[int, message_parser.Message, message_parser.LinkMeta]] = []
     seen: set[str] = set()
 
     for idx, msg in enumerate(messages):
-        links: list[LinkMeta] = []
-        if msg.local_type in (MSG_LINK_CARD, MSG_LINK_OPEN) and msg.link and msg.link.url:
+        links: list[message_parser.LinkMeta] = []
+        if msg.local_type in (message_parser.MSG_LINK_CARD, message_parser.MSG_LINK_OPEN) and msg.link and msg.link.url:
             links.append(msg.link)
 
         inline_links = _extract_inline_links(msg.content)
@@ -382,7 +374,7 @@ def _collect_link_targets(
 
 
 def _build_surrounding(
-    messages: list[Message],
+    messages: list[message_parser.Message],
     host_idx: int,
     window: int = 10,
 ) -> str:
@@ -402,9 +394,9 @@ def _build_surrounding(
 
     for j in range(start, end):
         m = messages[j]
-        if m.local_type in (MSG_SYSTEM, MSG_TAP):
+        if m.local_type in (message_parser.MSG_SYSTEM, message_parser.MSG_TAP):
             continue
-        ts = datetime.fromtimestamp(m.create_time).strftime("%H:%M")
+        ts = datetime.datetime.fromtimestamp(m.create_time).strftime("%H:%M")
         content = (m.content or "").strip()
         if not content:
             continue
@@ -431,8 +423,8 @@ _MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
 _URL_RE = re.compile(r"https?://[A-Za-z0-9\-._~:/?#@!$&'*+,;=%\[\]]+")
 
 
-def _extract_inline_links(text: str) -> list[LinkMeta]:
-    links: list[LinkMeta] = []
+def _extract_inline_links(text: str) -> list[message_parser.LinkMeta]:
+    links: list[message_parser.LinkMeta] = []
     seen: set[str] = set()
 
     protected: list[tuple[int, int]] = []
@@ -440,7 +432,7 @@ def _extract_inline_links(text: str) -> list[LinkMeta]:
         title = m.group(1).strip()
         url = _trim_url(m.group(2))
         if url and url not in seen:
-            links.append(LinkMeta(title=title, url=url))
+            links.append(message_parser.LinkMeta(title=title, url=url))
             seen.add(url)
         protected.append((m.start(2), m.end(2)))
 
@@ -449,7 +441,7 @@ def _extract_inline_links(text: str) -> list[LinkMeta]:
             continue
         url = _trim_url(m.group(0))
         if url and url not in seen:
-            links.append(LinkMeta(url=url))
+            links.append(message_parser.LinkMeta(url=url))
             seen.add(url)
 
     return links
@@ -545,7 +537,7 @@ def summarize_text(
     # DeepSeek backend (current AB-test config): no Anthropic SDK, thinking off
     # for summaries. The Anthropic path below is kept as a fallback in case
     # LINK_SUMMARY_MODEL is pointed back at a Claude model.
-    if LINK_SUMMARY_MODEL.startswith("deepseek") and client is None:
+    if config.LINK_SUMMARY_MODEL.startswith("deepseek") and client is None:
         return _summarize_deepseek(prompt, delta_cb)
 
     if client is None:
@@ -559,7 +551,7 @@ def summarize_text(
     usage = None
     t0 = time.perf_counter()
     with client.messages.stream(
-        model=LINK_SUMMARY_MODEL,
+        model=config.LINK_SUMMARY_MODEL,
         max_tokens=2500,
         system="你是一个网页内容摘要器。直接输出摘要正文。",
         messages=[{"role": "user", "content": prompt}],
@@ -594,17 +586,16 @@ def _summarize_deepseek(
     """
     import time
 
-    from wechat_daily import deepseek_client
-    from wechat_daily.config import get_deepseek_key
+    from wechat_daily import config, deepseek_client
 
-    key = get_deepseek_key()
+    key = config.get_deepseek_key()
     if not key:
         raise RuntimeError("缺少 DEEPSEEK_API_KEY，无法生成链接摘要")
 
     t0 = time.perf_counter()
     content, _reasoning, usage, _finish = deepseek_client.stream_chat(
         api_key=key,
-        model=LINK_SUMMARY_MODEL,
+        model=config.LINK_SUMMARY_MODEL,
         system="你是一个网页内容摘要器。直接输出摘要正文。",
         user=prompt,
         thinking=False,
@@ -634,7 +625,7 @@ def _fetch_tweet(url: str, client: httpx.Client) -> str:
 
 
 def _fetch_circle_post_text(url: str, client: httpx.Client) -> str:
-    parsed = urlparse(url)
+    parsed = urllib.parse.urlparse(url)
     parts = [p for p in parsed.path.split("/") if p]
     if len(parts) < 3 or parts[0] != "c":
         return ""
@@ -759,7 +750,7 @@ def _build_webpage_block(
     return "<webpage>\n" + "\n".join(parts) + "\n</webpage>"
 
 
-class _MetaCollector(HTMLParser):
+class _MetaCollector(html.parser.HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.og_description = ""
@@ -796,7 +787,7 @@ def _clean_text(text: str) -> str:
 
 
 def _host(url: str) -> str:
-    host = urlparse(url).netloc.lower()
+    host = urllib.parse.urlparse(url).netloc.lower()
     return host[4:] if host.startswith("www.") else host
 
 
@@ -820,7 +811,7 @@ def _github_raw_url(url: str) -> str | None:
     return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
 
 
-def dump_fetch_diagnostics(messages: list[Message]) -> str:
+def dump_fetch_diagnostics(messages: list[message_parser.Message]) -> str:
     """Return compact JSON diagnostics useful for manual link-fetch probes."""
     rows = []
     for msg in messages:
