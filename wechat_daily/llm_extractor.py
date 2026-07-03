@@ -16,7 +16,7 @@ import httpx
 # Body markdown ## / ### header line.
 _BODY_HEADER_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
 
-from .config import CLAUDE_MODEL, GEMINI_SUMMARY_MODEL, debug_dir_for
+from .config import CLAUDE_MODEL, debug_dir_for
 from .models import DailyReport
 
 # ── System prompt ────────────────────────────────────────────────────────────────
@@ -545,55 +545,3 @@ def _save_failure(
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-# ── Legacy Gemini path ────────────────────────────────────────────────────────────
-
-_LEGACY_PROMPT = """\
-为以下群聊消息编写一个每日总结，让对 AI 前沿发展感兴趣的人士了解群里的最新动态。\
-总结中要包含具体的群友名称（注意：名称已匿名化处理，请使用记录中出现的 token 名字）。\
-重点关注最新的行业新闻、AI 工具和方法论，同时也要捕捉群里的人情味与有趣瞬间。
-
-## 闲聊与花絮
-在正文内容之后，如果有趣内容足够，添加"闲聊与花絮"章节。
-
-文章言简意赅，但保留重要有用信息。所有引用群友发言的地方使用 Markdown 引用框（> 语法）。
-
-最开始写一段导读，介绍今天亮点。导读之后单独一行写 [TOC]，程序将在此处插入目录。"""
-
-
-def generate_markdown_with_gemini(
-    chat_history: str,
-    api_key: str,
-    progress_cb=None,
-) -> str:
-    """Legacy Gemini path: returns raw Markdown (no structured extraction)."""
-    from google import genai as google_genai
-    from google.genai import types
-
-    client = google_genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=300000),
-    )
-    prompt = f"{_LEGACY_PROMPT}\n\n--- 聊天记录 ---\n\n{chat_history}"
-
-    max_retries = 3
-    for attempt in range(1, max_retries + 1):
-        report_text = ""
-        try:
-            response_stream = client.models.generate_content_stream(
-                model=GEMINI_SUMMARY_MODEL,
-                contents=[types.Part.from_text(text=prompt)],
-                config=types.GenerateContentConfig(temperature=0.7, max_output_tokens=65536),
-            )
-            for chunk in response_stream:
-                if chunk.text:
-                    report_text += chunk.text
-                    if progress_cb:
-                        progress_cb(len(report_text), attempt)
-            return report_text
-        except Exception:
-            if attempt < max_retries:
-                time.sleep(10 * attempt)
-            else:
-                raise
-
-    return report_text

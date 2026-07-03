@@ -23,18 +23,14 @@ from .archiver import archive_old_files, get_pdf_path
 from .chat_extractor import extract_messages, find_missing_dates
 from .config import (
     ARCHIVE_DIR, CLAUDE_MODEL, COMPARE_REPORT_MODEL,
-    GEMINI_SUMMARY_MODEL, LINK_SUMMARY_MODEL,
+    LINK_SUMMARY_MODEL,
     PROJECT_ROOT, debug_dir_for,
 )
 from .contacts import ContactMap
 from . import cost_tracker
-from .llm_extractor import (
-    ExtractionError, extract_report,
-    generate_markdown_with_gemini,
-)
+from .llm_extractor import ExtractionError, extract_report
 from .pdf import convert_to_pdf
 from .lanes_ui import Lanes
-from .message_parser import MSG_TAP, MSG_SYSTEM
 from .prior_report import (
     load_prior_report_titles,
     load_prior_reports,
@@ -52,58 +48,29 @@ from .url_enricher import count_link_targets, enrich_link_messages
 console = Console()
 
 
-def _format_raw_messages(messages, contact_map: ContactMap) -> str:
-    """Legacy-mode formatter: real nicknames, no anonymization."""
-    lines: list[str] = []
-    for msg in messages:
-        ts = datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
-        if msg.local_type == MSG_SYSTEM:
-            lines.append(f"[{ts}] [系统] {msg.content}")
-            continue
-        if msg.local_type == MSG_TAP:
-            lines.append(f"[{ts}] {msg.content}")
-            continue
-        name = contact_map.by_wxid(msg.sender_wxid) if msg.sender_wxid else ''
-        line = f"[{ts}] {name}: {msg.content}" if name else f"[{ts}] {msg.content}"
-        if msg.quoted:
-            line += f"\n  > 引用 {msg.quoted.content}"
-        lines.append(line)
-    return '\n'.join(lines)
-
-
 # ── API key helpers ─────────────────────────────────────────────────────────────
 
-def _ensure_api_keys(need_anthropic: bool) -> tuple[str, str]:
+def _ensure_anthropic_key() -> str:
+    """Ensure ANTHROPIC_API_KEY is present; prompt and persist to .env if not."""
     env_path = PROJECT_ROOT / ".env"
     load_dotenv(env_path)
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if key:
+        return key
 
-    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-
-    changed = False
-    if not gemini_key:
-        console.print("[yellow]需要 Gemini API Key（将保存到 .env 文件）[/yellow]")
-        gemini_key = console.input("[bold]请输入 GEMINI_API_KEY: [/bold]").strip()
-        changed = True
-    if need_anthropic and not anthropic_key:
-        console.print("[yellow]需要 Anthropic API Key（将保存到 .env 文件）[/yellow]")
-        anthropic_key = console.input("[bold]请输入 ANTHROPIC_API_KEY: [/bold]").strip()
-        changed = True
-
-    if changed:
+    console.print("[yellow]需要 Anthropic API Key（将保存到 .env 文件）[/yellow]")
+    key = console.input("[bold]请输入 ANTHROPIC_API_KEY: [/bold]").strip()
+    if key:
         existing = env_path.read_text(encoding='utf-8') if env_path.exists() else ''
         lines = [
             line for line in existing.splitlines()
-            if not line.startswith("GEMINI_API_KEY=")
-            and not line.startswith("ANTHROPIC_API_KEY=")
+            if not line.startswith("ANTHROPIC_API_KEY=")
         ]
-        lines.append(f"GEMINI_API_KEY={gemini_key}")
-        if anthropic_key:
-            lines.append(f"ANTHROPIC_API_KEY={anthropic_key}")
+        lines.append(f"ANTHROPIC_API_KEY={key}")
         env_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-        console.print("[green]API Keys 已保存到 .env[/green]")
-
-    return gemini_key, anthropic_key
+        os.environ["ANTHROPIC_API_KEY"] = key
+        console.print("[green]ANTHROPIC_API_KEY 已保存到 .env[/green]")
+    return key
 
 
 def _ensure_deepseek_key() -> str:
@@ -724,68 +691,10 @@ def _save_leak_debug(date_str: str, error: str, public_md: str) -> None:
     console.print(f"[dim]泄漏详情已保存至 {path}[/dim]")
 
 
-# ── Gemini legacy pipeline ───────────────────────────────────────────────────────
-
-def _run_gemini_pipeline(
-    date_str: str,
-    gemini_key: str,
-    contact_map: ContactMap,
-    alias_db: AliasDB,
-) -> None:
-    """Gemini path: tokenize → legacy Markdown (no structured extraction)."""
-    console.rule(f"[bold]数据库提取  [cyan]{date_str}[/cyan]")
-    messages = extract_messages(date_str, contact_map)
-    if not messages:
-        console.print(f"[yellow]  {date_str} 当天无消息，跳过[/yellow]")
-        return
-
-    # Legacy path keeps real nicknames — simpler, no tokenization.
-    chat_history = _format_raw_messages(messages, contact_map)
-
-    console.rule(f"[bold]Gemini 生成日报  [dim]({GEMINI_SUMMARY_MODEL})[/dim]")
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold blue]Gemini 正在生成日报..."),
-        TextColumn("[dim]{task.description}[/dim]"),
-        TimeElapsedColumn(),
-        console=console, transient=False,
-    ) as progress:
-        task = progress.add_task("0 字", total=None)
-
-        def cb(n: int, attempt: int) -> None:
-            label = f" (第 {attempt}/3 次)" if attempt > 1 else ""
-            progress.update(task, description=f"{n:,} 字已生成{label}")
-
-        report_markdown = generate_markdown_with_gemini(chat_history, gemini_key, cb)
-
-    console.print(f"[green]日报生成完毕[/green] [dim]{len(report_markdown):,} 字符[/dim]\n")
-
-    debug_day = debug_dir_for(date_str)
-    debug_day.mkdir(exist_ok=True, parents=True)
-    md_path = debug_day / "group.md"
-    md_path.write_text(report_markdown, encoding='utf-8')
-
-    console.rule("[bold]导出 PDF")
-    pdf_path = get_pdf_path(date_str)
-    with Progress(
-        SpinnerColumn(), TextColumn("[bold blue]{task.description}"),
-        TimeElapsedColumn(), console=console, transient=False,
-    ) as progress:
-        task = progress.add_task("Markdown → PDF...", total=None)
-        convert_to_pdf(report_markdown, pdf_path)
-        progress.update(task, description=f"PDF 已保存: {pdf_path.name}")
-
-    console.print(f"[green]已保存:[/green] [cyan]{pdf_path}[/cyan]")
-
-
 # ── Main entry ──────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="微信群聊日报生成器")
-    parser.add_argument(
-        "--summary", choices=["gemini", "claude"], default="claude",
-        help="总结模型：claude（默认，结构化提取）或 gemini（传统 Markdown）",
-    )
     parser.add_argument(
         "--allow-incomplete", action="store_true",
         help="也为最后一天（尚未过午夜+1小时）生成不完整日报",
@@ -828,11 +737,9 @@ def main() -> None:
     try:
         # Step 1: API keys
         console.rule("[bold]Step 1  API Key 配置")
-        gemini_key, anthropic_key = _ensure_api_keys(need_anthropic=(args.summary == "claude"))
-        # Claude path depends on DeepSeek for link summaries (the Fable 5 compare
-        # report now uses the Anthropic key); make sure it's present before start.
-        if args.summary == "claude":
-            _ensure_deepseek_key()
+        anthropic_key = _ensure_anthropic_key()
+        # Link summaries run on DeepSeek; make sure the key is present before start.
+        _ensure_deepseek_key()
         console.print("[green]API Keys 就绪[/green]\n")
 
         # Step 2: Push PREVIOUS run's pending commits (-y semantics per §7.6)
@@ -882,17 +789,14 @@ def main() -> None:
         # Step 6: Generate reports
         cost_records: list[cost_tracker.CostRecord] = []
         for date_str in missing:
-            if args.summary == "claude":
-                _run_db_pipeline(
-                    date_str, anthropic_key, alias_db, contact_map,
-                    prior_days=args.prior_days,
-                    prior_title_days=args.prior_title_days,
-                    prompt_on_missing_prior=not args.no_prior_prompt,
-                    run_compare=not args.no_compare,
-                    cost_records=cost_records,
-                )
-            else:
-                _run_gemini_pipeline(date_str, gemini_key, contact_map, alias_db)
+            _run_db_pipeline(
+                date_str, anthropic_key, alias_db, contact_map,
+                prior_days=args.prior_days,
+                prior_title_days=args.prior_title_days,
+                prompt_on_missing_prior=not args.no_prior_prompt,
+                run_compare=not args.no_compare,
+                cost_records=cost_records,
+            )
             # Persist any tokens lazily allocated during this date's pipeline
             # so subsequent runs keep the same names.
             alias_db.save()
