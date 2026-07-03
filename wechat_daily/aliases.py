@@ -197,7 +197,8 @@ def _load_or_create_salt() -> bytes:
             except ValueError:
                 pass
         print(
-            f"\033[93m[WARNING] anon_salt.txt 格式无效（长度={len(raw)}），将重新生成盐（仅影响新用户）\033[0m"
+            f"\033[93m[WARNING] anon_salt.txt 格式无效（长度={len(raw)}），"
+            "将重新生成盐（仅影响新用户）\033[0m"
         )
     salt = secrets.token_bytes(32)
     config.ANON_SALT_FILE.write_text(salt.hex())

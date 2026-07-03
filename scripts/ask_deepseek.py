@@ -10,7 +10,8 @@ OpenAI 兼容接口（https://api.deepseek.com），把回复打印到 stdout。
     python scripts/ask_deepseek.py "用更口语的语气润色这段话：……"
 
     # 从 stdin 读入正文（适合管道 / 长文）
-    cat data/draft/today.md | python scripts/ask_deepseek.py --system "你是中文编辑，润色但不改变事实" -
+    cat data/draft/today.md | python scripts/ask_deepseek.py \
+        --system "你是中文编辑，润色但不改变事实" -
 
     # 关闭流式、指定经济款模型
     python scripts/ask_deepseek.py --model deepseek-v4-flash --no-stream "证明……"

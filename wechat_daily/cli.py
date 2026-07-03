@@ -152,7 +152,8 @@ def _run_db_pipeline(
     link_count = url_enricher.count_link_targets(messages)
     if link_count and batch_state is not None:
         console.print(
-            f"[dim]续接批次：跳过链接增强（{link_count} 个链接的摘要已包含在已提交的输入里）[/dim]\n"
+            f"[dim]续接批次：跳过链接增强"
+            f"（{link_count} 个链接的摘要已包含在已提交的输入里）[/dim]\n"
         )
     elif link_count:
         console.rule(f"[bold]链接增强  [dim]({config.LINK_SUMMARY_MODEL}, no thinking)[/dim]")
@@ -237,7 +238,8 @@ def _run_db_pipeline(
             )
             choice = (
                 console.input(
-                    "[bold]继续生成今日日报？[c]ontinue / [s]kip 此日 / [a]bort 全部退出 (默认 c): [/bold]"
+                    "[bold]继续生成今日日报？"
+                    "[c]ontinue / [s]kip 此日 / [a]bort 全部退出 (默认 c): [/bold]"
                 )
                 .strip()
                 .lower()
@@ -729,7 +731,8 @@ def _decide_batch_state(
             return state
         choice = (
             console.input(
-                f"[bold]该日期批次 {state.batch_id} 之前已取回过结果（提交于 {state.submitted_at}）。\n"
+                f"[bold]该日期批次 {state.batch_id} 之前已取回过结果"
+                f"（提交于 {state.submitted_at}）。\n"
                 "[u] 复用批次结果（重新取回，零成本） / [n] 重新提交生成 (默认 u): [/bold]"
             )
             .strip()
@@ -748,7 +751,8 @@ def _decide_batch_state(
         f"（新增 {delta} 条）" if delta > 0 else "（消息集合有变化）"
     )
     console.print(
-        f"[yellow]检测到未完成批次 {state.batch_id}（提交于 {state.submitted_at}，{delta_txt}）。[/yellow]"
+        f"[yellow]检测到未完成批次 {state.batch_id}"
+        f"（提交于 {state.submitted_at}，{delta_txt}）。[/yellow]"
     )
     choice = (
         console.input(
@@ -870,7 +874,8 @@ def _run_batch_extraction(
                 debug_text = input_snapshot.read_text(encoding="utf-8")
             else:
                 console.print(
-                    "[dim]未找到提交时的输入快照，重试轮输入与 debug sidecar 将缺少链接摘要（不影响已生成结果）。[/dim]"
+                    "[dim]未找到提交时的输入快照，重试轮输入与 debug sidecar "
+                    "将缺少链接摘要（不影响已生成结果）。[/dim]"
                 )
 
         progress = rich.progress.Progress(

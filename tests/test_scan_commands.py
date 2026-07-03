@@ -41,8 +41,9 @@ def _make_synth_db(tmp_path, rows: list[tuple]) -> sqlite3.Connection:
 
     for ct, lt, wxid, content in rows:
         conn.execute(
-            f"INSERT INTO {config.GROUP_TABLE} (create_time, local_type, real_sender_id, message_content) "
-            f"VALUES (?, ?, ?, ?)",
+            f"INSERT INTO {config.GROUP_TABLE} "
+            "(create_time, local_type, real_sender_id, message_content) "
+            "VALUES (?, ?, ?, ?)",
             (ct, lt, wxid_to_id[wxid], content),
         )
     conn.commit()

@@ -504,7 +504,7 @@ def test_inline_url_stops_at_chinese_punctuation_and_text():
     )
     client = FakeHTTP(
         {
-            "https://raw.githubusercontent.com/zarazhangrui/beautiful-html-templates/main/README.md": (
+            "https://raw.githubusercontent.com/zarazhangrui/beautiful-html-templates/main/README.md": (  # noqa: E501
                 "# README\n" + ("body " * 200),
                 "text/plain",
             ),

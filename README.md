@@ -127,8 +127,10 @@ python3 main.py --no-batch
 ## 代码检查（ruff）
 
 Lint 工具用 [ruff](https://docs.astral.sh/ruff/)，配置在仓库根的 `ruff.toml`
-（规则集：pyflakes `F` + pycodestyle `E`/`W` + isort `I`，不启用 E501 行宽和
-自动格式化）。安装与调用：
+（规则集：pyflakes `F` + pycodestyle `E`/`W`（含 E501 行宽）+ isort `I`；
+行宽上限 100 列。`prompts.py` / `url_enricher.py` 里三引号字符串字面量装的是
+喂给 Claude / DeepSeek 的提示词正文，行内加 noqa 会污染实际提示词内容，
+故对这两个文件整体豁免 E501）。安装与调用：
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
@@ -138,6 +140,12 @@ Lint 工具用 [ruff](https://docs.astral.sh/ruff/)，配置在仓库根的 `ruf
 
 # 自动修复可安全修复的问题（未用 import、import 排序等）
 .venv/bin/ruff check --fix .
+
+# 自动格式化（引号、空行、尾逗号、长参数列表拆行等）
+.venv/bin/ruff format .
+
+# 只检查、不改动文件（CI 用）
+.venv/bin/ruff format --check .
 ```
 
 import 的规范（Google Python 风格；`I` / `TID252` 由 ruff 强制，模块化

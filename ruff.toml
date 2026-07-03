@@ -1,8 +1,9 @@
-# Ruff — lint + import 排序（调用方式见 README「代码检查」一节）。
+# Ruff — lint + import 排序 + 自动格式化（调用方式见 README「代码检查」一节）。
 #
 # 规则取务实集合：默认的 E/F（pycodestyle 错误 + pyflakes）加上 W（警告）
-# 和 I（isort import 排序）。不启用 ruff format / E501 行宽——中文注释与
-# 提示词常量的行宽不值得为机器整形；新代码请自觉控制在 ~100 列内。
+# 和 I（isort import 排序），并启用 E501 行宽 + ruff format。prompts.py
+# 里的中文提示词正文行宽超限属于内容本身（不是代码结构），逐行加
+# `# noqa: E501` 豁免，不整体豁免文件。
 
 target-version = "py312"
 line-length = 100
@@ -18,6 +19,7 @@ select = [
     "E9",     # 语法级错误
     "F",      # pyflakes：未使用 import/变量、未定义名字等
     "W",      # pycodestyle 警告：行尾空白等
+    "E501",   # 行宽超限
     "I",      # isort：import 分组与排序
     "TID252", # 禁止相对导入（--fix 可自动转绝对导入）
 ]
@@ -33,3 +35,7 @@ ban-relative-imports = "all"
 [lint.per-file-ignores]
 # 测试里的 fake/stub 类偶尔会故意 shadow 内置名（如 type 参数）。
 "tests/*" = ["A"]
+# 三引号字符串字面量里的提示词正文（喂给 Claude / DeepSeek 的实际内容），
+# 行内加 noqa 会被当成字符串内容混进提示词，只能整文件豁免 E501。
+"wechat_daily/prompts.py" = ["E501"]
+"wechat_daily/url_enricher.py" = ["E501"]
