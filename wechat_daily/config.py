@@ -41,11 +41,12 @@ GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 # ── Models ──────────────────────────────────────────────────────────────────────
 # AB test: 报告生成对比 Opus 4.6（主版本，发布 + 喂续写）vs Fable 5（旁路，仅本地
 # PDF/debug）。两版都走 Anthropic 同一条 extract_report 路径、同套提示词、原生喂图，
-# 只有报告生成模型不同——把唯一变量真正收敛到模型上。链接摘要统一用最新 Sonnet
-# （claude-sonnet-4-6），两版日报共用同一批摘要。
+# 只有报告生成模型不同——把唯一变量真正收敛到模型上。链接摘要走 DeepSeek V4
+# （成本约为 Sonnet 的 1/10；deepseek 前缀触发 url_enricher 的 OpenAI 兼容分支，
+# thinking 关闭），两版日报共用同一批摘要。
 CLAUDE_MODEL = "claude-opus-4-6"            # 主版本报告生成（发布）
 COMPARE_REPORT_MODEL = "claude-fable-5"     # 对比版报告生成（旁路，不发布）
-LINK_SUMMARY_MODEL = "claude-sonnet-4-6"    # 链接摘要（最新 Sonnet）
+LINK_SUMMARY_MODEL = "deepseek-v4-pro"      # 链接摘要（DeepSeek V4，无思考）
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_SUMMARY_MODEL = "gemini-3.5-flash"        # 旧版：纯 Markdown 日报（--summary gemini）
 
@@ -102,3 +103,8 @@ def get_gemini_key() -> str:
 def get_deepseek_key() -> str:
     load_env()
     return os.getenv("DEEPSEEK_API_KEY", "")
+
+
+def get_glm_key() -> str:
+    load_env()
+    return os.getenv("GLM_API_KEY", "")
