@@ -9,7 +9,7 @@
 - **模型 AB 对比**：主版本（Fable 5，发布 + 喂续写）跑完后，再用 Opus 4.6 旁路生成一份对比日报（仅本地 PDF/debug，不发布、不喂续写），便于并排比质量与成本
 - **链接摘要**：用 DeepSeek V4 Pro（关 thinking）抓取并摘要群内分享的链接，作为 `[网页摘要]` 喂给报告生成；两版日报共用同一批摘要
 - **三级隐私模型**：`/optout`（不出现）/ 默认匿名（稳定派生）/ `/alias`（自定义公开别名）
-- **泄漏检测**：公开版发布前，用 Claude Haiku 二次确认真实昵称是否为人名引用
+- **泄漏检测**：公开版发布前硬性拦截三类泄漏（optout 用户匿名名、原始 wxid、同名消歧标记残留），命中即中止发布；真实昵称变体改为在群内版用 `<mark>` 可视化标出，交由作者人工复核，不再自动拦截
 - **7 天滚动归档**：超过 7 天的 PDF 自动整理到 `archive/YYYY/MM/` 子目录
 
 ## 环境要求
@@ -34,8 +34,7 @@ pip install -r requirements.txt
 
 ```
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
-DEEPSEEK_API_KEY=your_deepseek_api_key_here   # claude 路径需要（链接摘要 + 对比版日报）
-GEMINI_API_KEY=your_gemini_api_key_here       # 仅 --summary gemini 时需要
+DEEPSEEK_API_KEY=your_deepseek_api_key_here   # 链接摘要（主版本 + 对比版共用同一批摘要）需要
 ```
 
 ## 配置目标群聊
@@ -247,6 +246,7 @@ wechat_daily/
 ├── chat_extractor.py    # 按日期提取消息
 ├── url_enricher.py      # 链接卡片抓取与摘要（DeepSeek 摘要，喂给 LLM 的 [网页摘要] 来源）
 ├── deepseek_client.py   # DeepSeek（OpenAI 兼容）流式客户端（链接摘要）
+├── lanes_ui.py          # 并行任务的多泳道 TUI（链接增强等并发阶段的进度展示）
 ├── aliases.py           # 别名数据库、指令扫描、备份
 ├── privacy.py           # token 化（惰性分配）、optout 遮蔽、泄漏检测
 ├── roster.py            # token → 真实昵称变体花名册（喂给 LLM 解代称）
