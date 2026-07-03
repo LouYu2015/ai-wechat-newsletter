@@ -1,6 +1,6 @@
 """Batch API report extraction with crash/sleep-safe resume.
 
-The daily report's two generation calls (main Opus + Fable compare) go into
+The daily report's two generation calls (main Fable + Opus compare) go into
 ONE Message Batch — every token bills at 50% of standard prices. Batches
 usually finish within minutes to tens of minutes (hard server cap 24h), so
 this module is built around three interruption scenarios:
@@ -24,7 +24,7 @@ convert or reject old files explicitly)::
       "submitted_at": "2026-07-03T21:47:03+08:00",
       "raw_msg_count": 412,
       "raw_msg_sha256": "…",
-      "requests": {"main": "claude-opus-4-6", "compare": "claude-fable-5"},
+      "requests": {"main": "claude-fable-5", "compare": "claude-opus-4-6"},
       "consumed": false
     }
 
@@ -209,7 +209,7 @@ def raw_messages_fingerprint(messages: list) -> tuple[int, str]:
 def debug_suffix_for(custom_id: str, model: str) -> str:
     """Sidecar suffix per request: main is canonical (un-suffixed, feeds
     next-day continuity); every other id gets ``.{model minus claude-}`` —
-    matching the streaming path's hardcoded ``.fable-5``."""
+    matching the streaming path's hardcoded ``.opus-4-6``."""
     if custom_id == "main":
         return ""
     return "." + model.removeprefix("claude-")

@@ -194,9 +194,9 @@ def extract_report(
     """Stream a markdown daily report from Claude; return DailyReport(date, markdown).
 
     *model* selects the Anthropic model. Defaults to the published main version
-    (Opus 4.6); the AB-compare path passes ``claude-fable-5`` to run the exact
+    (Fable 5); the AB-compare path passes ``claude-opus-4-6`` to run the exact
     same prompt / native-image input through a different model. *debug_suffix*
-    (e.g. ``.fable-5``) keeps the compare run's debug sidecars from colliding
+    (e.g. ``.opus-4-6``) keeps the compare run's debug sidecars from colliding
     with the canonical un-suffixed ones (which feed next-day continuity).
 
     *client* may be injected for testing (any object with ``messages.stream``

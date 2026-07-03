@@ -116,7 +116,7 @@ def _run_db_pipeline(
     *prompt_on_missing_prior* — when *some* of the last *prior_days* are
     available but others aren't (suggesting a recent gap, not a fresh start),
     ask the user whether to proceed.
-    *run_compare* — also produce the Fable 5 AB-compare report (bypass, local
+    *run_compare* — also produce the Opus 4.6 AB-compare report (bypass, local
     only). ``False`` (``--no-compare``) skips it to save cost.
     *use_batch* — Batch API (default: 50% pricing, no live streaming); the
     ``--no-batch`` flag flips this off for the legacy streaming path.
@@ -344,7 +344,7 @@ def _run_db_pipeline(
     console.print(f"[green]群内版:[/green] [cyan]{pdf_path}[/cyan]")
     console.print(f"[green]Markdown:[/green] [dim]{md_path}[/dim]\n")
 
-    # ── D2: Fable 5 对比版（旁路，仅本地，不发布、不喂续写）─────────────────
+    # ── D2: Opus 4.6 对比版（旁路，仅本地，不发布、不喂续写）─────────────────
     # 放在主版本群内版渲染之后、公开版/泄漏检测之前：只要主版本本身生成成功就
     # 产出对比版，不受公开版泄漏检测早退的影响。失败不致命。批量模式下对比版
     # 与主版本同批生成，这里只剩渲染；流式模式下在此处单独跑一次提取。
@@ -370,11 +370,11 @@ def _run_db_pipeline(
             debug_suffix=_COMPARE_DEBUG_SUFFIX,
             accent="magenta",
             rule_title=f"对比提取  [dim]({config.COMPARE_REPORT_MODEL}) — 仅本地，不发布[/dim]",
-            spinner_label="Fable 对比生成...",
+            spinner_label="Opus 对比生成...",
             show_decode_stats=False,
         )
         if compare_report is None:
-            console.print("[yellow]Fable 对比生成失败，跳过。[/yellow]\n")
+            console.print("[yellow]Opus 对比生成失败，跳过。[/yellow]\n")
         else:
             _render_compare_report(
                 compare_report,
@@ -414,7 +414,7 @@ def _run_db_pipeline(
     )
 
 
-_COMPARE_DEBUG_SUFFIX = ".fable-5"
+_COMPARE_DEBUG_SUFFIX = ".opus-4-6"
 
 
 def _run_streaming_extraction(
@@ -437,7 +437,7 @@ def _run_streaming_extraction(
 ):
     """One streaming report extraction with the live thinking/body panel.
 
-    Shared by the main (Opus) and compare (Fable) runs in ``--no-batch``
+    Shared by the main (Fable) and compare (Opus) runs in ``--no-batch``
     mode — same prompt, native inline images; only model/labels differ.
     Returns the DailyReport, or ``None`` on failure (caller decides whether
     that's fatal). Only the main run lets unexpected exceptions propagate;
@@ -607,10 +607,10 @@ def _render_compare_report(
     token_map: dict,
     target_date,
 ) -> None:
-    """Render the Fable compare report → group markdown + PDF (local only).
+    """Render the Opus compare report → group markdown + PDF (local only).
 
     No public path, no leak check, never feeds next-day continuity — the
-    ``(fable-5)`` PDF sits alongside the canonical one for AB reading.
+    ``(opus-4-6)`` PDF sits alongside the canonical one for AB reading.
     """
     day_log = [
         e for e in alias_db.command_log()
@@ -626,9 +626,9 @@ def _render_compare_report(
     md_path.write_text(compare_group_md, encoding="utf-8")
 
     config.ARCHIVE_DIR.mkdir(exist_ok=True)
-    # Always exactly one "(fable-5)" file per date, overwriting stale ones on
+    # Always exactly one "(opus-4-6)" file per date, overwriting stale ones on
     # re-runs (matching how the canonical path overwrites debug/{date}.md).
-    compare_pdf_path = config.ARCHIVE_DIR / f"{date_str} 群聊日报 (fable-5).pdf"
+    compare_pdf_path = config.ARCHIVE_DIR / f"{date_str} 群聊日报 (opus-4-6).pdf"
     with rich.progress.Progress(
         rich.progress.SpinnerColumn(),
         rich.progress.TextColumn("[bold magenta]{task.description}"),
@@ -636,12 +636,12 @@ def _render_compare_report(
         console=console,
         transient=False,
     ) as progress:
-        task = progress.add_task("Fable Markdown → PDF...", total=None)
+        task = progress.add_task("Opus Markdown → PDF...", total=None)
         pdf.convert_to_pdf(compare_group_md, compare_pdf_path)
         progress.update(task, description=f"PDF 已保存: {compare_pdf_path.name}")
 
-    console.print(f"[magenta]Fable 对比版:[/magenta] [cyan]{compare_pdf_path}[/cyan]")
-    console.print(f"[magenta]Fable Markdown:[/magenta] [dim]{md_path}[/dim]\n")
+    console.print(f"[magenta]Opus 对比版:[/magenta] [cyan]{compare_pdf_path}[/cyan]")
+    console.print(f"[magenta]Opus Markdown:[/magenta] [dim]{md_path}[/dim]\n")
 
 
 # ── Batch extraction (default mode) ─────────────────────────────────────────────
@@ -958,7 +958,7 @@ def main() -> None:
     parser.add_argument(
         "--no-compare", action="store_true",
         help=(
-            "跳过 Fable 5 对比版（旁路，仅本地 PDF/debug、不发布）。"
+            "跳过 Opus 4.6 对比版（旁路，仅本地 PDF/debug、不发布）。"
             "对比版与主版本同价位、且每天跑全天聊天记录，成本不低；只想要发布版时用此项关闭。"
         ),
     )
