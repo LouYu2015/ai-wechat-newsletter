@@ -1,10 +1,14 @@
 """Unit tests for message_parser."""
 
-import pytest
 from wechat_daily.message_parser import (
-    MSG_TEXT, MSG_QUOTE, MSG_TAP, MSG_IMAGE, MSG_SYSTEM,
-    MSG_LINK_OPEN, MSG_FILE,
-    parse_row, split_content, format_quoted, decompress,
+    MSG_IMAGE,
+    MSG_LINK_OPEN,
+    MSG_SYSTEM,
+    MSG_TEXT,
+    decompress,
+    format_quoted,
+    parse_row,
+    split_content,
 )
 
 

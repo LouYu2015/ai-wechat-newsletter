@@ -1,15 +1,10 @@
 """Unit tests for aliases.py."""
 
 import json
-import tempfile
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
-import pytest
-
-from wechat_daily.aliases import AliasDB, compute_default_anon, ADJECTIVES, ANIMALS
-
+from wechat_daily.aliases import ADJECTIVES, ANIMALS, AliasDB, compute_default_anon
 
 SALT = b'\x00' * 32
 
@@ -58,7 +53,6 @@ def test_allocation_resolves_collisions():
     tokens via deterministic walking."""
     db = _make_db()
     db.get_or_create_user("wxid_a")
-    first = db._users["wxid_a"]["default_anon"]
     # Force a collision: pre-seed another user with the same anon
     db._users["wxid_seed"] = {
         'default_anon': compute_default_anon("wxid_a", SALT),

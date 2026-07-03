@@ -1,11 +1,8 @@
 """Unit tests for archiver."""
 
-import shutil
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-
-import pytest
 
 
 def _make_pdf(archive_dir: Path, date_str: str) -> Path:

@@ -1,20 +1,32 @@
 """Unit tests for privacy.py — 100% branch coverage target."""
 
-import pytest
-from unittest.mock import MagicMock
 
+import pytest
+
+from wechat_daily.aliases import AliasDB, compute_default_anon
+from wechat_daily.contacts import ContactMap
 from wechat_daily.message_parser import (
-    LinkMeta, Message, MSG_LINK_OPEN, MSG_TEXT, MSG_TAP, MSG_SYSTEM, MSG_QUOTE,
+    MSG_LINK_OPEN,
+    MSG_QUOTE,
+    MSG_SYSTEM,
+    MSG_TAP,
+    MSG_TEXT,
+    LinkMeta,
+    Message,
     QuotedMessage,
 )
 from wechat_daily.privacy import (
-    tokenize_messages, format_tokenized_messages,
-    leak_check, LeakDetected, TokenMap, _replace_names,
-    build_replace_state, mark_leaks,
-    LEAK_MARK_OPEN, LEAK_MARK_CLOSE,
+    LEAK_MARK_CLOSE,
+    LEAK_MARK_OPEN,
+    LeakDetected,
+    TokenMap,
+    _replace_names,
+    build_replace_state,
+    format_tokenized_messages,
+    leak_check,
+    mark_leaks,
+    tokenize_messages,
 )
-from wechat_daily.aliases import AliasDB, compute_default_anon
-from wechat_daily.contacts import ContactMap
 
 SALT = b'\x00' * 32
 

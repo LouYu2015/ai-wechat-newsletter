@@ -31,7 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from wechat_daily.aliases import AliasDB, _load_or_create_salt
-from wechat_daily.config import ALIASES_FILE, ALIASES_BACKUP_DIR
+from wechat_daily.config import ALIASES_BACKUP_DIR, ALIASES_FILE
 
 
 def migrate() -> None:
@@ -80,7 +80,7 @@ def migrate() -> None:
     # 简易 sanity check：所有新名唯一
     anons = [a for _, a in reassigned]
     assert len(set(anons)) == len(anons), "重复 default_anon，allocator 有 bug"
-    print(f"[3/3] 唯一性校验通过")
+    print("[3/3] 唯一性校验通过")
 
     # 打印前几行示例
     print("\n示例（前 10 个）:")

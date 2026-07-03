@@ -26,7 +26,6 @@ from typing import Any, Iterable
 
 from .config import DEBUG_DIR, MODEL_PRICES
 
-
 # ── Usage normalization ─────────────────────────────────────────────────────────
 
 _USAGE_FIELDS = (

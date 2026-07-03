@@ -6,7 +6,7 @@ import re
 import sys
 from datetime import datetime, timedelta
 
-from .config import CHATLOG_MAC_DIR, GROUP_TABLE, ARCHIVE_DIR
+from .config import ARCHIVE_DIR, CHATLOG_MAC_DIR, GROUP_TABLE
 from .contacts import ContactMap
 from .message_parser import MSG_IMAGE, MSG_SYSTEM, MSG_TAP, Message, parse_row
 from .wechat_db import get_conn, name2id_map

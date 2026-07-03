@@ -8,8 +8,11 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
 from .message_parser import (
-    Message, QuotedMessage,
-    MSG_TAP, MSG_SYSTEM, MSG_IMAGE,
+    MSG_IMAGE,
+    MSG_SYSTEM,
+    MSG_TAP,
+    Message,
+    QuotedMessage,
 )
 
 if TYPE_CHECKING:

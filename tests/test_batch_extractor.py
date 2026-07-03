@@ -10,8 +10,6 @@ import pytest
 
 from wechat_daily import batch_extractor as bx
 from wechat_daily.config import debug_dir_for
-from wechat_daily.llm_extractor import ExtractionError
-
 
 # ── Fakes ───────────────────────────────────────────────────────────────────────
 

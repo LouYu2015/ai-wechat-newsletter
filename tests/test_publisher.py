@@ -1,9 +1,9 @@
 """Unit tests for publisher.py using a fake git remote."""
 
 import subprocess
-import tempfile
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
@@ -42,8 +42,8 @@ def _setup_fake_remote(tmp_path: Path) -> tuple[Path, Path]:
 
 def _patch_publisher(monkeypatch, tmp_path: Path):
     """Redirect publisher to use a temp repo."""
-    import wechat_daily.publisher as pub
     import wechat_daily.config as cfg
+    import wechat_daily.publisher as pub
 
     remote, local = _setup_fake_remote(tmp_path)
     monkeypatch.setattr(pub, 'PUBLIC_REPO_URL', str(remote))
@@ -140,8 +140,8 @@ def test_push_pending_no_commits(monkeypatch, tmp_path):
 # ── preview ──────────────────────────────────────────────────────────────────────
 
 def test_preview_creates_html(monkeypatch, tmp_path):
-    import wechat_daily.publisher as pub
     import wechat_daily.config as cfg
+    import wechat_daily.publisher as pub
     monkeypatch.setattr(cfg, 'DEBUG_DIR', tmp_path / "debug")
     _patch_publisher(monkeypatch, tmp_path)
 

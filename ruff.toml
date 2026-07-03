@@ -1,0 +1,29 @@
+# Ruff — lint + import 排序（调用方式见 README「代码检查」一节）。
+#
+# 规则取务实集合：默认的 E/F（pycodestyle 错误 + pyflakes）加上 W（警告）
+# 和 I（isort import 排序）。不启用 ruff format / E501 行宽——中文注释与
+# 提示词常量的行宽不值得为机器整形；新代码请自觉控制在 ~100 列内。
+
+target-version = "py312"
+line-length = 100
+
+exclude = [
+    "chatlog-mac",   # 独立的逆向工具集，不随主项目 lint
+]
+
+[lint]
+select = [
+    "E4",  # import 位置/格式
+    "E7",  # 语句层面的常见错误（比较、缩进等）
+    "E9",  # 语法级错误
+    "F",   # pyflakes：未使用 import/变量、未定义名字等
+    "W",   # pycodestyle 警告：行尾空白等
+    "I",   # isort：import 分组与排序
+]
+
+[lint.isort]
+known-first-party = ["wechat_daily"]
+
+[lint.per-file-ignores]
+# 测试里的 fake/stub 类偶尔会故意 shadow 内置名（如 type 参数）。
+"tests/*" = ["A"]

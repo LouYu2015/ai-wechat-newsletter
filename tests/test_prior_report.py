@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from wechat_daily.prior_report import (
     _normalize_to_ref_placeholders,
     expected_dates,
@@ -14,7 +12,6 @@ from wechat_daily.prior_report import (
     load_prior_reports,
     missing_prior_dates,
 )
-
 
 # ── expected_dates ─────────────────────────────────────────────────────────────
 

@@ -10,7 +10,6 @@ from wechat_daily.config import debug_dir_for
 from wechat_daily.llm_extractor import ExtractionError, extract_report
 from wechat_daily.models import DailyReport
 
-
 # ── Fake event/response/stream/client ───────────────────────────────────────────
 
 
@@ -88,7 +87,6 @@ class _FakeClient:
 
 
 def test_streams_text_into_markdown(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["intro\n\n", "## 行业新闻\n\n", "### x\nbody\n"])
 
@@ -105,7 +103,6 @@ def test_streams_text_into_markdown(monkeypatch, tmp_path):
 
 def test_no_tool_use_in_request(monkeypatch, tmp_path):
     """Request must not include the old tool_use parameters."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
     extract_report("2026-04-30", "chat", api_key="fake", client=client)
@@ -146,7 +143,6 @@ def test_model_and_debug_suffix_forwarded(monkeypatch, tmp_path):
 
 
 def test_refusal_raises_and_writes_failure(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=[], stop_reason="refusal")
 
@@ -159,7 +155,6 @@ def test_refusal_raises_and_writes_failure(monkeypatch, tmp_path):
 
 
 def test_max_tokens_raises(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["partial"], stop_reason="max_tokens")
 
@@ -168,7 +163,6 @@ def test_max_tokens_raises(monkeypatch, tmp_path):
 
 
 def test_empty_response_raises(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=[], stop_reason="end_turn")
 
@@ -178,7 +172,6 @@ def test_empty_response_raises(monkeypatch, tmp_path):
 
 def test_falls_back_to_response_text_blocks(monkeypatch, tmp_path):
     """If no streaming events arrived but content has text blocks, harvest them."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(
         text_chunks=[],
@@ -191,7 +184,6 @@ def test_falls_back_to_response_text_blocks(monkeypatch, tmp_path):
 
 
 def test_roster_prepended(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -208,7 +200,6 @@ def test_roster_prepended(monkeypatch, tmp_path):
 
 
 def test_no_roster_when_none(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -222,7 +213,6 @@ def test_no_roster_when_none(monkeypatch, tmp_path):
 
 
 def test_progress_cb_monotonic(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     chunks = ["abc", "de", "fghij"]
     client = _FakeClient(text_chunks=chunks)
@@ -239,7 +229,6 @@ def test_progress_cb_monotonic(monkeypatch, tmp_path):
 
 
 def test_debug_md_contents_match(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["hello\n", "world\n"])
 
@@ -250,7 +239,6 @@ def test_debug_md_contents_match(monkeypatch, tmp_path):
 
 def test_usage_cb_receives_response_usage_and_input_chars(monkeypatch, tmp_path):
     """Cost tracking hook: callback fires once on success with (usage, chars)."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
 
     class _Usage:
@@ -274,7 +262,6 @@ def test_usage_cb_receives_response_usage_and_input_chars(monkeypatch, tmp_path)
 
 def test_usage_cb_not_called_on_failure(monkeypatch, tmp_path):
     """On refusal/max_tokens/empty, the usage hook must not fire."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=[], stop_reason="refusal")
     seen = []
@@ -292,7 +279,6 @@ def test_usage_cb_not_called_on_failure(monkeypatch, tmp_path):
 
 def test_prior_reports_injected_before_chat_log(monkeypatch, tmp_path):
     """Long context order: roster → previous_reports → chat_log → instructions."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -322,7 +308,6 @@ def test_prior_reports_injected_before_chat_log(monkeypatch, tmp_path):
 
 
 def test_prior_reports_omitted_when_none(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -337,7 +322,6 @@ def test_prior_reports_omitted_when_none(monkeypatch, tmp_path):
 
 
 def test_prior_reports_empty_list_omits_block(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -352,7 +336,6 @@ def test_prior_reports_empty_list_omits_block(monkeypatch, tmp_path):
 
 def test_prior_reports_with_chat_blocks(monkeypatch, tmp_path):
     """When chat_blocks (multimodal) is used, prior reports go into the prefix block."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -375,7 +358,6 @@ def test_prior_reports_with_chat_blocks(monkeypatch, tmp_path):
 
 def test_system_prompt_documents_ref_placeholder(monkeypatch, tmp_path):
     """Sanity check: the [[ref:...]] syntax is taught in the system prompt."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
     extract_report("2026-04-30", "chat", api_key="fake", client=client)
@@ -390,7 +372,6 @@ def test_system_prompt_documents_ref_placeholder(monkeypatch, tmp_path):
 
 def test_prior_report_titles_injected_before_prior_reports(monkeypatch, tmp_path):
     """Long context order: roster → titles → full reports → chat_log."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -418,7 +399,6 @@ def test_prior_report_titles_injected_before_prior_reports(monkeypatch, tmp_path
 
 def test_prior_report_titles_alone_emitted(monkeypatch, tmp_path):
     """Titles can be passed without full prior_reports."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -435,7 +415,6 @@ def test_prior_report_titles_alone_emitted(monkeypatch, tmp_path):
 
 
 def test_prior_report_titles_omitted_when_none(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -446,7 +425,6 @@ def test_prior_report_titles_omitted_when_none(monkeypatch, tmp_path):
 
 
 def test_prior_report_titles_empty_list_omits_block(monkeypatch, tmp_path):
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
 
@@ -462,7 +440,6 @@ def test_prior_report_titles_empty_list_omits_block(monkeypatch, tmp_path):
 def test_system_prompt_documents_title_block(monkeypatch, tmp_path):
     """System prompt should mention <previous_report_titles> so the model
     knows what to do when it appears."""
-    import wechat_daily.llm_extractor as mod
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
     extract_report("2026-04-30", "chat", api_key="fake", client=client)

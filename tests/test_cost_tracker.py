@@ -8,7 +8,11 @@ import pytest
 
 from wechat_daily import cost_tracker
 from wechat_daily.cost_tracker import (
-    CostRecord, estimate_cost, log_call, summarize, usage_to_dict,
+    CostRecord,
+    estimate_cost,
+    log_call,
+    summarize,
+    usage_to_dict,
 )
 
 

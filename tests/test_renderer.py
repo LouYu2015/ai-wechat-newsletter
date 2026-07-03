@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from wechat_daily.aliases import AliasDB, compute_default_anon
 from wechat_daily.contacts import ContactMap
 from wechat_daily.models import DailyReport
@@ -707,8 +705,8 @@ def test_render_public_catches_inline_final_form_wrong_date(monkeypatch, tmp_pat
 
 def test_render_group_expands_ref_placeholder():
     md = (
-        f"intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
-        f"## A\n\n### x\nbody\n"
+        "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
+        "## A\n\n### x\nbody\n"
     )
     out = render_group(_wrap(md), _make_db(), _make_contacts(), command_log=[])
     assert "「某话题」" in out
@@ -721,8 +719,8 @@ def test_render_public_expands_ref_placeholder_degraded(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "PUBLIC_REPO_DIR", tmp_path)
 
     md = (
-        f"intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
-        f"## A\n\n### x\nbody\n"
+        "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
+        "## A\n\n### x\nbody\n"
     )
     out = render_public(_wrap(md), _make_db())
     assert "「某话题」" in out
@@ -742,8 +740,8 @@ def test_render_public_expands_ref_to_link_when_post_exists(monkeypatch, tmp_pat
     monkeypatch.setattr(mod, "PUBLIC_REPO_DIR", tmp_path)
 
     md = (
-        f"intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
-        f"## A\n\n### x\nbody\n"
+        "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
+        "## A\n\n### x\nbody\n"
     )
     out = render_public(_wrap(md), _make_db())
     assert (

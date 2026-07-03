@@ -19,12 +19,12 @@ import time
 
 import httpx
 
-# Body markdown ## / ### header line.
-_BODY_HEADER_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
-
 from .config import CLAUDE_MODEL, debug_dir_for
 from .models import DailyReport
 from .prompts import SYSTEM_PROMPT, USER_INSTRUCTIONS
+
+# Body markdown ## / ### header line.
+_BODY_HEADER_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
 
 
 class ExtractionError(Exception):

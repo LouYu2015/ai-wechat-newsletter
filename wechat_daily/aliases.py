@@ -15,8 +15,12 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .config import (
-    ALIASES_FILE, ALIASES_CURSOR_FILE, ANON_SALT_FILE,
-    ALIASES_BACKUP_DIR, ALIAS_RESERVATION_DAYS, GROUP_TABLE,
+    ALIAS_RESERVATION_DAYS,
+    ALIASES_BACKUP_DIR,
+    ALIASES_CURSOR_FILE,
+    ALIASES_FILE,
+    ANON_SALT_FILE,
+    GROUP_TABLE,
 )
 from .message_parser import MSG_TEXT, decompress, split_content
 from .wechat_db import get_conn, name2id_map

@@ -1,9 +1,9 @@
 """Constants, paths, and environment loading."""
 
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-import os
 
 # ── Paths ───────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent.parent

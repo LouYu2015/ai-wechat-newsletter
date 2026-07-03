@@ -16,9 +16,13 @@ import httpx
 
 from .config import LINK_SUMMARY_MODEL
 from .message_parser import (
-    MSG_LINK_CARD, MSG_LINK_OPEN, MSG_SYSTEM, MSG_TAP, LinkMeta, Message,
+    MSG_LINK_CARD,
+    MSG_LINK_OPEN,
+    MSG_SYSTEM,
+    MSG_TAP,
+    LinkMeta,
+    Message,
 )
-
 
 ProgressCB = Callable[[int, int, str, str], None]
 

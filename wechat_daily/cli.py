@@ -13,34 +13,45 @@ from dotenv import load_dotenv
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
-from rich.text import Text
 from rich.progress import (
-    Progress, SpinnerColumn, TextColumn, TimeElapsedColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
 )
+from rich.text import Text
 
+from . import batch_extractor, cost_tracker
 from .aliases import AliasDB
 from .archiver import archive_old_files, get_pdf_path
 from .chat_extractor import extract_messages, find_missing_dates
 from .config import (
-    ARCHIVE_DIR, CLAUDE_MODEL, COMPARE_REPORT_MODEL,
+    ARCHIVE_DIR,
+    CLAUDE_MODEL,
+    COMPARE_REPORT_MODEL,
     LINK_SUMMARY_MODEL,
-    PROJECT_ROOT, debug_dir_for,
+    PROJECT_ROOT,
+    debug_dir_for,
 )
 from .contacts import ContactMap
-from . import batch_extractor, cost_tracker
+from .lanes_ui import Lanes
 from .llm_extractor import (
-    ExtractionError, build_extract_user_content, extract_report,
+    ExtractionError,
+    build_extract_user_content,
+    extract_report,
 )
 from .pdf import convert_to_pdf
-from .lanes_ui import Lanes
 from .prior_report import (
     load_prior_report_titles,
     load_prior_reports,
     missing_prior_dates,
 )
 from .privacy import (
-    LeakDetected, format_tokenized_messages, format_tokenized_messages_blocks,
-    leak_check, tokenize_messages,
+    LeakDetected,
+    format_tokenized_messages,
+    format_tokenized_messages_blocks,
+    leak_check,
+    tokenize_messages,
 )
 from .publisher import commit, preview, push_pending, write_post
 from .renderer import render_group, render_public
@@ -456,7 +467,9 @@ def _run_streaming_extraction(
     the compare run (``stage="extract-compare"``) swallows them — the
     canonical report has already shipped by then.
     """
-    import tempfile, time as _time
+    import tempfile
+    import time as _time
+
     from .image_decoder import ImageDecoder
 
     console.rule(f"[bold]{rule_title}")
@@ -761,7 +774,9 @@ def _run_batch_extraction(
     submitted; the locally rebuilt input only backs the rare retry round —
     it lacks the nondeterministic link summaries, an accepted degradation.
     """
-    import tempfile, time as _time
+    import tempfile
+    import time as _time
+
     from .image_decoder import ImageDecoder
 
     console.rule("[bold]批量提取  [dim](Batch API，5 折计费，无流式预览)[/dim]")

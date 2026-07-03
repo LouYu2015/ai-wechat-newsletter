@@ -11,10 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from wechat_daily.aliases import AliasDB
+from wechat_daily.config import ALIASES_CURSOR_FILE, ALIASES_FILE
 from wechat_daily.contacts import ContactMap
-from wechat_daily.config import ALIASES_FILE, ALIASES_CURSOR_FILE, GROUP_TABLE
-from wechat_daily.message_parser import MSG_TEXT, decompress, parse_sender_content
-from wechat_daily.wechat_db import get_conn
 
 
 def rebuild() -> None:

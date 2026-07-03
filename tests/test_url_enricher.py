@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 
 from wechat_daily.config import LINK_SUMMARY_MODEL
-from wechat_daily.message_parser import LinkMeta, Message, MSG_LINK_OPEN, MSG_TEXT
+from wechat_daily.message_parser import MSG_LINK_OPEN, MSG_TEXT, LinkMeta, Message
 from wechat_daily.url_enricher import enrich_link_messages, fetch_url_text
 
 
@@ -99,8 +99,6 @@ class _EchoMarkerAnthropic:
     """
 
     def __init__(self) -> None:
-        outer = self
-
         class _Msgs:
             def stream(self, **kwargs):
                 prompt = kwargs["messages"][0]["content"]
@@ -532,6 +530,7 @@ def test_default_client_sends_browser_like_headers():
     return 403 challenge pages when only User-Agent is set. The default
     httpx.Client should ship full browser-like headers."""
     import httpx as _httpx
+
     from wechat_daily.url_enricher import _DEFAULT_HEADERS
 
     captured: dict[str, str] = {}
@@ -605,8 +604,8 @@ def test_enrich_appends_multiple_inline_link_contexts():
 def test_enrich_routes_to_deepseek_when_no_client(monkeypatch):
     """With LINK_SUMMARY_MODEL=deepseek-* and no injected client, summaries go
     through deepseek_client.stream_chat (thinking disabled), not Anthropic."""
-    import wechat_daily.url_enricher as ue
     import wechat_daily.config as cfg
+    import wechat_daily.url_enricher as ue
 
     monkeypatch.setattr(ue, "LINK_SUMMARY_MODEL", "deepseek-v4-pro")
     monkeypatch.setattr(cfg, "get_deepseek_key", lambda: "fake-key")

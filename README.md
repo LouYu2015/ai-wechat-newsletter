@@ -69,7 +69,8 @@ echo -n "26389512912@chatroom" | md5
 ```bash
 source .venv/bin/activate
 
-# 生成缺失日报（Claude 结构化提取，默认）
+# 生成缺失日报（默认走 Batch API：全部 token 5 折，无流式预览，
+# 通常几分钟到几十分钟完成；主版 + 对比版同批提交）
 python3 main.py
 
 # 生成后推送公开版到 GitHub Pages
@@ -78,26 +79,43 @@ python3 main.py -y
 # 也为当天不完整日期生成日报
 python3 main.py --allow-incomplete
 
-# 使用 Gemini 生成（仅群内版，无公开版）
-python3 main.py --summary gemini
+# 不用批量，走传统流式生成（有实时预览，标准价计费）
+python3 main.py --no-batch
 ```
 
 **`-y` 标志**：推送上一次运行生成的本地 commit 到公开仓库。本次生成的 commit 下次带 `-y` 才推送，留出人工审核窗口。
+
+### 批量模式的断点续接
+
+批次提交后会把 `batch_state.json`（含 `version` 字段）写进当天的 debug
+目录，因此**电脑休眠、Ctrl-C、进程崩溃都不丢批次**——重新运行同一命令即可
+续接（自动跳过链接增强，不重复花 DeepSeek 的钱）。相关行为：
+
+- 消息集合与提交时不一致（典型场景：`--allow-incomplete` 中途退出后重跑，
+  群里又进了新消息）会提示「当时 N 条 → 现在 M 条」并询问续接还是重提；
+- `--resume` 无条件续接、`--resubmit` 放弃旧批次（尽力取消）重新提交，
+  两者跳过询问；
+- 已取回过结果的批次重跑时可选「复用结果」（服务端保留 29 天，重取免费）；
+- 提交时的完整输入（含图片与链接摘要）快照为 `batch_content.json`，
+  批次消费后自动删除；纯文本审计版 `batch_input.txt` 长期保留。
 
 ## 输出文件
 
 | 路径 | 说明 |
 |------|------|
 | `archive/YYYY-MM-DD 群聊日报.pdf` | 主版本（Opus 4.6）群内版 PDF（真实昵称） |
-| `debug/YYYY-MM-DD.md` | 主版本群内版 Markdown 原文 |
-| `debug/extract-YYYY-MM-DD.{md,input.txt,thinking.md}` | 主版本原始 Markdown 日报（用作下日续写素材）+ 输入快照 + thinking 摘要 |
-| `archive/YYYY-MM-DD 群聊日报 (deepseek-v4-pro).pdf` | **对比版**（DeepSeek V4 Pro）群内版 PDF（仅本地，不发布、不喂续写） |
-| `debug/YYYY-MM-DD.deepseek-v4-pro.md` | 对比版群内版 Markdown 原文 |
-| `debug/extract-YYYY-MM-DD.deepseek-v4-pro.{md,input.txt,thinking.md}` | 对比版原始 Markdown + 输入快照 + reasoning |
-| `debug/costs.jsonl` | 每次模型调用的 token 用量 + 价格估算（JSON Lines） |
+| `debug/YYYY/MM/DD/group.md` | 主版本群内版 Markdown 原文 |
+| `debug/YYYY/MM/DD/extract.{md,input.txt,thinking.md}` | 主版本原始 Markdown 日报（用作下日续写素材）+ 输入快照 + thinking 摘要 |
+| `archive/YYYY-MM-DD 群聊日报 (fable-5).pdf` | **对比版**（Fable 5）群内版 PDF（仅本地，不发布、不喂续写） |
+| `debug/YYYY/MM/DD/group.fable-5.md` | 对比版群内版 Markdown 原文 |
+| `debug/YYYY/MM/DD/extract.fable-5.{md,input.txt,thinking.md}` | 对比版原始 Markdown + 输入快照 + thinking 摘要 |
+| `debug/YYYY/MM/DD/batch_state.json` | 批量模式批次状态（断点续接凭据，含 schema version） |
+| `debug/YYYY/MM/DD/batch_input.txt` | 批量模式提交输入的纯文本审计快照 |
+| `debug/YYYY/MM/DD/batch_content.json` | 提交输入的完整块列表快照（含图片；批次消费后自动删除） |
+| `debug/costs.jsonl` | 每次模型调用的 token 用量 + 价格估算（JSON Lines，批量调用带 `batch` 标记） |
 | `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
 
-每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表，阶段含 `link`（DeepSeek 链接摘要）/ `extract`（Opus 4.6 主版本）/ `extract-compare`（DeepSeek V4 Pro 对比版），可直接并排比成本。对比版生成失败不影响主版本（主版本已先发布）。
+每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表，阶段含 `link`（DeepSeek 链接摘要）/ `extract`（Opus 4.6 主版本）/ `extract-compare`（Fable 5 对比版），批量调用的模型列标注「(batch 5折)」，可直接并排比成本。对比版生成失败不影响主版本。
 
 ## 测试
 
@@ -107,6 +125,27 @@ python3 main.py --summary gemini
 
 测试是 hermetic 的：不读 `.env`、不连数据库、不调 API；`tests/conftest.py` 把 git 子进程从宿主全局配置里隔离开。本地或 CI 都按上面这条命令跑即可。
 
+## 代码检查（ruff）
+
+Lint 工具用 [ruff](https://docs.astral.sh/ruff/)，配置在仓库根的 `ruff.toml`
+（规则集：pyflakes `F` + pycodestyle `E`/`W` + isort `I`，不启用 E501 行宽和
+自动格式化）。安装与调用：
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+
+# 检查全仓（CI / 提交前跑这条）
+.venv/bin/ruff check .
+
+# 自动修复可安全修复的问题（未用 import、import 排序等）
+.venv/bin/ruff check --fix .
+```
+
+import 的规范（ruff 的 `I` 规则会强制执行）：`from __future__ import annotations`
+最前；随后三组、组间空行——**标准库 → 第三方 → 本项目（`wechat_daily` /
+相对导入）**，组内按字母序；import 之间不夹代码。函数体内的延迟 import
+（如 `import anthropic`）是刻意为之的启动加速，ruff 不会报。
+
 ### Claude Code 云端环境备注
 
 云端 sandbox 启动时**没有 venv**，系统 Python 也**只有标准库**。直接 `python3 -m pytest tests/` 会在 collect 阶段炸：`test_llm_extractor.py` 和 `test_url_enricher.py` 都需要 `httpx`，没装就 `ModuleNotFoundError`（这两个文件之外的纯 Python 测试 collect 不到 httpx，看着像能跑，但等于跳过了 1/4 的覆盖）。
@@ -115,11 +154,11 @@ python3 main.py --summary gemini
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt pytest
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python -m pytest tests/ -q
 ```
 
-`pytest` 不在 `requirements.txt` 里（它是 dev-only），所以要单独追加。`weasyprint` 会拖一堆系统级字体/lxml 依赖、`sqlcipher3` 会编 C 扩展，首次安装 ~1–2 分钟，之后 `.venv/` 复用即可。装完整套测试秒级跑完。
+`pytest` / `ruff` 等 dev-only 工具在 `requirements-dev.txt` 里，与运行时依赖分开。`weasyprint` 会拖一堆系统级字体/lxml 依赖、`sqlcipher3` 会编 C 扩展，首次安装 ~1–2 分钟，之后 `.venv/` 复用即可。装完整套测试秒级跑完。
 
 不要用系统 Python `pip install`——sandbox 里它会落到 `/usr/local`，下次重启 sandbox 就丢了，而且会污染全局环境。venv 装在工作目录下，下次进同一个工作目录直接复用。
 
@@ -195,12 +234,14 @@ wechat_daily/
 ├── image_decoder.py     # 图片附件解码（dat → 原图）
 ├── chat_extractor.py    # 按日期提取消息
 ├── url_enricher.py      # 链接卡片抓取与摘要（DeepSeek 摘要，喂给 LLM 的 [网页摘要] 来源）
-├── deepseek_client.py   # DeepSeek（OpenAI 兼容）流式客户端：链接摘要 + 对比版日报
+├── deepseek_client.py   # DeepSeek（OpenAI 兼容）流式客户端（链接摘要）
 ├── aliases.py           # 别名数据库、指令扫描、备份
 ├── privacy.py           # token 化（惰性分配）、optout 遮蔽、泄漏检测
 ├── roster.py            # token → 真实昵称变体花名册（喂给 LLM 解代称）
 ├── prior_report.py      # 历史日报加载（跨日续写 / 去重的 <previous_reports> 素材）
-├── llm_extractor.py     # 流式 Markdown 生成（Claude 主版本 + DeepSeek 对比版）
+├── prompts.py           # 日报生成的系统提示 + 用户指令常量（流式/批量共享）
+├── llm_extractor.py     # 请求构建 + 响应收尾 + 流式生成（--no-batch 路径）
+├── batch_extractor.py   # Batch API 生成（默认路径）：提交/轮询/断点续接/5 折记账
 ├── renderer.py          # Markdown 后期处理：标记剥离、token 替换、群内版 / 公开版渲染
 ├── pdf.py               # Markdown → PDF
 ├── archiver.py          # 7 天滚动归档

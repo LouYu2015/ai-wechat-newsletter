@@ -7,7 +7,6 @@ from wechat_daily.contacts import ContactMap
 from wechat_daily.privacy import TokenMap
 from wechat_daily.roster import build_roster, format_roster
 
-
 SALT = b'\x00' * 32
 
 
