@@ -8,7 +8,7 @@ import pytest
 
 from wechat_daily import aliases, config, contacts, message_parser
 
-SALT = b'\x00' * 32
+SALT = b"\x00" * 32
 
 
 def _make_synth_db(tmp_path, rows: list[tuple]) -> sqlite3.Connection:
@@ -51,12 +51,12 @@ def _make_synth_db(tmp_path, rows: list[tuple]) -> sqlite3.Connection:
 
 def _prefixed(wxid: str, body: str) -> bytes:
     """Others' messages embed a 'wxid:\\n' prefix in the content."""
-    return f"{wxid}:\n{body}".encode('utf-8')
+    return f"{wxid}:\n{body}".encode("utf-8")
 
 
 def _bare(body: str) -> bytes:
     """The owner's own messages carry no prefix — just the body."""
-    return body.encode('utf-8')
+    return body.encode("utf-8")
 
 
 @pytest.fixture
@@ -77,7 +77,11 @@ def test_scan_commands_sets_alias(patched_aliases, monkeypatch, tmp_path):
     rows = [(1000, message_parser.MSG_TEXT, "wxid_alice", _prefixed("wxid_alice", "/alias Duckie"))]
     conn = _make_synth_db(tmp_path, rows)
 
-    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        mod,
+        "get_conn",
+        lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()),
+    )
 
     db = aliases.AliasDB(users={}, reservations=[], salt=SALT)
     db.get_or_create_user("wxid_alice", "Alice")
@@ -93,7 +97,11 @@ def test_scan_commands_sees_owner_prefixless_command(patched_aliases, monkeypatc
     rows = [(1000, message_parser.MSG_TEXT, "wxid_owner", _bare("/alias Boss"))]
     conn = _make_synth_db(tmp_path, rows)
 
-    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        mod,
+        "get_conn",
+        lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()),
+    )
 
     db = aliases.AliasDB(users={}, reservations=[], salt=SALT)
     db.get_or_create_user("wxid_owner", "Owner")
@@ -106,10 +114,19 @@ def test_scan_commands_writes_cursor(patched_aliases, monkeypatch, tmp_path):
     mod = patched_aliases
     rows = [
         (1000, message_parser.MSG_TEXT, "wxid_alice", _prefixed("wxid_alice", "/alias Duckie")),
-        (2000, message_parser.MSG_TEXT, "wxid_alice", _prefixed("wxid_alice", "hello world")),  # non-command
+        (
+            2000,
+            message_parser.MSG_TEXT,
+            "wxid_alice",
+            _prefixed("wxid_alice", "hello world"),
+        ),  # non-command
     ]
     conn = _make_synth_db(tmp_path, rows)
-    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        mod,
+        "get_conn",
+        lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()),
+    )
 
     db = aliases.AliasDB(users={}, reservations=[], salt=SALT)
     db.scan_commands()
@@ -126,7 +143,11 @@ def test_scan_commands_incremental(patched_aliases, monkeypatch, tmp_path):
         (2000, message_parser.MSG_TEXT, "wxid_bob", _prefixed("wxid_bob", "/alias Quackie")),
     ]
     conn = _make_synth_db(tmp_path, rows)
-    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        mod,
+        "get_conn",
+        lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()),
+    )
 
     # Pre-seed cursor past the first row
     (tmp_path / "cursor").write_text("1500")
@@ -142,12 +163,21 @@ def test_scan_commands_incremental(patched_aliases, monkeypatch, tmp_path):
 def test_scan_commands_ignores_non_slash_text(patched_aliases, monkeypatch, tmp_path):
     mod = patched_aliases
     rows = [
-        (1000, message_parser.MSG_TEXT, "wxid_alice", _prefixed("wxid_alice", "hello there, /alias Duckie")),
+        (
+            1000,
+            message_parser.MSG_TEXT,
+            "wxid_alice",
+            _prefixed("wxid_alice", "hello there, /alias Duckie"),
+        ),
         # Command not on first line should be ignored too
         (2000, message_parser.MSG_TEXT, "wxid_bob", _prefixed("wxid_bob", "hi\n/alias Duckie")),
     ]
     conn = _make_synth_db(tmp_path, rows)
-    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        mod,
+        "get_conn",
+        lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()),
+    )
 
     db = aliases.AliasDB(users={}, reservations=[], salt=SALT)
     db.scan_commands()
@@ -162,6 +192,7 @@ def test_scan_commands_handles_missing_db(patched_aliases, monkeypatch):
 
     def _raise(rel):
         raise FileNotFoundError(rel)
+
     monkeypatch.setattr(mod, "get_conn", _raise)
 
     db = aliases.AliasDB(users={}, reservations=[], salt=SALT)
@@ -176,7 +207,11 @@ def test_scan_commands_optout_then_optin(patched_aliases, monkeypatch, tmp_path)
         (2000, message_parser.MSG_TEXT, "wxid_alice", _prefixed("wxid_alice", "/optin")),
     ]
     conn = _make_synth_db(tmp_path, rows)
-    monkeypatch.setattr(mod, "get_conn", lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        mod,
+        "get_conn",
+        lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()),
+    )
 
     db = aliases.AliasDB(users={}, reservations=[], salt=SALT)
     db.scan_commands()

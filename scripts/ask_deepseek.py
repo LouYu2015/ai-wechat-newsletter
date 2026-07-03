@@ -68,7 +68,7 @@ def request_stream(payload: dict, key: str) -> str:
             line = raw.decode("utf-8").strip()
             if not line.startswith("data:"):
                 continue
-            data = line[len("data:"):].strip()
+            data = line[len("data:") :].strip()
             if data == "[DONE]":
                 break
             try:
@@ -109,17 +109,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="命令行调用 DeepSeek 并查看回复（用于日报润色）。",
     )
-    parser.add_argument("prompt", nargs="?", default="-",
-                        help="用户消息；'-' 或省略则从 stdin 读取")
+    parser.add_argument(
+        "prompt", nargs="?", default="-", help="用户消息；'-' 或省略则从 stdin 读取"
+    )
     parser.add_argument("--system", help="system prompt（可选）")
-    parser.add_argument("--model", default="deepseek-v4-pro",
-                        help="模型，默认 deepseek-v4-pro（经济款用 deepseek-v4-flash）")
-    parser.add_argument("--temperature", type=float, default=1.0,
-                        help="采样温度，默认 1.0")
-    parser.add_argument("--no-thinking", action="store_true",
-                        help="关闭 thinking 模式（默认开启 V4 Pro 推理）")
-    parser.add_argument("--no-stream", action="store_true",
-                        help="一次性返回（默认流式）")
+    parser.add_argument(
+        "--model",
+        default="deepseek-v4-pro",
+        help="模型，默认 deepseek-v4-pro（经济款用 deepseek-v4-flash）",
+    )
+    parser.add_argument("--temperature", type=float, default=1.0, help="采样温度，默认 1.0")
+    parser.add_argument(
+        "--no-thinking", action="store_true", help="关闭 thinking 模式（默认开启 V4 Pro 推理）"
+    )
+    parser.add_argument("--no-stream", action="store_true", help="一次性返回（默认流式）")
     args = parser.parse_args()
 
     key = get_deepseek_key()

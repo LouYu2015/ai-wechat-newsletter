@@ -71,9 +71,9 @@ class _Batch:
 
 class _FakeBatches:
     def __init__(self):
-        self.created: list[dict] = []          # kwargs of each create()
-        self.retrieve_script: list = []        # popped per retrieve(); last repeats
-        self.results_map: dict[str, list] = {} # batch_id → result list
+        self.created: list[dict] = []  # kwargs of each create()
+        self.retrieve_script: list = []  # popped per retrieve(); last repeats
+        self.results_map: dict[str, list] = {}  # batch_id → result list
         self.cancelled: list[str] = []
         self._n = 0
 
@@ -216,7 +216,11 @@ def test_snapshot_debug_text_matches_build_semantics():
 def test_submit_writes_snapshot_and_consume_removes_it(debug_dir):
     client = _FakeClient()
     state = bx.submit_batch(
-        client, "2026-07-02", {"main": "claude-opus-4-6"}, _BLOCKS, (1, "sha"),
+        client,
+        "2026-07-02",
+        {"main": "claude-opus-4-6"},
+        _BLOCKS,
+        (1, "sha"),
     )
     assert bx.load_content_snapshot("2026-07-02") == _BLOCKS
     bx.mark_consumed(state)
@@ -267,9 +271,11 @@ def test_debug_suffix_convention():
 def test_submit_batch_persists_state_and_builds_requests(debug_dir):
     client = _FakeClient()
     state = bx.submit_batch(
-        client, "2026-07-02",
+        client,
+        "2026-07-02",
         {"main": "claude-opus-4-6", "compare": "claude-fable-5"},
-        "user content", (412, "deadbeef"),
+        "user content",
+        (412, "deadbeef"),
     )
     assert state.batch_id == "msgbatch_001"
     assert state.raw_msg_count == 412
@@ -300,7 +306,9 @@ def test_poll_survives_connection_errors_then_ends():
     ]
     notes = []
     batch = bx.poll_until_ended(
-        client, "b", status_cb=lambda b, e, n: notes.append((b, n)),
+        client,
+        "b",
+        status_cb=lambda b, e, n: notes.append((b, n)),
     )
     assert batch.processing_status == "ended"
     error_notes = [n for b, n in notes if b is None]
@@ -309,6 +317,7 @@ def test_poll_survives_connection_errors_then_ends():
 
 def test_poll_raises_batch_not_found():
     import anthropic
+
     resp = httpx.Response(404, request=httpx.Request("GET", "http://x"))
     client = _FakeClient()
     client.messages.batches.retrieve_script = [
@@ -348,7 +357,8 @@ def test_fetch_results_keyed_by_custom_id_out_of_order():
 def test_process_results_success_writes_sidecars_and_usage(debug_dir):
     usage_calls = []
     outcome, retryable = bx.process_results(
-        "2026-07-02", "the input",
+        "2026-07-02",
+        "the input",
         {"main": "claude-opus-4-6", "compare": "claude-fable-5"},
         {
             "main": _Result("main", "succeeded", _Message("# 主版", usage={"input_tokens": 5})),
@@ -369,7 +379,8 @@ def test_process_results_success_writes_sidecars_and_usage(debug_dir):
 
 def test_process_results_refusal_is_terminal_error(debug_dir):
     outcome, retryable = bx.process_results(
-        "2026-07-02", "input",
+        "2026-07-02",
+        "input",
         {"main": "claude-opus-4-6"},
         {"main": _Result("main", "succeeded", _Message("", stop_reason="refusal"))},
     )
@@ -380,7 +391,8 @@ def test_process_results_refusal_is_terminal_error(debug_dir):
 
 def test_process_results_server_error_and_expired_are_retryable(debug_dir):
     outcome, retryable = bx.process_results(
-        "2026-07-02", "input",
+        "2026-07-02",
+        "input",
         {"main": "claude-opus-4-6", "compare": "claude-fable-5"},
         {
             "main": _Result("main", "errored", error_type="api_error"),
@@ -393,7 +405,8 @@ def test_process_results_server_error_and_expired_are_retryable(debug_dir):
 
 def test_process_results_invalid_request_is_terminal(debug_dir):
     outcome, retryable = bx.process_results(
-        "2026-07-02", "input",
+        "2026-07-02",
+        "input",
         {"main": "claude-opus-4-6"},
         {"main": _Result("main", "errored", error_type="invalid_request")},
     )
@@ -416,8 +429,12 @@ def test_run_batch_fresh_submit_success(debug_dir):
     _wire_success(client, "msgbatch_001", requests)
 
     outcome = bx.run_batch(
-        client=client, date_str="2026-07-02", debug_text="input",
-        user_content="uc", fingerprint=(2, "sha"), requests=requests,
+        client=client,
+        date_str="2026-07-02",
+        debug_text="input",
+        user_content="uc",
+        fingerprint=(2, "sha"),
+        requests=requests,
     )
     assert set(outcome.reports) == {"main", "compare"}
     state = bx.load_state("2026-07-02")
@@ -436,8 +453,11 @@ def test_run_batch_resume_uses_state_requests_and_skips_create(debug_dir):
     ]
 
     outcome = bx.run_batch(
-        client=client, date_str="2026-07-02", debug_text="input",
-        user_content="uc", fingerprint=(412, "deadbeef"),
+        client=client,
+        date_str="2026-07-02",
+        debug_text="input",
+        user_content="uc",
+        fingerprint=(412, "deadbeef"),
         # Caller's requests are IGNORED on resume — state's set wins.
         requests={"main": "claude-opus-4-6", "compare": "claude-fable-5"},
         state=state,
@@ -461,8 +481,12 @@ def test_run_batch_retries_server_errors_once(debug_dir):
     ]
 
     outcome = bx.run_batch(
-        client=client, date_str="2026-07-02", debug_text="input",
-        user_content="uc", fingerprint=(2, "sha"), requests=requests,
+        client=client,
+        date_str="2026-07-02",
+        debug_text="input",
+        user_content="uc",
+        fingerprint=(2, "sha"),
+        requests=requests,
     )
     assert outcome.reports["compare"].markdown == "# compare 重试"
     assert len(client.messages.batches.created) == 2
@@ -482,8 +506,12 @@ def test_run_batch_retry_still_failing_lands_in_errors(debug_dir):
         _Result("main", "errored", error_type="api_error"),
     ]
     outcome = bx.run_batch(
-        client=client, date_str="2026-07-02", debug_text="input",
-        user_content="uc", fingerprint=(1, "sha"), requests=requests,
+        client=client,
+        date_str="2026-07-02",
+        debug_text="input",
+        user_content="uc",
+        fingerprint=(1, "sha"),
+        requests=requests,
     )
     assert not outcome.reports
     assert "main" in outcome.errors
@@ -506,8 +534,12 @@ def test_run_batch_cancels_retry_batch_on_interrupt(debug_dir):
     client.messages.batches.retrieve = _retrieve
     with pytest.raises(KeyboardInterrupt):
         bx.run_batch(
-            client=client, date_str="2026-07-02", debug_text="input",
-            user_content="uc", fingerprint=(1, "sha"), requests=requests,
+            client=client,
+            date_str="2026-07-02",
+            debug_text="input",
+            user_content="uc",
+            fingerprint=(1, "sha"),
+            requests=requests,
         )
     assert client.messages.batches.cancelled == ["msgbatch_002"]
     # Original batch stays resumable.

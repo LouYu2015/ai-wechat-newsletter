@@ -97,7 +97,7 @@ def stream_chat(
                 line = raw.decode("utf-8").strip()
                 if not line.startswith("data:"):
                     continue
-                data = line[len("data:"):].strip()
+                data = line[len("data:") :].strip()
                 if data == "[DONE]":
                     break
                 try:

@@ -28,8 +28,11 @@ _CHROME_CANDIDATES = (
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
 )
 _CHROME_PATH_NAMES = (
-    "google-chrome", "google-chrome-stable", "chromium",
-    "chromium-browser", "microsoft-edge",
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "microsoft-edge",
 )
 
 
@@ -45,7 +48,7 @@ def _find_chrome() -> str | None:
 
 
 def _toc_slugify(value: str, separator: str) -> str:
-    return value.strip().encode('utf-8').hex()
+    return value.strip().encode("utf-8").hex()
 
 
 def _get_pdf_css() -> str:
@@ -119,14 +122,18 @@ def _build_full_html(markdown_text: str) -> str:
     The CSS is inlined in a ``<style>`` tag so the exact same document renders
     identically through Chrome or WeasyPrint.
     """
-    converter = markdown.Markdown(extensions=[
-        "tables", "fenced_code", "nl2br",
-        markdown.extensions.toc.TocExtension(slugify=_toc_slugify, toc_depth="2-3"),
-    ])
+    converter = markdown.Markdown(
+        extensions=[
+            "tables",
+            "fenced_code",
+            "nl2br",
+            markdown.extensions.toc.TocExtension(slugify=_toc_slugify, toc_depth="2-3"),
+        ]
+    )
     html_body = converter.convert(markdown_text)
     html_body = html_body.replace('<div class="toc">', '<div class="toc" id="toc">', 1)
     html_body = re.sub(
-        r'(</h[23]>)',
+        r"(</h[23]>)",
         r'<span class="back-to-toc"><a href="#toc">↑ 目录</a></span>\1',
         html_body,
     )
@@ -155,15 +162,26 @@ def _render_with_chrome(chrome: str, full_html: str, output_path: pathlib.Path) 
         html_path.write_text(full_html, encoding="utf-8")
         user_dir = pathlib.Path(tmp) / "chrome"
         try:
-            proc = subprocess.Popen([
-                chrome, "--headless", "--disable-gpu", "--no-sandbox",
-                f"--user-data-dir={user_dir}",
-                "--no-first-run", "--no-default-browser-check",
-                "--disable-background-networking", "--disable-component-update",
-                "--disable-extensions", "--disable-default-apps",
-                "--no-pdf-header-footer", f"--print-to-pdf={output_path}",
-                html_path.as_uri(),
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(
+                [
+                    chrome,
+                    "--headless",
+                    "--disable-gpu",
+                    "--no-sandbox",
+                    f"--user-data-dir={user_dir}",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-background-networking",
+                    "--disable-component-update",
+                    "--disable-extensions",
+                    "--disable-default-apps",
+                    "--no-pdf-header-footer",
+                    f"--print-to-pdf={output_path}",
+                    html_path.as_uri(),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         except OSError:
             return False
 

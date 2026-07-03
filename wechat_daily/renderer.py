@@ -92,6 +92,7 @@ def _normalize_tag(raw: str) -> str:
 
 # ── Common helpers ──────────────────────────────────────────────────────────────
 
+
 def _split_lines(text: str) -> list[str]:
     """Split preserving no trailing empty line; safe for re-join with '\\n'."""
     return text.split("\n")
@@ -154,7 +155,7 @@ def _section_ranges(lines: list[str]) -> list[tuple[int, int, int]]:
     out: list[tuple[int, int, int]] = []
     for k, (start, level) in enumerate(headings):
         end = len(lines)
-        for j, lvl2 in headings[k + 1:]:
+        for j, lvl2 in headings[k + 1 :]:
             if lvl2 <= level:
                 end = j
                 break
@@ -203,6 +204,7 @@ def _find_hidden_heading_indices(
 
 
 # ── Public-version stripping ────────────────────────────────────────────────────
+
 
 def _strip_hidden_for_public(markdown: str) -> str:
     """Drop entire heading scopes containing a hide marker; clean empty ##.
@@ -263,6 +265,7 @@ def _collapse_blanks(text: str) -> str:
 
 
 # ── Cross-day reference expansion ───────────────────────────────────────────────
+
 
 def _slugify_heading(title: str) -> str:
     """kramdown-parser-gfm-compatible slug for a Chinese/English heading.
@@ -423,6 +426,7 @@ def _warn_malformed_links(text: str) -> str:
 
 # ── Group-version annotation ────────────────────────────────────────────────────
 
+
 def _annotate_hidden_for_group(markdown: str) -> str:
     """Mark hidden sections with 🔒 + banner; strip marker text from anywhere."""
     lines = _split_lines(markdown)
@@ -461,6 +465,7 @@ def _annotate_hidden_for_group(markdown: str) -> str:
 
 # ── Token replacement ───────────────────────────────────────────────────────────
 
+
 def _mention(name: str) -> str:
     """Wrap a resolved nickname as a Slack-style ``@`` mention pill.
 
@@ -496,6 +501,7 @@ def _build_token_replacer(
 
 # ── TOC insertion (group version only) ──────────────────────────────────────────
 
+
 def _insert_toc(markdown: str) -> str:
     """Insert ``[TOC]`` between intro and the first heading.
 
@@ -513,7 +519,7 @@ def _insert_toc(markdown: str) -> str:
             break
 
     if insert_at is None:
-        return ("\n".join(lines).rstrip() + "\n\n[TOC]\n")
+        return "\n".join(lines).rstrip() + "\n\n[TOC]\n"
 
     # Trim trailing blank lines from intro, then place [TOC] separated by blanks.
     intro = lines[:insert_at]
@@ -524,6 +530,7 @@ def _insert_toc(markdown: str) -> str:
 
 
 # ── Group version ────────────────────────────────────────────────────────────────
+
 
 def render_group(
     report: models.DailyReport,
@@ -540,8 +547,7 @@ def render_group(
     body = _insert_toc(body)
 
     def token_to_real(token: str) -> str:
-        wxid = (token_map.wxid(token) if token_map else None) \
-               or alias_db.wxid_of_token(token)
+        wxid = (token_map.wxid(token) if token_map else None) or alias_db.wxid_of_token(token)
         if not wxid:
             return _mention(token)
         real = contact_map.by_wxid(wxid)
@@ -586,12 +592,12 @@ def _render_command_log(
     lines = ["## 本期指令执行记录", "", "### 今日生效指令"]
     if log:
         for entry in log:
-            ts_str = datetime.datetime.fromtimestamp(entry['ts']).strftime('%H:%M')
-            wxid = entry['wxid']
+            ts_str = datetime.datetime.fromtimestamp(entry["ts"]).strftime("%H:%M")
+            wxid = entry["wxid"]
             real_name = contact_map.by_wxid(wxid)
             if real_name == wxid:
                 real_name = alias_db.real_name_seen(wxid) or wxid
-            ok_mark = "✓" if entry['ok'] else "✗"
+            ok_mark = "✓" if entry["ok"] else "✗"
             lines.append(f"- {ts_str}  {_mention(real_name)}：{entry['msg']}  {ok_mark}")
     else:
         lines.append("- （今日无指令）")
@@ -614,6 +620,7 @@ def _render_command_log(
 
 # ── Public version ───────────────────────────────────────────────────────────────
 
+
 def render_public(
     report: models.DailyReport,
     alias_db: aliases.AliasDB,
@@ -628,8 +635,7 @@ def render_public(
     _warn_malformed_links(body)
 
     def token_to_public(token: str) -> str:
-        wxid = (token_map.wxid(token) if token_map else None) \
-               or alias_db.wxid_of_token(token)
+        wxid = (token_map.wxid(token) if token_map else None) or alias_db.wxid_of_token(token)
         if not wxid:
             return _mention(token)
         if alias_db.is_optout(wxid):

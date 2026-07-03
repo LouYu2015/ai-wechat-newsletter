@@ -23,21 +23,15 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 # (css font-family, display title, one-line rationale)
 CANDIDATES = [
-    ("Hiragino Sans GB",
-     "Hiragino Sans GB · 冬青黑体（你现在实际在用的）",
-     "WeasyPrint 一直兜底到的字体——即你觉得不适合阅读的那个。黑体，偏厚。"),
-    ("PingFang SC",
-     "PingFang SC · 苹方",
-     "Apple 为屏幕设计的黑体，比冬青更清爽现代、留白更舒展。"),
-    ("Songti SC",
-     "Songti SC · 宋体",
-     "衬线宋体，横细竖粗、书卷气强；长文阅读优雅，像读文章。"),
-    ("STSong",
-     "STSong · 华文宋体",
-     "另一款宋体，字形比 Songti SC 更端正稳重，偏报刊正文。"),
-    ("Kaiti SC",
-     "Kaiti SC · 楷体",
-     "楷书笔意，手写感强、亲和柔和；适合慢读，但字形较细。"),
+    (
+        "Hiragino Sans GB",
+        "Hiragino Sans GB · 冬青黑体（你现在实际在用的）",
+        "WeasyPrint 一直兜底到的字体——即你觉得不适合阅读的那个。黑体，偏厚。",
+    ),
+    ("PingFang SC", "PingFang SC · 苹方", "Apple 为屏幕设计的黑体，比冬青更清爽现代、留白更舒展。"),
+    ("Songti SC", "Songti SC · 宋体", "衬线宋体，横细竖粗、书卷气强；长文阅读优雅，像读文章。"),
+    ("STSong", "STSong · 华文宋体", "另一款宋体，字形比 Songti SC 更端正稳重，偏报刊正文。"),
+    ("Kaiti SC", "Kaiti SC · 楷体", "楷书笔意，手写感强、亲和柔和；适合慢读，但字形较细。"),
 ]
 
 SAMPLE_MD = """
@@ -74,10 +68,14 @@ IPO 前的万亿补贴窗口终将关闭，趁现在烧 token 跑通商业闭环
 
 
 def _build_html() -> str:
-    converter = md_lib.Markdown(extensions=[
-        "tables", "fenced_code", "nl2br",
-        TocExtension(slugify=_toc_slugify, toc_depth="2-3"),
-    ])
+    converter = md_lib.Markdown(
+        extensions=[
+            "tables",
+            "fenced_code",
+            "nl2br",
+            TocExtension(slugify=_toc_slugify, toc_depth="2-3"),
+        ]
+    )
     sections = []
     for family, title, note in CANDIDATES:
         body = converter.convert(SAMPLE_MD)
@@ -90,9 +88,11 @@ def _build_html() -> str:
   </div>
   {body}
 </section>""")
-    return (f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">"""
-            f"""<style>{_get_pdf_css()}{EXTRA_CSS}</style></head>"""
-            f"""<body>{''.join(sections)}</body></html>""")
+    return (
+        f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">"""
+        f"""<style>{_get_pdf_css()}{EXTRA_CSS}</style></head>"""
+        f"""<body>{"".join(sections)}</body></html>"""
+    )
 
 
 EXTRA_CSS = """
@@ -120,14 +120,26 @@ def main() -> None:
         # On this machine headless Chrome writes the PDF in a few seconds but
         # never exits, so we can't wait on the process. Launch it detached,
         # poll until the PDF is fully written (size stable), then kill Chrome.
-        proc = subprocess.Popen([
-            CHROME, "--headless", "--disable-gpu", "--no-sandbox",
-            f"--user-data-dir={user_dir}",
-            "--no-first-run", "--no-default-browser-check",
-            "--disable-background-networking", "--disable-component-update",
-            "--disable-extensions", "--disable-default-apps",
-            "--no-pdf-header-footer", f"--print-to-pdf={out}", html_path.as_uri(),
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(
+            [
+                CHROME,
+                "--headless",
+                "--disable-gpu",
+                "--no-sandbox",
+                f"--user-data-dir={user_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-background-networking",
+                "--disable-component-update",
+                "--disable-extensions",
+                "--disable-default-apps",
+                "--no-pdf-header-footer",
+                f"--print-to-pdf={out}",
+                html_path.as_uri(),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         try:
             last, stable = -1, 0
             for _ in range(120):  # up to ~60s

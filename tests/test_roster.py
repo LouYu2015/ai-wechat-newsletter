@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from wechat_daily import aliases, contacts, privacy, roster
 
-SALT = b'\x00' * 32
+SALT = b"\x00" * 32
 
 
 def _db() -> aliases.AliasDB:
@@ -23,8 +23,8 @@ def test_build_roster_basic():
     db.get_or_create_user("wxid_b", real_name="李四")
     # 群昵称（preferred）+ 微信昵称（fallback）混合
     cmap = contacts.ContactMap.from_dict(
-        {"wxid_a": "Alice", "wxid_b": "李四"},      # 微信昵称
-        {"wxid_a": "鸭哥"},                         # 群昵称（仅 a 设了）
+        {"wxid_a": "Alice", "wxid_b": "李四"},  # 微信昵称
+        {"wxid_a": "鸭哥"},  # 群昵称（仅 a 设了）
     )
     tm = privacy.TokenMap.build(["wxid_a", "wxid_b"], db)
 

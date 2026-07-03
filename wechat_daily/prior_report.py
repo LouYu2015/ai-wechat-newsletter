@@ -46,6 +46,7 @@ def _normalize_to_ref_placeholders(markdown: str) -> str:
     anti-pattern, keeping the bug alive. Normalizing on the way in shows the
     model a single uniform reference syntax to imitate.
     """
+
     def sub(m: re.Match[str]) -> str:
         title = m.group("title").strip()
         return f"[[ref:{m.group('y')}-{m.group('mo')}-{m.group('d')}|{title}]]"
@@ -73,10 +74,7 @@ def _extract_path(date_str: str, debug_dir: pathlib.Path | None = None) -> pathl
 def expected_dates(date_str: str, n_days: int) -> list[str]:
     """Return [date-n, …, date-1] in ascending order."""
     base = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-    return [
-        (base - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
-        for i in range(n_days, 0, -1)
-    ]
+    return [(base - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n_days, 0, -1)]
 
 
 def load_prior_reports(

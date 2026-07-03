@@ -74,7 +74,9 @@ class FakeMessages:
 
 class FakeAnthropic:
     def __init__(
-        self, text: str = "这是网页摘要", usage: object | None = None,
+        self,
+        text: str = "这是网页摘要",
+        usage: object | None = None,
     ) -> None:
         self.messages = FakeMessages(text, usage=usage)
 
@@ -188,12 +190,14 @@ def test_fetch_wechat_js_content():
 def test_fetch_x_uses_fxtwitter():
     url = "https://x.com/example_user/status/2049645973350363168?s=46"
     api = "https://api.fxtwitter.com/example_user/status/2049645973350363168"
-    client = FakeHTTP({
-        api: (
-            '{"tweet":{"text":"tweet body","author":{"name":"Theo"}}}',
-            "application/json",
-        )
-    })
+    client = FakeHTTP(
+        {
+            api: (
+                '{"tweet":{"text":"tweet body","author":{"name":"Theo"}}}',
+                "application/json",
+            )
+        }
+    )
     text, og = url_enricher.fetch_url_text(url, client)
     assert client.urls == [api]
     assert text == "Theo: tweet body"
@@ -212,11 +216,15 @@ def test_fetch_superlinear_uses_circle_internal_api():
     url = "https://www.superlinear.academy/c/share-your-insights/fde"
     spaces = "https://www.superlinear.academy/internal_api/spaces?include_sidebar=true"
     post = "https://www.superlinear.academy/internal_api/spaces/2231585/posts/fde?"
-    client = FakeHTTP({
-        url: ("<html><title>shell</title></html>", "text/html"),
-        spaces: ('{"records":[{"slug":"share-your-insights","id":2231585}]}', "application/json"),
-        post: (
-            """
+    client = FakeHTTP(
+        {
+            url: ("<html><title>shell</title></html>", "text/html"),
+            spaces: (
+                '{"records":[{"slug":"share-your-insights","id":2231585}]}',
+                "application/json",
+            ),
+            post: (
+                """
             {
               "tiptap_body": {
                 "body": {
@@ -240,9 +248,10 @@ def test_fetch_superlinear_uses_circle_internal_api():
               }
             }
             """,
-            "application/json",
-        ),
-    })
+                "application/json",
+            ),
+        }
+    )
     text, og = url_enricher.fetch_url_text(url, client)
     assert client.urls == [url, spaces, post]
     assert "章节标题" in text
@@ -276,6 +285,7 @@ def test_enrich_summarizes_fetched_text():
 
 def test_enrich_usage_cb_called_per_summary():
     """Each successful LLM summary triggers usage_cb(usage, duration, chars)."""
+
     class _Usage:
         input_tokens = 1234
         output_tokens = 567
@@ -312,7 +322,8 @@ def test_enrich_usage_cb_not_called_on_short_path():
     )
     seen = []
     stats = url_enricher.enrich_link_messages(
-        [msg], api_key="fake",
+        [msg],
+        api_key="fake",
         http_client=FakeHTTP({}),
         anthropic_client=FakeAnthropic(),
         usage_cb=lambda u, d, c: seen.append((u, d, c)),
@@ -340,9 +351,9 @@ def test_enrich_uses_short_path_when_fetch_returns_empty():
 def test_enrich_short_path_skips_llm_when_total_below_threshold():
     url = "https://example.com/short"
     html = (
-        '<html><head>'
+        "<html><head>"
         '<meta property="og:description" content="只有 og 描述这一段">'
-        '</head><body><article><p>正文太短</p></article></body></html>'
+        "</head><body><article><p>正文太短</p></article></body></html>"
     )
     msg = message_parser.Message(
         create_time=1000,
@@ -491,10 +502,14 @@ def test_inline_url_stops_at_chinese_punctuation_and_text():
         sender_wxid="wxid",
         content=f"{url}，关键是贼方便。昨天我碰巧看到，写材料的时候就用了。",
     )
-    client = FakeHTTP({
-        "https://raw.githubusercontent.com/zarazhangrui/beautiful-html-templates/main/README.md":
-        ("# README\n" + ("body " * 200), "text/plain"),
-    })
+    client = FakeHTTP(
+        {
+            "https://raw.githubusercontent.com/zarazhangrui/beautiful-html-templates/main/README.md": (
+                "# README\n" + ("body " * 200),
+                "text/plain",
+            ),
+        }
+    )
     # Without the regex fix this would request the URL+Chinese-tail and fail.
     url_enricher.enrich_link_messages(
         [msg],
@@ -582,10 +597,12 @@ def test_enrich_appends_multiple_inline_link_contexts():
         sender_wxid="wxid",
         content=f"两个链接 {url1} {url2}",
     )
-    client = FakeHTTP({
-        url1: ("<article><p>" + ("正文一 " * 500) + "</p></article>", "text/html"),
-        url2: ("<article><p>" + ("正文二 " * 500) + "</p></article>", "text/html"),
-    })
+    client = FakeHTTP(
+        {
+            url1: ("<article><p>" + ("正文一 " * 500) + "</p></article>", "text/html"),
+            url2: ("<article><p>" + ("正文二 " * 500) + "</p></article>", "text/html"),
+        }
+    )
     anthropic = FakeAnthropic("摘要")
 
     url_enricher.enrich_link_messages(
@@ -615,6 +632,7 @@ def test_enrich_routes_to_deepseek_when_no_client(monkeypatch):
         return "DS 摘要", "", {"prompt_tokens": 10, "completion_tokens": 5}, "stop"
 
     import wechat_daily.deepseek_client as dc
+
     monkeypatch.setattr(dc, "stream_chat", fake_stream_chat)
 
     url = "https://example.com/a"

@@ -17,6 +17,7 @@ def test_archive_old_files_moves_old(monkeypatch):
         archive_dir.mkdir()
 
         import wechat_daily.archiver as archiver_mod
+
         monkeypatch.setattr("wechat_daily.config.ARCHIVE_DIR", archive_dir)
 
         old_date = (datetime.datetime.now() - datetime.timedelta(days=10)).strftime("%Y-%m-%d")
@@ -39,6 +40,7 @@ def test_archive_old_files_moves_old(monkeypatch):
 def test_archive_old_files_no_archive_dir(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         import wechat_daily.archiver as archiver_mod
+
         monkeypatch.setattr("wechat_daily.config.ARCHIVE_DIR", pathlib.Path(tmp) / "nonexistent")
         moved = archiver_mod.archive_old_files()
         assert moved == 0
@@ -50,6 +52,7 @@ def test_archive_old_files_no_duplicates(monkeypatch):
         archive_dir.mkdir()
 
         import wechat_daily.archiver as archiver_mod
+
         monkeypatch.setattr("wechat_daily.config.ARCHIVE_DIR", archive_dir)
 
         old_date = (datetime.datetime.now() - datetime.timedelta(days=10)).strftime("%Y-%m-%d")
@@ -73,6 +76,7 @@ def test_get_pdf_path_unique(monkeypatch):
         archive_dir.mkdir()
 
         import wechat_daily.archiver as archiver_mod
+
         monkeypatch.setattr("wechat_daily.config.ARCHIVE_DIR", archive_dir)
 
         p1 = archiver_mod.get_pdf_path("2026-04-17")

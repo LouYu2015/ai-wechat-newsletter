@@ -45,7 +45,9 @@ def test_split_content_empty_sender_keeps_content_whole():
 def test_parse_row_uses_authoritative_sender_for_prefixless_owner_msg():
     # The owner's own group message: no embedded prefix, sender comes from the
     # DB's real_sender_id. Previously this resolved to '' and got dropped.
-    msg = message_parser.parse_row(1000, message_parser.MSG_TEXT, b"\xe4\xbd\xa0\xe5\xa5\xbd", "wxid_owner")
+    msg = message_parser.parse_row(
+        1000, message_parser.MSG_TEXT, b"\xe4\xbd\xa0\xe5\xa5\xbd", "wxid_owner"
+    )
     assert msg is not None
     assert msg.sender_wxid == "wxid_owner"
     assert msg.content == "你好"
@@ -110,8 +112,7 @@ def test_parse_row_link_card_with_url():
     assert msg is not None
     assert msg.sender_wxid == "wxid_link"
     assert msg.content == (
-        "[链接] [Claude Opus 4.7 发布]"
-        "(https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1)"
+        "[链接] [Claude Opus 4.7 发布](https://mp.weixin.qq.com/s?__biz=abc&mid=123&idx=1)"
     )
     assert msg.link is not None
     assert msg.link.title == "Claude Opus 4.7 发布"

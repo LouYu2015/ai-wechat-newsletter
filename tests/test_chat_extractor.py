@@ -31,6 +31,7 @@ def _make_synth_msg_db(tmp_path, last_ts: int) -> sqlite3.Connection:
 @pytest.fixture
 def patched_extractor(monkeypatch, tmp_path):
     import wechat_daily.chat_extractor as mod
+
     archive = tmp_path / "archive"
     archive.mkdir()
     monkeypatch.setattr("wechat_daily.config.ARCHIVE_DIR", archive)
@@ -49,13 +50,16 @@ def test_find_missing_no_db_returns_empty(patched_extractor, monkeypatch):
 
     def _raise(rel):
         raise FileNotFoundError(rel)
+
     monkeypatch.setattr("wechat_daily.wechat_db.get_conn", _raise)
 
     assert mod.find_missing_dates() == []
 
 
 def test_find_missing_no_archive_returns_last_complete(
-    patched_extractor, monkeypatch, tmp_path,
+    patched_extractor,
+    monkeypatch,
+    tmp_path,
 ):
     """With no archive, returns exactly the last-complete day."""
     mod, _ = patched_extractor
@@ -109,7 +113,9 @@ def test_find_missing_up_to_date(patched_extractor, monkeypatch, tmp_path):
 
 
 def test_find_missing_allow_incomplete_includes_today(
-    patched_extractor, monkeypatch, tmp_path,
+    patched_extractor,
+    monkeypatch,
+    tmp_path,
 ):
     mod, archive = patched_extractor
     (archive / "2026-04-15-daily.pdf").write_bytes(b"%PDF-1.4\n")

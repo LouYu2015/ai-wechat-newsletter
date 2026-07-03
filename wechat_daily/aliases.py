@@ -20,34 +20,129 @@ from wechat_daily import config, message_parser, wechat_db
 # 40 × 40 = 1600 combinations. Plenty of headroom for 500+ current users and
 # growth, with low collision rate during deterministic walking.
 ADJECTIVES = [
-    "聪明", "勇敢", "温柔", "沉稳", "活泼", "机智", "淡定", "好奇",
-    "开朗", "认真", "幽默", "细心", "热情", "冷静", "睿智", "随和",
-    "坚定", "乐观", "敏锐", "优雅", "豁达", "低调", "务实", "风趣",
-    "严谨", "洒脱", "稳重", "灵巧", "博学", "专注",
-    "温暖", "安静", "神秘", "直率", "坦荡", "谨慎", "灵动", "飘逸",
-    "天真", "倔强",
+    "聪明",
+    "勇敢",
+    "温柔",
+    "沉稳",
+    "活泼",
+    "机智",
+    "淡定",
+    "好奇",
+    "开朗",
+    "认真",
+    "幽默",
+    "细心",
+    "热情",
+    "冷静",
+    "睿智",
+    "随和",
+    "坚定",
+    "乐观",
+    "敏锐",
+    "优雅",
+    "豁达",
+    "低调",
+    "务实",
+    "风趣",
+    "严谨",
+    "洒脱",
+    "稳重",
+    "灵巧",
+    "博学",
+    "专注",
+    "温暖",
+    "安静",
+    "神秘",
+    "直率",
+    "坦荡",
+    "谨慎",
+    "灵动",
+    "飘逸",
+    "天真",
+    "倔强",
 ]
 
 ANIMALS = [
-    "熊猫", "老虎", "狮子", "大象", "长颈鹿", "企鹅", "海豚", "猫头鹰",
-    "狐狸", "兔子", "仓鼠", "猎豹", "北极熊", "浣熊", "鸵鸟", "火烈鸟",
-    "犀牛", "斑马", "水獭", "貂", "白鹭", "鹦鹉", "松鼠", "羊驼",
-    "树懒", "穿山甲", "蜂鸟", "雪豹", "荷兰猪", "剑鱼", "鲸鱼",
-    "海狸", "河马", "麋鹿", "考拉", "飞鼠", "鸳鸯", "喜鹊", "海龟",
+    "熊猫",
+    "老虎",
+    "狮子",
+    "大象",
+    "长颈鹿",
+    "企鹅",
+    "海豚",
+    "猫头鹰",
+    "狐狸",
+    "兔子",
+    "仓鼠",
+    "猎豹",
+    "北极熊",
+    "浣熊",
+    "鸵鸟",
+    "火烈鸟",
+    "犀牛",
+    "斑马",
+    "水獭",
+    "貂",
+    "白鹭",
+    "鹦鹉",
+    "松鼠",
+    "羊驼",
+    "树懒",
+    "穿山甲",
+    "蜂鸟",
+    "雪豹",
+    "荷兰猪",
+    "剑鱼",
+    "鲸鱼",
+    "海狸",
+    "河马",
+    "麋鹿",
+    "考拉",
+    "飞鼠",
+    "鸳鸯",
+    "喜鹊",
+    "海龟",
     "灰熊",
 ]
 
 RESERVED_ALIASES = {
     # English
-    "admin", "bot", "anonymous", "system", "unknown", "hidden",
-    "moderator", "operator", "official", "service", "support",
+    "admin",
+    "bot",
+    "anonymous",
+    "system",
+    "unknown",
+    "hidden",
+    "moderator",
+    "operator",
+    "official",
+    "service",
+    "support",
     # Chinese — authority/role impersonation
-    "管理员", "群主", "机器人", "助手", "系统", "官方", "小助手",
-    "客服", "通知", "公告", "服务通知", "系统消息",
+    "管理员",
+    "群主",
+    "机器人",
+    "助手",
+    "系统",
+    "官方",
+    "小助手",
+    "客服",
+    "通知",
+    "公告",
+    "服务通知",
+    "系统消息",
     # Chinese — identity ambiguity
-    "匿名", "所有人", "全员", "大家", "某群友",
+    "匿名",
+    "所有人",
+    "全员",
+    "大家",
+    "某群友",
     # WeChat / Tencent brand
-    "微信", "微信官方", "微信团队", "腾讯", "腾讯官方",
+    "微信",
+    "微信官方",
+    "微信团队",
+    "腾讯",
+    "腾讯官方",
 }
 
 # Whitelist: CJK, Hiragana, Katakana, Hangul, Basic Latin letters/digits, _ - ·
@@ -55,15 +150,15 @@ RESERVED_ALIASES = {
 # (U+200E/F, U+202A–202E, U+2066–2069), zero-width chars (U+200B–200D, U+FEFF),
 # combining/annotation characters, and all other format/control categories.
 _ALIAS_RE = re.compile(
-    r'^['
-    r'\u4e00-\u9fff'      # CJK Unified Ideographs
-    r'\u3400-\u4dbf'      # CJK Extension A
-    r'\uf900-\ufaff'      # CJK Compatibility Ideographs
-    r'\u3040-\u309f'      # Hiragana
-    r'\u30a0-\u30ff'      # Katakana
-    r'\uac00-\ud7af'      # Hangul syllables
-    r'a-zA-Z0-9_\-·'
-    r']+$'
+    r"^["
+    r"\u4e00-\u9fff"  # CJK Unified Ideographs
+    r"\u3400-\u4dbf"  # CJK Extension A
+    r"\uf900-\ufaff"  # CJK Compatibility Ideographs
+    r"\u3040-\u309f"  # Hiragana
+    r"\u30a0-\u30ff"  # Katakana
+    r"\uac00-\ud7af"  # Hangul syllables
+    r"a-zA-Z0-9_\-·"
+    r"]+$"
 )
 
 # Max display width: a 汉字 counts as 2, an ASCII/narrow char as 1.
@@ -73,14 +168,14 @@ _ALIAS_MAX_WIDTH = 12
 # Characters counted as double-width (CJK / kana / hangul). Mirrors the wide
 # ranges in _ALIAS_RE; everything else in the whitelist is single-width.
 _WIDE_RE = re.compile(
-    r'['
-    r'一-鿿'
-    r'㐀-䶿'
-    r'豈-﫿'
-    r'぀-ゟ'
-    r'゠-ヿ'
-    r'가-힯'
-    r']'
+    r"["
+    r"一-鿿"
+    r"㐀-䶿"
+    r"豈-﫿"
+    r"぀-ゟ"
+    r"゠-ヿ"
+    r"가-힯"
+    r"]"
 )
 
 
@@ -91,6 +186,7 @@ def _alias_width(alias: str) -> int:
 
 # ── Default anon derivation ─────────────────────────────────────────────────────
 
+
 def _load_or_create_salt() -> bytes:
     config.ANON_SALT_FILE.parent.mkdir(parents=True, exist_ok=True)
     if config.ANON_SALT_FILE.exists():
@@ -100,7 +196,9 @@ def _load_or_create_salt() -> bytes:
                 return bytes.fromhex(raw)
             except ValueError:
                 pass
-        print(f"\033[93m[WARNING] anon_salt.txt 格式无效（长度={len(raw)}），将重新生成盐（仅影响新用户）\033[0m")
+        print(
+            f"\033[93m[WARNING] anon_salt.txt 格式无效（长度={len(raw)}），将重新生成盐（仅影响新用户）\033[0m"
+        )
     salt = secrets.token_bytes(32)
     config.ANON_SALT_FILE.write_text(salt.hex())
     # Also back up the salt immediately
@@ -131,6 +229,7 @@ def compute_default_anon(wxid: str, salt: bytes) -> str:
 
 # ── AliasDB ─────────────────────────────────────────────────────────────────────
 
+
 class AliasDB:
     """In-memory alias database with persistence to aliases.json."""
 
@@ -156,10 +255,10 @@ class AliasDB:
             return cls({}, [], salt, clock)
 
         try:
-            data = json.loads(config.ALIASES_FILE.read_text(encoding='utf-8'))
+            data = json.loads(config.ALIASES_FILE.read_text(encoding="utf-8"))
             return cls(
-                users=data.get('users', {}),
-                reservations=data.get('alias_reservations', []),
+                users=data.get("users", {}),
+                reservations=data.get("alias_reservations", []),
                 salt=salt,
                 clock=clock,
             )
@@ -176,11 +275,11 @@ class AliasDB:
             if f.name == "anon_salt.txt":
                 continue
             try:
-                data = json.loads(f.read_text(encoding='utf-8'))
+                data = json.loads(f.read_text(encoding="utf-8"))
                 print(f"\033[93m[WARNING] aliases.json 解析失败，已从备份恢复: {f.name}\033[0m")
                 return cls(
-                    users=data.get('users', {}),
-                    reservations=data.get('alias_reservations', []),
+                    users=data.get("users", {}),
+                    reservations=data.get("alias_reservations", []),
                     salt=salt,
                     clock=clock,
                 )
@@ -196,17 +295,19 @@ class AliasDB:
         self._expire_reservations()
         config.ALIASES_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = {
-            'version': 1,
-            'token_format_version': 2,
-            'updated_at': self._clock().isoformat(),
-            'users': self._users,
-            'alias_reservations': self._reservations,
+            "version": 1,
+            "token_format_version": 2,
+            "updated_at": self._clock().isoformat(),
+            "users": self._users,
+            "alias_reservations": self._reservations,
         }
-        config.ALIASES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        config.ALIASES_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
     def _backup(self) -> None:
         config.ALIASES_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        today = self._clock().strftime('%Y-%m-%d')
+        today = self._clock().strftime("%Y-%m-%d")
         daily_backup = config.ALIASES_BACKUP_DIR / f"{today}.json"
         if config.ALIASES_FILE.exists() and not daily_backup.exists():
             shutil.copy2(config.ALIASES_FILE, daily_backup)
@@ -240,55 +341,55 @@ class AliasDB:
         if wxid not in self._users:
             anon = self._allocate_default_anon(wxid)
             self._users[wxid] = {
-                'default_anon': anon,
-                'real_name_seen': real_name or wxid,
-                'public_alias': None,
-                'optout': False,
-                'last_command_ts': None,
-                'last_command': None,
+                "default_anon": anon,
+                "real_name_seen": real_name or wxid,
+                "public_alias": None,
+                "optout": False,
+                "last_command_ts": None,
+                "last_command": None,
             }
         elif real_name:
-            self._users[wxid]['real_name_seen'] = real_name
+            self._users[wxid]["real_name_seen"] = real_name
         return self._users[wxid]
 
     def token_of(self, wxid: str) -> str:
         """Return the stable token (= default_anon) for *wxid*, allocating one
         on first use. Allocations persist on the next ``save()``."""
-        return self.get_or_create_user(wxid)['default_anon']
+        return self.get_or_create_user(wxid)["default_anon"]
 
     def wxid_of_token(self, token: str) -> str | None:
         for wxid, u in self._users.items():
-            if u['default_anon'] == token:
+            if u["default_anon"] == token:
                 return wxid
         return None
 
     def public_name_of(self, wxid: str) -> str:
         user = self.get_or_create_user(wxid)
-        return user.get('public_alias') or user['default_anon']
+        return user.get("public_alias") or user["default_anon"]
 
     def real_name_seen(self, wxid: str) -> str | None:
         """Last group-side nickname observed for *wxid*, if any."""
         user = self._users.get(wxid)
         if not user:
             return None
-        name = user.get('real_name_seen')
+        name = user.get("real_name_seen")
         if not name or name == wxid:
             return None
         return name
 
     def is_optout(self, wxid: str) -> bool:
         user = self._users.get(wxid)
-        return bool(user and user.get('optout'))
+        return bool(user and user.get("optout"))
 
     def all_default_anons(self) -> set[str]:
-        return {u['default_anon'] for u in self._users.values()}
+        return {u["default_anon"] for u in self._users.values()}
 
     def optout_anons(self) -> set[str]:
-        return {u['default_anon'] for u in self._users.values() if u.get('optout')}
+        return {u["default_anon"] for u in self._users.values() if u.get("optout")}
 
     def optout_wxids(self) -> list[str]:
         """Return list of wxids that have opted out."""
-        return [wxid for wxid, u in self._users.items() if u.get('optout')]
+        return [wxid for wxid, u in self._users.items() if u.get("optout")]
 
     # ── Command processing ────────────────────────────────────────────────────
 
@@ -297,14 +398,12 @@ class AliasDB:
 
     def _expire_reservations(self) -> None:
         cutoff = self._now_ts() - config.ALIAS_RESERVATION_DAYS * 86400
-        self._reservations = [
-            r for r in self._reservations if r['released_at'] >= cutoff
-        ]
+        self._reservations = [r for r in self._reservations if r["released_at"] >= cutoff]
 
     def _alias_holder(self, alias: str) -> str | None:
         """Return wxid of the current holder of *alias*, or None."""
         for wxid, u in self._users.items():
-            if u.get('public_alias') == alias:
+            if u.get("public_alias") == alias:
                 return wxid
         return None
 
@@ -312,21 +411,23 @@ class AliasDB:
         """True if alias is in reservation period and requester is NOT the original holder."""
         cutoff = self._now_ts() - config.ALIAS_RESERVATION_DAYS * 86400
         for r in self._reservations:
-            if r['alias'] == alias and r['released_at'] >= cutoff:
-                if r['released_by_wxid'] != requester_wxid:
+            if r["alias"] == alias and r["released_at"] >= cutoff:
+                if r["released_by_wxid"] != requester_wxid:
                     return True
         return False
 
     def _remove_reservation(self, alias: str) -> None:
-        self._reservations = [r for r in self._reservations if r['alias'] != alias]
+        self._reservations = [r for r in self._reservations if r["alias"] != alias]
 
     def _add_reservation(self, alias: str, wxid: str) -> None:
         self._remove_reservation(alias)
-        self._reservations.append({
-            'alias': alias,
-            'released_by_wxid': wxid,
-            'released_at': self._now_ts(),
-        })
+        self._reservations.append(
+            {
+                "alias": alias,
+                "released_by_wxid": wxid,
+                "released_at": self._now_ts(),
+            }
+        )
 
     def _is_default_anon(self, alias: str) -> bool:
         return alias in self.all_default_anons()
@@ -344,8 +445,9 @@ class AliasDB:
             return f"别名「{alias}」与某位群友的默认匿名名冲突，不可使用"
         return None
 
-    def apply_command(self, wxid: str, command: str, ts: int,
-                      real_name: str | None = None) -> tuple[bool, str]:
+    def apply_command(
+        self, wxid: str, command: str, ts: int, real_name: str | None = None
+    ) -> tuple[bool, str]:
         """Apply a single /alias or /optout command. Returns (success, message).
 
         Per design §6.5: trailing content after the keyword is ignored.
@@ -354,64 +456,74 @@ class AliasDB:
         cmd = command.strip()
 
         # Use re.match so trailing content (e.g. "/optout 请帮我退出") is ignored
-        if re.match(r'^/optout(\s|$)', cmd):
-            user['optout'] = True
-            user['last_command_ts'] = ts
-            user['last_command'] = '/optout'
-            self._command_log.append({'ts': ts, 'wxid': wxid, 'cmd': '/optout', 'ok': True, 'msg': 'optout 成功'})
-            return True, 'optout 成功'
+        if re.match(r"^/optout(\s|$)", cmd):
+            user["optout"] = True
+            user["last_command_ts"] = ts
+            user["last_command"] = "/optout"
+            self._command_log.append(
+                {"ts": ts, "wxid": wxid, "cmd": "/optout", "ok": True, "msg": "optout 成功"}
+            )
+            return True, "optout 成功"
 
-        if re.match(r'^/optin(\s|$)', cmd):
-            user['optout'] = False
-            user['last_command_ts'] = ts
-            user['last_command'] = '/optin'
-            self._command_log.append({'ts': ts, 'wxid': wxid, 'cmd': '/optin', 'ok': True, 'msg': 'optin 成功'})
-            return True, 'optin 成功'
+        if re.match(r"^/optin(\s|$)", cmd):
+            user["optout"] = False
+            user["last_command_ts"] = ts
+            user["last_command"] = "/optin"
+            self._command_log.append(
+                {"ts": ts, "wxid": wxid, "cmd": "/optin", "ok": True, "msg": "optin 成功"}
+            )
+            return True, "optin 成功"
 
-        if re.match(r'^/alias\s*$', cmd):
+        if re.match(r"^/alias\s*$", cmd):
             # Clear alias
-            old_alias = user.get('public_alias')
+            old_alias = user.get("public_alias")
             if old_alias:
                 self._add_reservation(old_alias, wxid)
-            user['public_alias'] = None
-            user['last_command_ts'] = ts
-            user['last_command'] = cmd
-            msg = '已清空别名，恢复默认匿名名'
-            self._command_log.append({'ts': ts, 'wxid': wxid, 'cmd': cmd, 'ok': True, 'msg': msg})
+            user["public_alias"] = None
+            user["last_command_ts"] = ts
+            user["last_command"] = cmd
+            msg = "已清空别名，恢复默认匿名名"
+            self._command_log.append({"ts": ts, "wxid": wxid, "cmd": cmd, "ok": True, "msg": msg})
             return True, msg
 
-        m = re.match(r'^/alias\s+(\S+)', cmd)
+        m = re.match(r"^/alias\s+(\S+)", cmd)
         if m:
-            new_alias = unicodedata.normalize('NFC', m.group(1))
+            new_alias = unicodedata.normalize("NFC", m.group(1))
             err = self._validate_alias(new_alias)
             if err:
-                self._command_log.append({'ts': ts, 'wxid': wxid, 'cmd': cmd, 'ok': False, 'msg': err})
+                self._command_log.append(
+                    {"ts": ts, "wxid": wxid, "cmd": cmd, "ok": False, "msg": err}
+                )
                 return False, err
 
             holder = self._alias_holder(new_alias)
             if holder and holder != wxid:
                 msg = f"别名「{new_alias}」已被占用（先到先得）"
-                self._command_log.append({'ts': ts, 'wxid': wxid, 'cmd': cmd, 'ok': False, 'msg': msg})
+                self._command_log.append(
+                    {"ts": ts, "wxid": wxid, "cmd": cmd, "ok": False, "msg": msg}
+                )
                 return False, msg
 
             if self._is_reserved(new_alias, wxid):
                 msg = f"别名「{new_alias}」处于 30 天预留期，暂不可使用"
-                self._command_log.append({'ts': ts, 'wxid': wxid, 'cmd': cmd, 'ok': False, 'msg': msg})
+                self._command_log.append(
+                    {"ts": ts, "wxid": wxid, "cmd": cmd, "ok": False, "msg": msg}
+                )
                 return False, msg
 
             # Release old alias if changing
-            old_alias = user.get('public_alias')
+            old_alias = user.get("public_alias")
             if old_alias and old_alias != new_alias:
                 self._add_reservation(old_alias, wxid)
 
             # If reclaiming own reserved alias, remove from reservations
             self._remove_reservation(new_alias)
 
-            user['public_alias'] = new_alias
-            user['last_command_ts'] = ts
-            user['last_command'] = cmd
+            user["public_alias"] = new_alias
+            user["last_command_ts"] = ts
+            user["last_command"] = cmd
             msg = f"已设置公开别名为「{new_alias}」"
-            self._command_log.append({'ts': ts, 'wxid': wxid, 'cmd': cmd, 'ok': True, 'msg': msg})
+            self._command_log.append({"ts": ts, "wxid": wxid, "cmd": cmd, "ok": True, "msg": msg})
             return True, msg
 
         return False, f"未识别的指令: {cmd}"
@@ -449,7 +561,7 @@ class AliasDB:
                 (message_parser.MSG_TEXT, cursor_ts),
             )
             for ct, mc, rsid in cur.fetchall():
-                rows.append((ct, mc, id2wxid.get(rsid, '')))
+                rows.append((ct, mc, id2wxid.get(rsid, "")))
 
         rows.sort(key=lambda x: x[0])
 
@@ -459,8 +571,8 @@ class AliasDB:
             _, content = message_parser.split_content(raw, wxid)
             if not wxid:
                 continue
-            content = content.strip().split('\n')[0].strip()  # first line only
-            if not content.startswith('/'):
+            content = content.strip().split("\n")[0].strip()  # first line only
+            if not content.startswith("/"):
                 max_ts = max(max_ts, create_time)
                 continue
 

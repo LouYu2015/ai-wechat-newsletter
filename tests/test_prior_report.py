@@ -9,7 +9,9 @@ from wechat_daily import prior_report
 
 def test_expected_dates_three_days():
     assert prior_report.expected_dates("2026-05-10", 3) == [
-        "2026-05-07", "2026-05-08", "2026-05-09",
+        "2026-05-07",
+        "2026-05-08",
+        "2026-05-09",
     ]
 
 
@@ -23,7 +25,9 @@ def test_expected_dates_zero_returns_empty():
 
 def test_expected_dates_crosses_month_boundary():
     assert prior_report.expected_dates("2026-05-01", 3) == [
-        "2026-04-28", "2026-04-29", "2026-04-30",
+        "2026-04-28",
+        "2026-04-29",
+        "2026-04-30",
     ]
 
 
@@ -98,13 +102,16 @@ def test_missing_dates_partial(tmp_path):
     debug = tmp_path / "debug"
     _write_extract(debug, "2026-05-09", "x")
     assert prior_report.missing_prior_dates("2026-05-10", 3, debug) == [
-        "2026-05-07", "2026-05-08",
+        "2026-05-07",
+        "2026-05-08",
     ]
 
 
 def test_missing_dates_all_absent(tmp_path):
     assert prior_report.missing_prior_dates("2026-05-10", 3, tmp_path / "nope") == [
-        "2026-05-07", "2026-05-08", "2026-05-09",
+        "2026-05-07",
+        "2026-05-08",
+        "2026-05-09",
     ]
 
 
@@ -116,10 +123,12 @@ def test_format_empty_returns_empty_string():
 
 
 def test_format_wraps_each_report():
-    block = prior_report.format_prior_reports_block([
-        ("2026-05-08", "## A\nbody A\n"),
-        ("2026-05-09", "## B\nbody B"),
-    ])
+    block = prior_report.format_prior_reports_block(
+        [
+            ("2026-05-08", "## A\nbody A\n"),
+            ("2026-05-09", "## B\nbody B"),
+        ]
+    )
     assert block.startswith("<previous_reports>\n")
     assert block.rstrip("\n").endswith("</previous_reports>")
     assert '<report date="2026-05-08">' in block
@@ -176,29 +185,18 @@ def test_extract_titles_includes_hidden_section_titles():
         "body\n"
     )
     assert prior_report.extract_titles_outline(md) == (
-        "## 行业新闻\n"
-        "### 某客户案例\n"
-        "### Claude 4.7 发布"
+        "## 行业新闻\n### 某客户案例\n### Claude 4.7 发布"
     )
 
 
 def test_extract_titles_ignores_h1_and_h4():
-    md = (
-        "# top\n"
-        "## keep me\n"
-        "#### too deep\n"
-        "### keep me too\n"
-    )
+    md = "# top\n## keep me\n#### too deep\n### keep me too\n"
     assert prior_report.extract_titles_outline(md) == "## keep me\n### keep me too"
 
 
 def test_extract_titles_ignores_hash_inside_blockquote_body():
     """Headers must be at start of line, not inside a `> ` blockquote."""
-    md = (
-        "## real\n"
-        "> ## not a header (inside blockquote)\n"
-        "### also real\n"
-    )
+    md = "## real\n> ## not a header (inside blockquote)\n### also real\n"
     assert prior_report.extract_titles_outline(md) == "## real\n### also real"
 
 
@@ -234,7 +232,9 @@ def test_load_titles_skips_dates_already_covered(tmp_path):
 
     # Pretend full-body load already grabbed the last 3 days.
     out = prior_report.load_prior_report_titles(
-        "2026-05-10", n_days=7, debug_dir=debug,
+        "2026-05-10",
+        n_days=7,
+        debug_dir=debug,
         skip_dates={"2026-05-07", "2026-05-08", "2026-05-09"},
     )
     assert out == [("2026-05-04", "## 行业新闻\n### x")]
@@ -252,7 +252,9 @@ def test_load_titles_skips_missing_and_empty(tmp_path):
 
 def test_load_titles_returns_empty_when_no_dir(tmp_path):
     out = prior_report.load_prior_report_titles(
-        "2026-05-10", n_days=7, debug_dir=tmp_path / "nope",
+        "2026-05-10",
+        n_days=7,
+        debug_dir=tmp_path / "nope",
     )
     assert out == []
 
@@ -265,10 +267,12 @@ def test_format_titles_empty_returns_empty_string():
 
 
 def test_format_titles_wraps_each_day():
-    block = prior_report.format_prior_report_titles_block([
-        ("2026-05-04", "## 行业新闻\n### A"),
-        ("2026-05-05", "## 方法论\n### B"),
-    ])
+    block = prior_report.format_prior_report_titles_block(
+        [
+            ("2026-05-04", "## 行业新闻\n### A"),
+            ("2026-05-05", "## 方法论\n### B"),
+        ]
+    )
     assert block.startswith("<previous_report_titles>\n")
     assert block.rstrip("\n").endswith("</previous_report_titles>")
     assert '<report date="2026-05-04">' in block

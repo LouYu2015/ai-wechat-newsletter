@@ -33,14 +33,14 @@ def archive_old_files() -> int:
     moved = 0
 
     for pdf in sorted(config.ARCHIVE_DIR.glob("*.pdf")):
-        m = re.match(r'^(\d{4}-\d{2}-\d{2})\b', pdf.stem)
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})\b", pdf.stem)
         if not m:
             continue
-        file_date = datetime.datetime.strptime(m.group(1), '%Y-%m-%d').date()
+        file_date = datetime.datetime.strptime(m.group(1), "%Y-%m-%d").date()
         if file_date >= cutoff:
             continue
 
-        dest_dir = config.ARCHIVE_DIR / file_date.strftime('%Y') / file_date.strftime('%m')
+        dest_dir = config.ARCHIVE_DIR / file_date.strftime("%Y") / file_date.strftime("%m")
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / pdf.name
         if dest.exists():

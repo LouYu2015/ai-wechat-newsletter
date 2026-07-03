@@ -6,12 +6,13 @@ import time
 
 from wechat_daily import aliases
 
-SALT = b'\x00' * 32
+SALT = b"\x00" * 32
 
 
 def _fixed_clock(ts: float):
     def clock():
         return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+
     return clock
 
 
@@ -20,6 +21,7 @@ def _make_db(**kwargs) -> aliases.AliasDB:
 
 
 # ── default_anon ────────────────────────────────────────────────────────────────
+
 
 def test_default_anon_stable():
     a = aliases.compute_default_anon("wxid_alice", SALT)
@@ -34,8 +36,8 @@ def test_default_anon_different_wxids():
 
 
 def test_default_anon_different_salts():
-    a = aliases.compute_default_anon("wxid_alice", b'\x00' * 32)
-    b = aliases.compute_default_anon("wxid_alice", b'\xff' * 32)
+    a = aliases.compute_default_anon("wxid_alice", b"\x00" * 32)
+    b = aliases.compute_default_anon("wxid_alice", b"\xff" * 32)
     assert a != b
 
 
@@ -55,9 +57,12 @@ def test_allocation_resolves_collisions():
     db.get_or_create_user("wxid_a")
     # Force a collision: pre-seed another user with the same anon
     db._users["wxid_seed"] = {
-        'default_anon': aliases.compute_default_anon("wxid_a", SALT),
-        'real_name_seen': 'seed', 'public_alias': None, 'optout': False,
-        'last_command_ts': None, 'last_command': None,
+        "default_anon": aliases.compute_default_anon("wxid_a", SALT),
+        "real_name_seen": "seed",
+        "public_alias": None,
+        "optout": False,
+        "last_command_ts": None,
+        "last_command": None,
     }
     db._users.pop("wxid_a")
     db.get_or_create_user("wxid_a")
@@ -68,6 +73,7 @@ def test_allocation_resolves_collisions():
 
 def test_token_persisted_across_reload(monkeypatch, tmp_path):
     import wechat_daily.config as mod
+
     monkeypatch.setattr(mod, "ALIASES_FILE", tmp_path / "aliases.json")
     monkeypatch.setattr(mod, "ALIASES_CURSOR_FILE", tmp_path / "cursor")
     monkeypatch.setattr(mod, "ANON_SALT_FILE", tmp_path / "salt.txt")
@@ -87,6 +93,7 @@ def test_token_persisted_across_reload(monkeypatch, tmp_path):
 
 
 # ── Command: /alias <name> ───────────────────────────────────────────────────────
+
 
 def test_alias_set():
     db = _make_db()
@@ -190,6 +197,7 @@ def test_alias_conflicts_with_default_anon():
 
 # ── Command: /optout /optin ───────────────────────────────────────────────────────
 
+
 def test_optout():
     db = _make_db()
     db.get_or_create_user("wxid_a")
@@ -209,6 +217,7 @@ def test_optin():
 
 # ── public_name_of ─────────────────────────────────────────────────────────────
 
+
 def test_public_name_prefers_alias():
     db = _make_db()
     db.get_or_create_user("wxid_a")
@@ -225,8 +234,10 @@ def test_public_name_falls_back_to_default_anon():
 
 # ── Persistence ────────────────────────────────────────────────────────────────
 
+
 def test_save_and_load(monkeypatch, tmp_path):
     import wechat_daily.config as aliases_mod
+
     monkeypatch.setattr(aliases_mod, "ALIASES_FILE", tmp_path / "aliases.json")
     monkeypatch.setattr(aliases_mod, "ALIASES_CURSOR_FILE", tmp_path / "aliases.cursor")
     monkeypatch.setattr(aliases_mod, "ANON_SALT_FILE", tmp_path / "anon_salt.txt")
@@ -243,6 +254,7 @@ def test_save_and_load(monkeypatch, tmp_path):
 
 # ── NFC normalization ─────────────────────────────────────────────────────────
 
+
 def test_alias_nfc_normalized():
     """Alias input is NFC-normalized before validation & storage.
 
@@ -250,23 +262,26 @@ def test_alias_nfc_normalized():
     a homoglyph attack could let two visually-identical aliases coexist.
     """
     import unicodedata
+
     db = _make_db()
     db.get_or_create_user("wxid_a")
-    nfd = unicodedata.normalize('NFD', '한글')
-    assert nfd != '한글'  # actually decomposed
+    nfd = unicodedata.normalize("NFD", "한글")
+    assert nfd != "한글"  # actually decomposed
     ok, _ = db.apply_command("wxid_a", f"/alias {nfd}", 1000)
     assert ok
     stored = db._users["wxid_a"]["public_alias"]
-    assert stored == '한글'
-    assert stored == unicodedata.normalize('NFC', stored)
+    assert stored == "한글"
+    assert stored == unicodedata.normalize("NFC", stored)
 
 
 # ── Public accessor ────────────────────────────────────────────────────────────
 
 # ── Backup recovery ────────────────────────────────────────────────────────────
 
+
 def _patch_aliases_paths(monkeypatch, tmp_path):
     import wechat_daily.config as mod
+
     monkeypatch.setattr(mod, "ALIASES_FILE", tmp_path / "aliases.json")
     monkeypatch.setattr(mod, "ALIASES_CURSOR_FILE", tmp_path / "cursor")
     monkeypatch.setattr(mod, "ANON_SALT_FILE", tmp_path / "salt.txt")
@@ -282,23 +297,29 @@ def test_load_recovers_from_backup_when_aliases_corrupt(monkeypatch, tmp_path):
     backup_dir = tmp_path / "backup"
     backup_dir.mkdir()
     backup = backup_dir / "2026-04-10.json"
-    backup.write_text(json.dumps({
-        "version": 1,
-        "users": {
-            "wxid_a": {
-                "default_anon": aliases.compute_default_anon("wxid_a", SALT),
-                "real_name_seen": "Alice",
-                "public_alias": "FromBackup",
-                "optout": False,
-                "last_command_ts": None,
-                "last_command": None,
-            }
-        },
-        "alias_reservations": [],
-    }, ensure_ascii=False), encoding='utf-8')
+    backup.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "users": {
+                    "wxid_a": {
+                        "default_anon": aliases.compute_default_anon("wxid_a", SALT),
+                        "real_name_seen": "Alice",
+                        "public_alias": "FromBackup",
+                        "optout": False,
+                        "last_command_ts": None,
+                        "last_command": None,
+                    }
+                },
+                "alias_reservations": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     # Write corrupted primary file
-    mod.ALIASES_FILE.write_text("{not valid json", encoding='utf-8')
+    mod.ALIASES_FILE.write_text("{not valid json", encoding="utf-8")
     # Salt file must exist so load doesn't regenerate it
     mod.ANON_SALT_FILE.write_text(SALT.hex())
 
@@ -312,24 +333,32 @@ def test_load_picks_latest_backup_by_name(monkeypatch, tmp_path):
     backup_dir.mkdir()
 
     def _write(name: str, alias: str) -> None:
-        (backup_dir / name).write_text(json.dumps({
-            "version": 1,
-            "users": {"wxid_a": {
-                "default_anon": aliases.compute_default_anon("wxid_a", SALT),
-                "real_name_seen": "Alice",
-                "public_alias": alias,
-                "optout": False,
-                "last_command_ts": None,
-                "last_command": None,
-            }},
-            "alias_reservations": [],
-        }, ensure_ascii=False), encoding='utf-8')
+        (backup_dir / name).write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "users": {
+                        "wxid_a": {
+                            "default_anon": aliases.compute_default_anon("wxid_a", SALT),
+                            "real_name_seen": "Alice",
+                            "public_alias": alias,
+                            "optout": False,
+                            "last_command_ts": None,
+                            "last_command": None,
+                        }
+                    },
+                    "alias_reservations": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
 
     _write("2026-04-09.json", "Old")
     _write("2026-04-12.json", "Newest")
     _write("2026-04-10.json", "Middle")
 
-    mod.ALIASES_FILE.write_text("garbage", encoding='utf-8')
+    mod.ALIASES_FILE.write_text("garbage", encoding="utf-8")
     mod.ANON_SALT_FILE.write_text(SALT.hex())
 
     db = aliases.AliasDB.load()
@@ -342,21 +371,29 @@ def test_load_skips_broken_backup_tries_next(monkeypatch, tmp_path):
     backup_dir.mkdir()
 
     # Newer file is corrupt; older one is valid — loader should skip and continue
-    (backup_dir / "2026-04-12.json").write_text("not json", encoding='utf-8')
-    (backup_dir / "2026-04-09.json").write_text(json.dumps({
-        "version": 1,
-        "users": {"wxid_a": {
-            "default_anon": aliases.compute_default_anon("wxid_a", SALT),
-            "real_name_seen": "Alice",
-            "public_alias": "OlderGood",
-            "optout": False,
-            "last_command_ts": None,
-            "last_command": None,
-        }},
-        "alias_reservations": [],
-    }, ensure_ascii=False), encoding='utf-8')
+    (backup_dir / "2026-04-12.json").write_text("not json", encoding="utf-8")
+    (backup_dir / "2026-04-09.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "users": {
+                    "wxid_a": {
+                        "default_anon": aliases.compute_default_anon("wxid_a", SALT),
+                        "real_name_seen": "Alice",
+                        "public_alias": "OlderGood",
+                        "optout": False,
+                        "last_command_ts": None,
+                        "last_command": None,
+                    }
+                },
+                "alias_reservations": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
-    mod.ALIASES_FILE.write_text("corrupt", encoding='utf-8')
+    mod.ALIASES_FILE.write_text("corrupt", encoding="utf-8")
     mod.ANON_SALT_FILE.write_text(SALT.hex())
 
     db = aliases.AliasDB.load()

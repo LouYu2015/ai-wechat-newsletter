@@ -20,9 +20,10 @@ def rebuild() -> None:
     existing: dict[str, dict] = {}
     if config.ALIASES_FILE.exists():
         import json
+
         try:
-            data = json.loads(config.ALIASES_FILE.read_text(encoding='utf-8'))
-            existing = data.get('users', {})
+            data = json.loads(config.ALIASES_FILE.read_text(encoding="utf-8"))
+            existing = data.get("users", {})
         except Exception:
             print("[警告] 现有 aliases.json 解析失败，将从头建立")
 
@@ -43,8 +44,8 @@ def rebuild() -> None:
             db._users[wxid] = user
         else:
             # Preserve cached default_anon
-            if 'default_anon' in user:
-                db._users[wxid]['default_anon'] = user['default_anon']
+            if "default_anon" in user:
+                db._users[wxid]["default_anon"] = user["default_anon"]
 
     log = db.scan_commands(contact_map)
     db.save()
@@ -52,8 +53,9 @@ def rebuild() -> None:
     print(f"完成。扫描到 {len(log)} 条指令，已保存到 aliases.json")
     for entry in log:
         import datetime
-        ts_str = datetime.datetime.fromtimestamp(entry['ts']).strftime('%Y-%m-%d %H:%M')
-        mark = "✓" if entry['ok'] else "✗"
+
+        ts_str = datetime.datetime.fromtimestamp(entry["ts"]).strftime("%Y-%m-%d %H:%M")
+        mark = "✓" if entry["ok"] else "✗"
         print(f"  {ts_str}  {entry['wxid']}  {entry['cmd']}  → {entry['msg']} {mark}")
 
 

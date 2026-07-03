@@ -39,7 +39,7 @@ from wechat_daily import config
 sys.path.insert(0, str(config.CHATLOG_MAC_DIR))
 import decode_image as _vendor_decode  # noqa: E402
 
-_LONG_EDGE_LIMIT = 1568   # cap to avoid Anthropic's >20-image / 2000² rule
+_LONG_EDGE_LIMIT = 1568  # cap to avoid Anthropic's >20-image / 2000² rule
 _JPEG_QUALITY = 85
 # Decoded frames whose grayscale stddev is below this are uniform (blank) — a
 # wxgf first-frame that came out all-white. Treat as a decode failure so the
@@ -66,13 +66,19 @@ class ImageDecoder:
             self._xor_key = 0x88
 
         import hashlib
+
         group_hash = hashlib.md5(config.GROUP_CHAT_ID.encode()).hexdigest()
         # Find <wxid>/msg/attach/<group_hash>; pick the most recently modified wxid dir
         self._attach_dir: Optional[pathlib.Path] = None
         if config.WECHAT_DATA_DIR.exists():
             wxids = sorted(
-                (p for p in config.WECHAT_DATA_DIR.glob("wxid_*") if (p / "msg" / "attach").is_dir()),
-                key=lambda p: p.stat().st_mtime, reverse=True,
+                (
+                    p
+                    for p in config.WECHAT_DATA_DIR.glob("wxid_*")
+                    if (p / "msg" / "attach").is_dir()
+                ),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
             )
             for wx in wxids:
                 cand = wx / "msg" / "attach" / group_hash
@@ -117,8 +123,10 @@ class ImageDecoder:
     def _decode_one(self, dat_path: pathlib.Path, image_md5: str) -> Optional[pathlib.Path]:
         decrypted_tmp = self._tmpdir / f"{image_md5}.raw.tmp"
         result_path, fmt = _vendor_decode.decrypt_dat_file(
-            str(dat_path), str(decrypted_tmp),
-            aes_key=self._aes_key, xor_key=self._xor_key,
+            str(dat_path),
+            str(decrypted_tmp),
+            aes_key=self._aes_key,
+            xor_key=self._xor_key,
         )
         if not result_path:
             return None
@@ -146,8 +154,17 @@ class ImageDecoder:
         raw_hevc.write_bytes(data[idx:])
         first_frame = self._tmpdir / f"{image_md5}.frame.jpg"
         proc = subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error",
-             "-i", str(raw_hevc), "-frames:v", "1", str(first_frame)],
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(raw_hevc),
+                "-frames:v",
+                "1",
+                str(first_frame),
+            ],
             capture_output=True,
         )
         try:
@@ -165,7 +182,10 @@ class ImageDecoder:
                 pass
 
     def _reencode_jpeg(
-        self, src: pathlib.Path, image_md5: str, src_is_tmp: bool = False,
+        self,
+        src: pathlib.Path,
+        image_md5: str,
+        src_is_tmp: bool = False,
     ) -> Optional[pathlib.Path]:
         """Resize to long edge ≤ 1568, save as JPEG q=85."""
         try:

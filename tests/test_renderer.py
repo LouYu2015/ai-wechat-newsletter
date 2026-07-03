@@ -76,9 +76,7 @@ def test_tags_normalize_dots_and_dedupe():
 
 def test_tags_inline_dashes_in_body_preserved():
     """A '---' inside the body is not the separator — only the one right above tags."""
-    body, tags = renderer._strip_trailing_tags(
-        "intro\n\n---\n\nmiddle\n\n---\n\ntags: x\n"
-    )
+    body, tags = renderer._strip_trailing_tags("intro\n\n---\n\nmiddle\n\n---\n\ntags: x\n")
     assert "---" in body  # the inner ones survive
     assert "middle" in body
     assert tags == ["x"]
@@ -103,11 +101,7 @@ def test_public_strip_hides_marked_h3():
 
 
 def test_public_strip_marker_in_title_line():
-    md = (
-        "## 行业新闻\n\n"
-        "### 话题 A [章节不公开：原因]\nbody A\n\n"
-        "### 话题 B\nbody B\n"
-    )
+    md = "## 行业新闻\n\n### 话题 A [章节不公开：原因]\nbody A\n\n### 话题 B\nbody B\n"
     out = renderer._strip_hidden_for_public(md)
     assert "话题 A" not in out
     assert "body A" not in out
@@ -142,11 +136,7 @@ def test_public_strip_drops_empty_h2():
 
 
 def test_public_strip_keeps_h2_with_surviving_h3():
-    md = (
-        "## 行业新闻\n\n"
-        "### A\na\n[章节不公开：x]\n\n"
-        "### B\nb\n"
-    )
+    md = "## 行业新闻\n\n### A\na\n[章节不公开：x]\n\n### B\nb\n"
     out = renderer._strip_hidden_for_public(md)
     assert "行业新闻" in out
     assert "### B" in out
@@ -154,13 +144,7 @@ def test_public_strip_keeps_h2_with_surviving_h3():
 
 
 def test_public_strip_hides_whole_h2_when_marker_on_h2_line():
-    md = (
-        "## 行业新闻 [章节不公开：整组敏感]\n\n"
-        "### A\na\n\n"
-        "### B\nb\n\n"
-        "## 工具\n\n"
-        "### C\nc\n"
-    )
+    md = "## 行业新闻 [章节不公开：整组敏感]\n\n### A\na\n\n### B\nb\n\n## 工具\n\n### C\nc\n"
     out = renderer._strip_hidden_for_public(md)
     assert "行业新闻" not in out
     assert "### A" not in out
@@ -179,10 +163,7 @@ def test_public_strip_no_markers_idempotent():
 
 def test_public_strip_marker_outside_any_heading_is_ignored():
     """A marker in pre-heading intro must not silently nuke anything."""
-    md = (
-        "intro line\n[章节不公开：rogue]\n\n"
-        "## A\n\n### x\ntext\n"
-    )
+    md = "intro line\n[章节不公开：rogue]\n\n## A\n\n### x\ntext\n"
     out = renderer._strip_hidden_for_public(md)
     assert "## A" in out
     assert "### x" in out
@@ -206,10 +187,7 @@ def test_public_strip_empty_reason():
 
 
 def test_group_annotate_adds_lock_and_banner():
-    md = (
-        "## 行业新闻\n\n"
-        "### 话题 A\nbody A\n[章节不公开：涉及未签约客户]\n"
-    )
+    md = "## 行业新闻\n\n### 话题 A\nbody A\n[章节不公开：涉及未签约客户]\n"
     out = renderer._annotate_hidden_for_group(md)
     assert "🔒 话题 A" in out
     assert "**公开版隐藏**" in out
@@ -239,11 +217,7 @@ def test_group_annotate_no_marker_unchanged():
 
 
 def test_group_annotate_first_marker_wins_for_reason():
-    md = (
-        "## A\n\n"
-        "### 标题\nbody\n[章节不公开：第一原因]\n"
-        "more body\n[章节不公开：第二原因]\n"
-    )
+    md = "## A\n\n### 标题\nbody\n[章节不公开：第一原因]\nmore body\n[章节不公开：第二原因]\n"
     out = renderer._annotate_hidden_for_group(md)
     assert "第一原因" in out
     # Second marker text is also stripped, but its reason isn't shown.
@@ -315,13 +289,17 @@ def _sample_markdown() -> str:
 
 
 def test_render_group_replaces_token_with_real_name():
-    out = renderer.render_group(_wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[])
+    out = renderer.render_group(
+        _wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[]
+    )
     assert _alice_token() not in out
     assert "Alice" in out
 
 
 def test_render_group_keeps_hidden_section_with_lock():
-    out = renderer.render_group(_wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[])
+    out = renderer.render_group(
+        _wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[]
+    )
     assert "话题 B" in out
     assert "🔒" in out
     assert "公开版隐藏" in out
@@ -329,26 +307,34 @@ def test_render_group_keeps_hidden_section_with_lock():
 
 
 def test_render_group_inserts_toc():
-    out = renderer.render_group(_wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[])
+    out = renderer.render_group(
+        _wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[]
+    )
     assert "[TOC]" in out
 
 
 def test_render_group_strips_tags_line_from_body():
     """Tags appear only as a footer note, not in the structural area."""
-    out = renderer.render_group(_wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[])
+    out = renderer.render_group(
+        _wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[]
+    )
     # Body shouldn't contain the literal "tags: ai, model-release" preceded
     # by '---' in the H2/H3 area. Footer rendering uses italics + leading '_'.
     assert "_tags: ai, model-release_" in out
 
 
 def test_render_group_command_log_present():
-    out = renderer.render_group(_wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[])
+    out = renderer.render_group(
+        _wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[]
+    )
     assert "本期指令执行记录" in out
     assert "今日无指令" in out
 
 
 def test_render_group_includes_title():
-    out = renderer.render_group(_wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[])
+    out = renderer.render_group(
+        _wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=[]
+    )
     assert "# 2026-04-30 群聊日报" in out
 
 
@@ -463,12 +449,7 @@ def test_render_group_empty_markdown():
 
 def test_render_public_only_marker_section_removed_clean():
     """Verify no orphaned blank-line forests after removal."""
-    md = (
-        "intro\n\n"
-        "## A\n\n### x\nbody\n[章节不公开：r]\n\n"
-        "## B\n\n### y\nbody y\n\n"
-        "---\ntags: t\n"
-    )
+    md = "intro\n\n## A\n\n### x\nbody\n[章节不公开：r]\n\n## B\n\n### y\nbody y\n\n---\ntags: t\n"
     out = renderer.render_public(_wrap(md), _make_db())
     # no triple newlines
     assert "\n\n\n" not in out
@@ -485,10 +466,17 @@ def test_render_group_marks_leaked_real_name():
 
 def test_render_group_command_log_with_real_user():
     log = [
-        {"ts": 1700000000, "wxid": "wxid_alice", "cmd": "/alias Duckie",
-         "ok": True, "msg": "已设置别名"},
+        {
+            "ts": 1700000000,
+            "wxid": "wxid_alice",
+            "cmd": "/alias Duckie",
+            "ok": True,
+            "msg": "已设置别名",
+        },
     ]
-    out = renderer.render_group(_wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=log)
+    out = renderer.render_group(
+        _wrap(_sample_markdown()), _make_db(), _make_contacts(), command_log=log
+    )
     assert "Alice" in out
     assert "已设置别名" in out
     assert "✓" in out
@@ -514,8 +502,10 @@ def test_slugify_preserves_repeated_hyphens():
 def test_slugify_inline_code_keeps_double_hyphen():
     # An inline-code segment like `-p` surrounded by spaces yields a literal
     # double hyphen in the rendered HTML id; the anchor must match it exactly.
-    assert renderer._slugify_heading("Claude `-p` 禁令与远程控制困局") == \
-        "claude--p-禁令与远程控制困局"
+    assert (
+        renderer._slugify_heading("Claude `-p` 禁令与远程控制困局")
+        == "claude--p-禁令与远程控制困局"
+    )
 
 
 def test_slugify_strips_chinese_punctuation():
@@ -586,9 +576,7 @@ def test_expand_refs_public_heading_not_in_post_degrades(tmp_path, capsys):
 def test_expand_refs_public_handles_multiple_mixed_existence(tmp_path):
     posts = tmp_path / "_posts" / "2026" / "05"
     posts.mkdir(parents=True)
-    (posts / "2026-05-09-daily.md").write_text(
-        "### 新话题\nbody\n", encoding="utf-8"
-    )
+    (posts / "2026-05-09-daily.md").write_text("### 新话题\nbody\n", encoding="utf-8")
     # 2026-05-08 absent
 
     text = "[[ref:2026-05-08|旧话题]] 与 [[ref:2026-05-09|新话题]]"
@@ -647,10 +635,7 @@ def test_validate_final_refs_public_wrong_date_degrades(tmp_path, capsys):
 
 def test_validate_final_refs_public_missing_post_degrades(tmp_path, capsys):
     """Target post file doesn't exist at all — drop URL, warn."""
-    text = (
-        "上周 [「某话题」]"
-        "({{ '/daily/2026/05/01/daily/#某话题' | relative_url }}) 提到过"
-    )
+    text = "上周 [「某话题」]({{ '/daily/2026/05/01/daily/#某话题' | relative_url }}) 提到过"
     out = renderer._validate_final_refs_public(text, posts_dir=tmp_path / "_posts")
     assert out == "上周 「某话题」 提到过"
     captured = capsys.readouterr()
@@ -688,10 +673,7 @@ def test_render_public_catches_inline_final_form_wrong_date(monkeypatch, tmp_pat
 
 
 def test_render_group_expands_ref_placeholder():
-    md = (
-        "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
-        "## A\n\n### x\nbody\n"
-    )
+    md = "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n## A\n\n### x\nbody\n"
     out = renderer.render_group(_wrap(md), _make_db(), _make_contacts(), command_log=[])
     assert "「某话题」" in out
     assert "[[ref:" not in out
@@ -701,10 +683,7 @@ def test_render_public_expands_ref_placeholder_degraded(monkeypatch, tmp_path):
     """In tests there's no published post; expansion should degrade to plain text."""
     monkeypatch.setattr("wechat_daily.config.PUBLIC_REPO_DIR", tmp_path)
 
-    md = (
-        "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
-        "## A\n\n### x\nbody\n"
-    )
+    md = "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n## A\n\n### x\nbody\n"
     out = renderer.render_public(_wrap(md), _make_db())
     assert "「某话题」" in out
     assert "[[ref:" not in out
@@ -715,18 +694,10 @@ def test_render_public_expands_ref_placeholder_degraded(monkeypatch, tmp_path):
 def test_render_public_expands_ref_to_link_when_post_exists(monkeypatch, tmp_path):
     posts = tmp_path / "_posts" / "2026" / "05"
     posts.mkdir(parents=True)
-    (posts / "2026-05-09-daily.md").write_text(
-        "### 某话题\nbody\n", encoding="utf-8"
-    )
+    (posts / "2026-05-09-daily.md").write_text("### 某话题\nbody\n", encoding="utf-8")
 
     monkeypatch.setattr("wechat_daily.config.PUBLIC_REPO_DIR", tmp_path)
 
-    md = (
-        "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n"
-        "## A\n\n### x\nbody\n"
-    )
+    md = "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n## A\n\n### x\nbody\n"
     out = renderer.render_public(_wrap(md), _make_db())
-    assert (
-        "[「某话题」]({{ '/daily/2026/05/09/daily/#某话题' | relative_url }})"
-        in out
-    )
+    assert "[「某话题」]({{ '/daily/2026/05/09/daily/#某话题' | relative_url }})" in out

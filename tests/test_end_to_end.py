@@ -33,11 +33,13 @@ def _make_db() -> aliases.AliasDB:
 
 
 def _make_contacts() -> contacts.ContactMap:
-    return contacts.ContactMap.from_dict({
-        "wxid_alice": "Alice",
-        "wxid_bob": "Bob",
-        "wxid_carol": "Carol",
-    })
+    return contacts.ContactMap.from_dict(
+        {
+            "wxid_alice": "Alice",
+            "wxid_bob": "Bob",
+            "wxid_carol": "Carol",
+        }
+    )
 
 
 def _make_report(db: aliases.AliasDB) -> models.DailyReport:

@@ -43,8 +43,7 @@ _USER_AGENT = (
 _DEFAULT_HEADERS = {
     "User-Agent": _USER_AGENT,
     "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-        "image/avif,image/webp,*/*;q=0.8"
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     ),
     "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
     "Accept-Encoding": "gzip, deflate",
@@ -117,10 +116,10 @@ _SUMMARY_PROMPT_NO_CONTEXT = """\
 @dataclasses.dataclass
 class EnrichStats:
     total: int = 0
-    fetched: int = 0     # debug-only: URLs where http fetch returned non-empty text
+    fetched: int = 0  # debug-only: URLs where http fetch returned non-empty text
     summarized: int = 0  # total inputs ≥ SHORT_THRESHOLD, LLM produced summary
-    short: int = 0       # 0 < total inputs < SHORT_THRESHOLD, raw concat used
-    failed: int = 0      # no inputs at all (no title/desc/og/text)
+    short: int = 0  # 0 < total inputs < SHORT_THRESHOLD, raw concat used
+    failed: int = 0  # no inputs at all (no title/desc/og/text)
 
 
 SHORT_THRESHOLD = 800
@@ -138,9 +137,7 @@ class _TextExtractor(html.parser.HTMLParser):
     def handle_starttag(self, tag: str, attrs) -> None:
         attr_map = dict(attrs)
         starts_target = (
-            self.target_id is not None
-            and not self.capture
-            and attr_map.get("id") == self.target_id
+            self.target_id is not None and not self.capture and attr_map.get("id") == self.target_id
         )
         if starts_target:
             self.capture = True
@@ -225,7 +222,9 @@ def enrich_link_messages(
 
     workers = max(1, min(max_workers, len(targets)))
 
-    def _work(item: tuple[int, tuple[int, message_parser.Message, message_parser.LinkMeta]]) -> dict:
+    def _work(
+        item: tuple[int, tuple[int, message_parser.Message, message_parser.LinkMeta]],
+    ) -> dict:
         """Fetch + summarize one target; report lane events keyed by url.
 
         Pure w.r.t. shared report state: only mutates the reporter (thread-safe)
@@ -259,8 +258,12 @@ def enrich_link_messages(
         if total_chars < SHORT_THRESHOLD:
             ctx = _build_short_context(title, card_desc, og, text)
             rep.done(uid, "short" if ctx else "failed", error=None if ctx else "无正文")
-            return {**base, "kind": "short" if ctx else "failed",
-                    "context": ctx or None, "usage": None}
+            return {
+                **base,
+                "kind": "short" if ctx else "failed",
+                "context": ctx or None,
+                "usage": None,
+            }
 
         try:
             rep.phase(uid, "摘要")
@@ -278,16 +281,19 @@ def enrich_link_messages(
             )
             if summary.strip():
                 rep.done(uid, "summary")
-                return {**base, "kind": "summary", "context": summary,
-                        "usage": (s_usage, s_dur, s_chars)}
+                return {
+                    **base,
+                    "kind": "summary",
+                    "context": summary,
+                    "usage": (s_usage, s_dur, s_chars),
+                }
         except Exception:
             pass
 
         # Summarize raised or returned empty: fall back to short-style raw concat.
         ctx = _build_short_context(title, card_desc, og, text)
         rep.done(uid, "short" if ctx else "failed", error=None if ctx else "摘要失败")
-        return {**base, "kind": "short" if ctx else "failed",
-                "context": ctx or None, "usage": None}
+        return {**base, "kind": "short" if ctx else "failed", "context": ctx or None, "usage": None}
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -331,6 +337,7 @@ def _build_short_context(title: str, card_desc: str, og: str, text: str) -> str:
 
 def _log_failed(url: str, label: str) -> None:
     import sys
+
     print(f"[link-enrich] FAILED url={url} label={label}", file=sys.stderr)
 
 
@@ -356,7 +363,11 @@ def _collect_link_targets(
 
     for idx, msg in enumerate(messages):
         links: list[message_parser.LinkMeta] = []
-        if msg.local_type in (message_parser.MSG_LINK_CARD, message_parser.MSG_LINK_OPEN) and msg.link and msg.link.url:
+        if (
+            msg.local_type in (message_parser.MSG_LINK_CARD, message_parser.MSG_LINK_OPEN)
+            and msg.link
+            and msg.link.url
+        ):
             links.append(msg.link)
 
         inline_links = _extract_inline_links(msg.content)
@@ -542,6 +553,7 @@ def summarize_text(
 
     if client is None:
         import anthropic
+
         client = anthropic.Anthropic(
             api_key=api_key,
             timeout=httpx.Timeout(120.0, connect=15.0),
@@ -644,9 +656,7 @@ def _fetch_circle_post_text(url: str, client: httpx.Client) -> str:
     if space_id is None:
         return ""
 
-    post_response = client.get(
-        f"{origin}/internal_api/spaces/{space_id}/posts/{post_slug}?"
-    )
+    post_response = client.get(f"{origin}/internal_api/spaces/{space_id}/posts/{post_slug}?")
     post_response.raise_for_status()
     data = post_response.json()
 
@@ -700,8 +710,13 @@ def _tiptap_node_text(node) -> str:
     parts = [_tiptap_node_text(child) for child in node.get("content") or []]
     text = "".join(parts)
     if node_type in {
-        "paragraph", "heading", "blockquote", "listItem",
-        "bulletList", "orderedList", "codeBlock",
+        "paragraph",
+        "heading",
+        "blockquote",
+        "listItem",
+        "bulletList",
+        "orderedList",
+        "codeBlock",
     }:
         return text + "\n"
     return text
@@ -816,10 +831,12 @@ def dump_fetch_diagnostics(messages: list[message_parser.Message]) -> str:
     rows = []
     for msg in messages:
         if msg.link:
-            rows.append({
-                "title": msg.link.title,
-                "url": msg.link.url,
-                "des_chars": len(msg.link.description),
-                "context_chars": len(msg.link_context),
-            })
+            rows.append(
+                {
+                    "title": msg.link.title,
+                    "url": msg.link.url,
+                    "des_chars": len(msg.link.description),
+                    "context_chars": len(msg.link_context),
+                }
+            )
     return json.dumps(rows, ensure_ascii=False, indent=2)

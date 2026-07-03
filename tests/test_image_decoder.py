@@ -65,7 +65,7 @@ def test_hd_variant_preferred_over_dat(tmp_path, monkeypatch):
 
     def fake_decode_one(dat_path: pathlib.Path, image_md5: str):
         tried.append(pathlib.Path(dat_path).name)
-        if pathlib.Path(dat_path).name == f"{md5}_h.dat":    # HD → real content
+        if pathlib.Path(dat_path).name == f"{md5}_h.dat":  # HD → real content
             return tmp_path / f"{md5}.jpg"
         return None
 
@@ -131,7 +131,8 @@ def test_decode_memoized(tmp_path, monkeypatch):
 
     calls: list[str] = []
     monkeypatch.setattr(
-        dec, "_decode_one",
+        dec,
+        "_decode_one",
         lambda dat_path, image_md5: (calls.append(image_md5), tmp_path / "x.jpg")[1],
     )
     assert dec.decode(md5) == tmp_path / "x.jpg"

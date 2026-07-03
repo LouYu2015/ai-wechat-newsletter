@@ -89,7 +89,7 @@ class Lanes:
         with self._lock:
             if (lane := self._lanes.get(uid)) is not None:
                 lane.chars += len(text)
-                lane.tail = (lane.tail + text).replace("\n", " ")[-self.tail_chars:]
+                lane.tail = (lane.tail + text).replace("\n", " ")[-self.tail_chars :]
 
     def done(self, uid: str, status: str, *, error: str | None = None) -> None:
         with self._lock:
@@ -152,9 +152,7 @@ class Lanes:
                     rows.append(row)
 
             foot = _line()
-            tally = "  ".join(
-                f"{n} {self.status_labels.get(k, k)}" for k, n in self._tally.items()
-            )
+            tally = "  ".join(f"{n} {self.status_labels.get(k, k)}" for k, n in self._tally.items())
             foot.append(tally or "处理中…", style="dim")
             foot.append(f"    ⏱ {int(elapsed) // 60}:{int(elapsed) % 60:02d}", style="dim")
             rows.append(_line("dim").append("─" * _WIDTH))

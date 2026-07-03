@@ -183,12 +183,18 @@ def _aggregate(records: Iterable[CostRecord]) -> list[dict]:
         key = (r.date, r.stage, r.model, r.batch)
         if key not in groups:
             groups[key] = {
-                "date": r.date, "stage": r.stage, "model": r.model,
+                "date": r.date,
+                "stage": r.stage,
+                "model": r.model,
                 "batch": r.batch,
-                "input_tokens": 0, "output_tokens": 0,
-                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
-                "duration_s": 0.0, "estimated_cost_usd": 0.0,
-                "input_chars": 0, "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "duration_s": 0.0,
+                "estimated_cost_usd": 0.0,
+                "input_chars": 0,
+                "calls": 0,
             }
             order.append(key)
         g = groups[key]
@@ -234,7 +240,9 @@ def summarize(records: Iterable[CostRecord]):
             tok_per_char = "—"
         model_label = f"{g['model']} [dim](batch 5折)[/dim]" if g.get("batch") else g["model"]
         table.add_row(
-            g["date"], g["stage"], model_label,
+            g["date"],
+            g["stage"],
+            model_label,
             str(g["calls"]),
             f"{g['input_tokens']:,}",
             f"{g['output_tokens']:,}",
@@ -247,8 +255,15 @@ def summarize(records: Iterable[CostRecord]):
 
     if rows:
         table.add_row(
-            "", "", "[bold]合计", "",
-            "", "", "", "", "",
+            "",
+            "",
+            "[bold]合计",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
             f"[bold]${total_cost:.4f}",
         )
     return table

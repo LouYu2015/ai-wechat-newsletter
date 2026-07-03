@@ -40,6 +40,7 @@ console = rich.console.Console()
 
 # ── API key helpers ─────────────────────────────────────────────────────────────
 
+
 def _ensure_anthropic_key() -> str:
     """Ensure ANTHROPIC_API_KEY is present; prompt and persist to .env if not."""
     env_path = config.PROJECT_ROOT / ".env"
@@ -51,13 +52,12 @@ def _ensure_anthropic_key() -> str:
     console.print("[yellow]需要 Anthropic API Key（将保存到 .env 文件）[/yellow]")
     key = console.input("[bold]请输入 ANTHROPIC_API_KEY: [/bold]").strip()
     if key:
-        existing = env_path.read_text(encoding='utf-8') if env_path.exists() else ''
+        existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
         lines = [
-            line for line in existing.splitlines()
-            if not line.startswith("ANTHROPIC_API_KEY=")
+            line for line in existing.splitlines() if not line.startswith("ANTHROPIC_API_KEY=")
         ]
         lines.append(f"ANTHROPIC_API_KEY={key}")
-        env_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         os.environ["ANTHROPIC_API_KEY"] = key
         console.print("[green]ANTHROPIC_API_KEY 已保存到 .env[/green]")
     return key
@@ -72,16 +72,11 @@ def _ensure_deepseek_key() -> str:
     if key:
         return key
 
-    console.print(
-        "[yellow]需要 DeepSeek API Key（链接摘要 + 对比版日报，将保存到 .env）[/yellow]"
-    )
+    console.print("[yellow]需要 DeepSeek API Key（链接摘要 + 对比版日报，将保存到 .env）[/yellow]")
     key = console.input("[bold]请输入 DEEPSEEK_API_KEY: [/bold]").strip()
     if key:
         existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-        lines = [
-            line for line in existing.splitlines()
-            if not line.startswith("DEEPSEEK_API_KEY=")
-        ]
+        lines = [line for line in existing.splitlines() if not line.startswith("DEEPSEEK_API_KEY=")]
         lines.append(f"DEEPSEEK_API_KEY={key}")
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         os.environ["DEEPSEEK_API_KEY"] = key
@@ -90,6 +85,7 @@ def _ensure_deepseek_key() -> str:
 
 
 # ── Single-date pipeline (Claude structured path) ───────────────────────────────
+
 
 def _run_db_pipeline(
     date_str: str,
@@ -124,7 +120,7 @@ def _run_db_pipeline(
     resumable batch state exists (``--resume`` / ``--resubmit``).
     """
 
-    target_date = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
+    target_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
 
     # ── A: Extract raw messages ─────────────────────────────────────────────
     console.rule(f"[bold]数据库提取  [cyan]{date_str}[/cyan]")
@@ -143,8 +139,11 @@ def _run_db_pipeline(
     if use_batch:
         fingerprint = batch_extractor.raw_messages_fingerprint(messages)
         batch_state = _decide_batch_state(
-            date_str, fingerprint, anthropic_key,
-            force_resume=force_resume, force_resubmit=force_resubmit,
+            date_str,
+            fingerprint,
+            anthropic_key,
+            force_resume=force_resume,
+            force_resubmit=force_resubmit,
         )
 
     # ── A2: Fetch/summarize link-card targets before tokenization ───────────
@@ -156,18 +155,22 @@ def _run_db_pipeline(
             f"[dim]续接批次：跳过链接增强（{link_count} 个链接的摘要已包含在已提交的输入里）[/dim]\n"
         )
     elif link_count:
-        console.rule(
-            f"[bold]链接增强  [dim]({config.LINK_SUMMARY_MODEL}, no thinking)[/dim]"
-        )
+        console.rule(f"[bold]链接增强  [dim]({config.LINK_SUMMARY_MODEL}, no thinking)[/dim]")
         link_lanes = lanes_ui.Lanes(
-            "链接增强", total=link_count, subtitle=config.LINK_SUMMARY_MODEL,
+            "链接增强",
+            total=link_count,
+            subtitle=config.LINK_SUMMARY_MODEL,
             status_labels={"summary": "摘要", "short": "太短", "failed": "失败"},
         )
 
         def _link_usage_cb(usage, duration_s: float, input_chars: int) -> None:
             record = cost_tracker.log_call(
-                date=date_str, stage="link", model=config.LINK_SUMMARY_MODEL,
-                usage=usage, duration_s=duration_s, input_chars=input_chars,
+                date=date_str,
+                stage="link",
+                model=config.LINK_SUMMARY_MODEL,
+                usage=usage,
+                duration_s=duration_s,
+                input_chars=input_chars,
             )
             if cost_records is not None:
                 cost_records.append(record)
@@ -232,9 +235,13 @@ def _run_db_pipeline(
             console.print(
                 f"[yellow]最近 {prior_days} 天里 {len(gaps)} 天缺日报：{', '.join(gaps)}[/yellow]"
             )
-            choice = console.input(
-                "[bold]继续生成今日日报？[c]ontinue / [s]kip 此日 / [a]bort 全部退出 (默认 c): [/bold]"
-            ).strip().lower()
+            choice = (
+                console.input(
+                    "[bold]继续生成今日日报？[c]ontinue / [s]kip 此日 / [a]bort 全部退出 (默认 c): [/bold]"
+                )
+                .strip()
+                .lower()
+            )
             if choice == "s":
                 console.print(f"[yellow]按用户要求跳过 {date_str}。[/yellow]\n")
                 return
@@ -242,9 +249,7 @@ def _run_db_pipeline(
                 raise KeyboardInterrupt("用户中止")
         elif gaps and not prior_reports:
             # All prior days missing — first-run / long pause; silent continue.
-            console.print(
-                f"[dim]最近 {prior_days} 天均无历史日报，按独立日报生成。[/dim]"
-            )
+            console.print(f"[dim]最近 {prior_days} 天均无历史日报，按独立日报生成。[/dim]")
 
     # Titles-only window covers older days (e.g. 4–7 back) on top of the
     # full-body window. Clamp to >= prior_days so we never narrow it; skip
@@ -253,7 +258,9 @@ def _run_db_pipeline(
     if title_window > prior_days:
         covered = {d for d, _ in prior_reports}
         prior_report_titles = prior_report.load_prior_report_titles(
-            date_str, n_days=title_window, skip_dates=covered,
+            date_str,
+            n_days=title_window,
+            skip_dates=covered,
         )
         if prior_report_titles:
             console.print(
@@ -319,15 +326,16 @@ def _run_db_pipeline(
 
     # Only include commands from today's date in the instruction log
     day_log = [
-        e for e in alias_db.command_log()
-        if datetime.datetime.fromtimestamp(e['ts']).date() == target_date
+        e
+        for e in alias_db.command_log()
+        if datetime.datetime.fromtimestamp(e["ts"]).date() == target_date
     ]
     group_md = renderer.render_group(report, alias_db, contact_map, day_log, token_map=token_map)
 
     debug_day = config.debug_dir_for(date_str)
     debug_day.mkdir(exist_ok=True, parents=True)
     md_path = debug_day / "group.md"
-    md_path.write_text(group_md, encoding='utf-8')
+    md_path.write_text(group_md, encoding="utf-8")
 
     pdf_path = archiver.get_pdf_path(date_str)
     with rich.progress.Progress(
@@ -352,8 +360,11 @@ def _run_db_pipeline(
         if compare_report is not None:
             _render_compare_report(
                 compare_report,
-                date_str=date_str, alias_db=alias_db, contact_map=contact_map,
-                token_map=token_map, target_date=target_date,
+                date_str=date_str,
+                alias_db=alias_db,
+                contact_map=contact_map,
+                token_map=token_map,
+                target_date=target_date,
             )
     elif run_compare:
         compare_report = _run_streaming_extraction(
@@ -378,8 +389,11 @@ def _run_db_pipeline(
         else:
             _render_compare_report(
                 compare_report,
-                date_str=date_str, alias_db=alias_db, contact_map=contact_map,
-                token_map=token_map, target_date=target_date,
+                date_str=date_str,
+                alias_db=alias_db,
+                contact_map=contact_map,
+                token_map=token_map,
+                target_date=target_date,
             )
 
     # ── E: Render public version + leak check ───────────────────────────────
@@ -449,7 +463,6 @@ def _run_streaming_extraction(
 
     from wechat_daily import image_decoder
 
-
     console.rule(f"[bold]{rule_title}")
 
     headers: list[rich.text.Text] = []  # permanent header / status lines
@@ -465,7 +478,9 @@ def _run_streaming_extraction(
     task = progress.add_task("连接中...", total=None)
     state = {"text": 0, "thinking": 0, "thinking_partial": "", "body_partial": ""}
 
-    def _tail_texts(lines: collections.deque[str], partial: str, n: int, style: str) -> list[rich.text.Text]:
+    def _tail_texts(
+        lines: collections.deque[str], partial: str, n: int, style: str
+    ) -> list[rich.text.Text]:
         visible = list(lines)
         if partial:
             visible.append(partial)
@@ -489,6 +504,7 @@ def _run_streaming_extraction(
         return rich.console.Group(*parts)
 
     with rich.live.Live(render(), console=console, refresh_per_second=10, transient=False) as live:
+
         def refresh() -> None:
             live.update(render())
 
@@ -541,7 +557,9 @@ def _run_streaming_extraction(
 
         def _usage_cb(usage, input_chars: int) -> None:
             record = cost_tracker.log_call(
-                date=date_str, stage=stage, model=model,
+                date=date_str,
+                stage=stage,
+                model=model,
                 usage=usage,
                 duration_s=_time.perf_counter() - t_start,
                 input_chars=input_chars,
@@ -563,19 +581,26 @@ def _run_streaming_extraction(
                         # image. Surface the shortfall so the author knows.
                         n_missing = n_images - n_decoded
                         if n_missing:
-                            headers.append(rich.text.Text(
-                                f"图片解码 {n_decoded}/{n_images} 张成功"
-                                f"（{n_missing} 张无法解码，已降级为 [图片] 占位）",
-                                style="yellow",
-                            ))
+                            headers.append(
+                                rich.text.Text(
+                                    f"图片解码 {n_decoded}/{n_images} 张成功"
+                                    f"（{n_missing} 张无法解码，已降级为 [图片] 占位）",
+                                    style="yellow",
+                                )
+                            )
                         else:
-                            headers.append(rich.text.Text(
-                                f"图片解码 {n_decoded}/{n_images} 张成功",
-                                style="dim",
-                            ))
+                            headers.append(
+                                rich.text.Text(
+                                    f"图片解码 {n_decoded}/{n_images} 张成功",
+                                    style="dim",
+                                )
+                            )
                         refresh()
                 return llm_extractor.extract_report(
-                    date_str, chat_history, anthropic_key, progress_cb,
+                    date_str,
+                    chat_history,
+                    anthropic_key,
+                    progress_cb,
                     roster_text=roster_text or None,
                     thinking_cb=thinking_cb,
                     header_cb=header_cb,
@@ -613,11 +638,16 @@ def _render_compare_report(
     ``(opus-4-6)`` PDF sits alongside the canonical one for AB reading.
     """
     day_log = [
-        e for e in alias_db.command_log()
-        if datetime.datetime.fromtimestamp(e['ts']).date() == target_date
+        e
+        for e in alias_db.command_log()
+        if datetime.datetime.fromtimestamp(e["ts"]).date() == target_date
     ]
     compare_group_md = renderer.render_group(
-        compare_report, alias_db, contact_map, day_log, token_map=token_map,
+        compare_report,
+        alias_db,
+        contact_map,
+        day_log,
+        token_map=token_map,
     )
 
     debug_day = config.debug_dir_for(date_str)
@@ -674,9 +704,11 @@ def _decide_batch_state(
         console.print(f"[yellow]{e}[/yellow]")
         if force_resubmit:
             return None
-        choice = console.input(
-            "[bold]状态文件不可用。[r] 重新提交 / [a] 中止 (默认 r): [/bold]"
-        ).strip().lower()
+        choice = (
+            console.input("[bold]状态文件不可用。[r] 重新提交 / [a] 中止 (默认 r): [/bold]")
+            .strip()
+            .lower()
+        )
         if choice == "a":
             raise KeyboardInterrupt("用户中止")
         return None
@@ -686,9 +718,7 @@ def _decide_batch_state(
 
     if force_resubmit:
         if not state.consumed:
-            batch_extractor.cancel_batch(
-                batch_extractor.make_client(anthropic_key), state.batch_id
-            )
+            batch_extractor.cancel_batch(batch_extractor.make_client(anthropic_key), state.batch_id)
             console.print(f"[dim]已请求取消旧批次 {state.batch_id}[/dim]")
         return None
 
@@ -697,10 +727,14 @@ def _decide_batch_state(
     if state.consumed:
         if force_resume:
             return state
-        choice = console.input(
-            f"[bold]该日期批次 {state.batch_id} 之前已取回过结果（提交于 {state.submitted_at}）。\n"
-            "[u] 复用批次结果（重新取回，零成本） / [n] 重新提交生成 (默认 u): [/bold]"
-        ).strip().lower()
+        choice = (
+            console.input(
+                f"[bold]该日期批次 {state.batch_id} 之前已取回过结果（提交于 {state.submitted_at}）。\n"
+                "[u] 复用批次结果（重新取回，零成本） / [n] 重新提交生成 (默认 u): [/bold]"
+            )
+            .strip()
+            .lower()
+        )
         return None if choice == "n" else state
 
     if force_resume or sha == state.raw_msg_sha256:
@@ -710,21 +744,22 @@ def _decide_batch_state(
         return state
 
     delta = count - state.raw_msg_count
-    delta_txt = (
-        f"当时 {state.raw_msg_count} 条消息，现在 {count} 条"
-        + (f"（新增 {delta} 条）" if delta > 0 else "（消息集合有变化）")
+    delta_txt = f"当时 {state.raw_msg_count} 条消息，现在 {count} 条" + (
+        f"（新增 {delta} 条）" if delta > 0 else "（消息集合有变化）"
     )
     console.print(
         f"[yellow]检测到未完成批次 {state.batch_id}（提交于 {state.submitted_at}，{delta_txt}）。[/yellow]"
     )
-    choice = console.input(
-        "[bold][c] 续接：日报只覆盖提交时刻的快照，之后的消息不会出现在本期\n"
-        "[r] 重新提交：取消旧批次，用当前全部消息重新生成 (默认 c): [/bold]"
-    ).strip().lower()
-    if choice == "r":
-        batch_extractor.cancel_batch(
-            batch_extractor.make_client(anthropic_key), state.batch_id
+    choice = (
+        console.input(
+            "[bold][c] 续接：日报只覆盖提交时刻的快照，之后的消息不会出现在本期\n"
+            "[r] 重新提交：取消旧批次，用当前全部消息重新生成 (默认 c): [/bold]"
         )
+        .strip()
+        .lower()
+    )
+    if choice == "r":
+        batch_extractor.cancel_batch(batch_extractor.make_client(anthropic_key), state.batch_id)
         console.print(f"[dim]已请求取消旧批次 {state.batch_id}[/dim]")
         return None
     return state
@@ -900,27 +935,30 @@ def _run_batch_extraction(
 
 def _save_leak_debug(date_str: str, error: str, public_md: str) -> None:
     import json
+
     debug_day = config.debug_dir_for(date_str)
     debug_day.mkdir(exist_ok=True, parents=True)
     path = debug_day / "leak.json"
     path.write_text(
-        json.dumps({"error": error, "public_md": public_md},
-                   ensure_ascii=False, indent=2),
-        encoding='utf-8',
+        json.dumps({"error": error, "public_md": public_md}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     console.print(f"[dim]泄漏详情已保存至 {path}[/dim]")
 
 
 # ── Main entry ──────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="微信群聊日报生成器")
     parser.add_argument(
-        "--allow-incomplete", action="store_true",
+        "--allow-incomplete",
+        action="store_true",
         help="也为最后一天（尚未过午夜+1小时）生成不完整日报",
     )
     parser.add_argument(
-        "--no-batch", action="store_true",
+        "--no-batch",
+        action="store_true",
         help=(
             "不用 Batch API，走传统流式生成（有实时预览，但按标准价计费）。"
             "默认走批量：全部 token 5 折，通常几分钟到几十分钟完成，"
@@ -928,23 +966,30 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--resume", action="store_true",
+        "--resume",
+        action="store_true",
         help="存在未完成/已完成的批次时无条件续接（跳过询问；配合批量模式）。",
     )
     parser.add_argument(
-        "--resubmit", action="store_true",
+        "--resubmit",
+        action="store_true",
         help="放弃已存在的批次（尽力取消未完成请求），用当前消息重新提交。",
     )
     parser.add_argument(
-        "-y", action="store_true",
+        "-y",
+        action="store_true",
         help="推送上次生成的公开版到 GitHub Pages（不影响本次生成流程）",
     )
     parser.add_argument(
-        "--prior-days", type=int, default=3,
+        "--prior-days",
+        type=int,
+        default=3,
         help="喂给模型的过往日报**完整正文**天数（用于跨日去重 / 续写）；0 关闭。默认 3。",
     )
     parser.add_argument(
-        "--prior-title-days", type=int, default=7,
+        "--prior-title-days",
+        type=int,
+        default=7,
         help=(
             "喂给模型的过往日报**标题大纲**总天数（前 --prior-days 天用完整正文，"
             "再往前的天数仅传 ## / ### 标题，便于扩大跨日去重 / [[ref:]] 窗口而不爆 token）；"
@@ -952,11 +997,13 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--no-prior-prompt", action="store_true",
+        "--no-prior-prompt",
+        action="store_true",
         help="最近若干天日报有缺失时不交互询问，按现有材料继续（适合自动化场景）。",
     )
     parser.add_argument(
-        "--no-compare", action="store_true",
+        "--no-compare",
+        action="store_true",
         help=(
             "跳过 Opus 4.6 对比版（旁路，仅本地 PDF/debug、不发布）。"
             "对比版与主版本同价位、且每天跑全天聊天记录，成本不低；只想要发布版时用此项关闭。"
@@ -966,11 +1013,13 @@ def main() -> None:
     if args.resume and args.resubmit:
         parser.error("--resume 与 --resubmit 互斥，请二选一")
 
-    console.print(rich.panel.Panel.fit(
-        "[bold cyan]微信群聊日报生成器[/bold cyan]\n"
-        "[dim]WeChat Group Chat Daily Report Generator[/dim]",
-        border_style="cyan",
-    ))
+    console.print(
+        rich.panel.Panel.fit(
+            "[bold cyan]微信群聊日报生成器[/bold cyan]\n"
+            "[dim]WeChat Group Chat Daily Report Generator[/dim]",
+            border_style="cyan",
+        )
+    )
 
     try:
         # Step 1: API keys
@@ -986,8 +1035,7 @@ def main() -> None:
             try:
                 pushed = publisher.push_pending()
                 console.print(
-                    "[green]已推送。[/green]\n" if pushed
-                    else "[dim]无待推送 commit。[/dim]\n"
+                    "[green]已推送。[/green]\n" if pushed else "[dim]无待推送 commit。[/dim]\n"
                 )
             except RuntimeError as e:
                 console.print(f"[yellow]推送失败: {e}[/yellow]\n")
@@ -1021,14 +1069,18 @@ def main() -> None:
             return
         console.print(
             f"发现 [cyan]{len(missing)}[/cyan] 个缺失日期: "
-            + ", ".join(f"[cyan]{d}[/cyan]" for d in missing) + "\n"
+            + ", ".join(f"[cyan]{d}[/cyan]" for d in missing)
+            + "\n"
         )
 
         # Step 6: Generate reports
         cost_records: list[cost_tracker.CostRecord] = []
         for date_str in missing:
             _run_db_pipeline(
-                date_str, anthropic_key, alias_db, contact_map,
+                date_str,
+                anthropic_key,
+                alias_db,
+                contact_map,
                 prior_days=args.prior_days,
                 prior_title_days=args.prior_title_days,
                 prompt_on_missing_prior=not args.no_prior_prompt,
@@ -1046,11 +1098,13 @@ def main() -> None:
             console.print()
             console.print(cost_tracker.summarize(cost_records))
 
-        console.print(rich.panel.Panel.fit(
-            f"[bold green]完成！[/bold green]\n共生成 [cyan]{len(missing)}[/cyan] 份日报",
-            border_style="green",
-            title="Success",
-        ))
+        console.print(
+            rich.panel.Panel.fit(
+                f"[bold green]完成！[/bold green]\n共生成 [cyan]{len(missing)}[/cyan] 份日报",
+                border_style="green",
+                title="Success",
+            )
+        )
 
     except KeyboardInterrupt:
         console.print("\n[yellow]用户中断[/yellow]")

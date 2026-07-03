@@ -15,10 +15,21 @@ def _find_db_storage() -> pathlib.Path | None:
     if not config.WECHAT_DATA_DIR.exists():
         return None
     result = subprocess.run(
-        ['find', str(config.WECHAT_DATA_DIR), '-name', 'db_storage', '-type', 'd', '-maxdepth', '5'],
-        capture_output=True, text=True, timeout=5,
+        [
+            "find",
+            str(config.WECHAT_DATA_DIR),
+            "-name",
+            "db_storage",
+            "-type",
+            "d",
+            "-maxdepth",
+            "5",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
     )
-    first = result.stdout.strip().split('\n')[0]
+    first = result.stdout.strip().split("\n")[0]
     return pathlib.Path(first) if first else None
 
 
@@ -44,13 +55,14 @@ def get_conn(rel_path: str, cipher_key: str | None = None) -> Any:
     if keys_file.exists():
         try:
             import sqlcipher3
+
             keys = json.loads(keys_file.read_text())
             if rel_path in keys:
                 db_storage = _find_db_storage()
                 if db_storage:
                     src = db_storage / rel_path
                     if src.exists():
-                        enc_key = keys[rel_path]['enc_key']
+                        enc_key = keys[rel_path]["enc_key"]
                         conn = sqlcipher3.connect(f"file:{src}?immutable=1", uri=True)
                         conn.execute(f"PRAGMA key = \"x'{enc_key}'\"")
                         conn.execute("PRAGMA cipher_page_size = 4096")
@@ -84,9 +96,7 @@ def name2id_map(cur) -> dict[int, str]:
     test DBs); callers should treat an unresolved sender as empty.
     """
     try:
-        cur.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'"
-        )
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'")
         if not cur.fetchone():
             return {}
         return {rowid: un for rowid, un in cur.execute("SELECT rowid, user_name FROM Name2Id")}

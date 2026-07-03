@@ -12,6 +12,7 @@ DEBUG_DIR = PROJECT_ROOT / "debug"
 OUTPUT_DIR = PROJECT_ROOT
 ARCHIVE_DIR = PROJECT_ROOT / "archive"
 
+
 def debug_dir_for(date_str: str) -> pathlib.Path:
     """Per-date debug archive folder, nested ``YYYY/MM/DD``.
 
@@ -44,9 +45,9 @@ GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 # 只有报告生成模型不同——把唯一变量真正收敛到模型上。链接摘要走 DeepSeek V4
 # （成本约为 Sonnet 的 1/10；deepseek 前缀触发 url_enricher 的 OpenAI 兼容分支，
 # thinking 关闭），两版日报共用同一批摘要。
-CLAUDE_MODEL = "claude-fable-5"             # 主版本报告生成（发布）
-COMPARE_REPORT_MODEL = "claude-opus-4-6"    # 对比版报告生成（旁路，不发布）
-LINK_SUMMARY_MODEL = "deepseek-v4-pro"      # 链接摘要（DeepSeek V4，无思考）
+CLAUDE_MODEL = "claude-fable-5"  # 主版本报告生成（发布）
+COMPARE_REPORT_MODEL = "claude-opus-4-6"  # 对比版报告生成（旁路，不发布）
+LINK_SUMMARY_MODEL = "deepseek-v4-pro"  # 链接摘要（DeepSeek V4，无思考）
 
 # ── Anthropic API pricing (USD per 1M tokens) ──────────────────────────────────
 # Source: https://platform.claude.com/docs/en/about-claude/pricing
@@ -55,18 +56,33 @@ LINK_SUMMARY_MODEL = "deepseek-v4-pro"      # 链接摘要（DeepSeek V4，无�
 MODEL_PRICES: dict[str, dict[str, float]] = {
     # Opus 4.6（对比版报告生成）：$5/M 输入、$25/M 输出。cache-write 5m = 1.25×
     # 输入、cache-read = 0.1× 输入。
-    "claude-opus-4-6":   {"input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50},
+    "claude-opus-4-6": {"input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50},
     # Fable 5（主版本报告生成）：$10/M 输入、$50/M 输出。cache-write 5m = 1.25×
     # 输入、cache-read = 0.1× 输入。注意 Fable 新分词器同样内容 token 数约 +30%，
     # 实际日报成本会高于这里按 token 数线性外推的直觉值。
-    "claude-fable-5":    {"input": 10.00, "output": 50.00, "cache_write_5m": 12.50, "cache_read": 1.00},
-    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cache_write_5m": 3.75, "cache_read": 0.30},
-    "claude-haiku-4-5":  {"input": 1.00, "output":  5.00, "cache_write_5m": 1.25, "cache_read": 0.10},
+    "claude-fable-5": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_write_5m": 12.50,
+        "cache_read": 1.00,
+    },
+    "claude-sonnet-4-6": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_write_5m": 3.75,
+        "cache_read": 0.30,
+    },
+    "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_write_5m": 1.25, "cache_read": 0.10},
     # DeepSeek 官方价（https://api-docs.deepseek.com/quick_start/pricing）：
     # 输入 cache-miss $0.435/M、cache-hit $0.0036/M、输出 $0.87/M。DeepSeek 缓存
     # 写入按普通输入计费（无单独 write 价），故 cache_write_5m 取 = input。
     # usage 归一在 cost_tracker.usage_to_dict：miss→input、hit→cache_read。
-    "deepseek-v4-pro":   {"input": 0.435, "output": 0.87, "cache_write_5m": 0.435, "cache_read": 0.003625},
+    "deepseek-v4-pro": {
+        "input": 0.435,
+        "output": 0.87,
+        "cache_write_5m": 0.435,
+        "cache_read": 0.003625,
+    },
 }
 
 # ── Alias / Privacy ─────────────────────────────────────────────────────────────
@@ -81,6 +97,7 @@ PUBLIC_REPO_URL = "git@github.com:LouYu2015/AI-chatgroup-daily.git"
 PUBLIC_REPO_DIR = DATA_DIR / "public_repo"
 
 # ── API Keys ────────────────────────────────────────────────────────────────────
+
 
 def load_env() -> None:
     dotenv.load_dotenv(PROJECT_ROOT / ".env")

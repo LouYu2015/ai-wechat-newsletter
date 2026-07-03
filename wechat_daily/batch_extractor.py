@@ -130,9 +130,7 @@ def snapshot_debug_text(user_content) -> str:
     """
     if isinstance(user_content, str):
         return user_content
-    return "".join(
-        b.get("text", "") for b in user_content if b.get("type") == "text"
-    )
+    return "".join(b.get("text", "") for b in user_content if b.get("type") == "text")
 
 
 def load_state(date_str: str) -> BatchState | None:
@@ -197,8 +195,9 @@ def raw_messages_fingerprint(messages: list) -> tuple[int, str]:
     h = hashlib.sha256()
     for m in messages:
         h.update(
-            f"{m.create_time}\x00{m.local_type}\x00{m.sender_wxid}\x00{m.content}\x1e"
-            .encode("utf-8")
+            f"{m.create_time}\x00{m.local_type}\x00{m.sender_wxid}\x00{m.content}\x1e".encode(
+                "utf-8"
+            )
         )
     return len(messages), h.hexdigest()
 
@@ -225,6 +224,7 @@ def make_client(api_key: str):
     The long wait happens in *our* poll loop, not in one HTTP request.
     """
     import anthropic
+
     return anthropic.Anthropic(
         api_key=api_key,
         timeout=httpx.Timeout(120.0, connect=15.0),
@@ -235,6 +235,7 @@ def _is_retryable(exc: Exception) -> bool:
     """Poll-loop error classification: network blips and server-side trouble
     retry forever (sleep/wake resilience); client errors surface immediately."""
     import anthropic
+
     if isinstance(exc, (httpx.TransportError, anthropic.APIConnectionError)):
         return True
     if isinstance(exc, anthropic.APIStatusError):
@@ -274,7 +275,9 @@ def submit_batch(
     state = BatchState(
         batch_id=batch.id,
         date=date_str,
-        submitted_at=datetime.datetime.now(datetime.timezone.utc).astimezone().isoformat(timespec="seconds"),
+        submitted_at=datetime.datetime.now(datetime.timezone.utc)
+        .astimezone()
+        .isoformat(timespec="seconds"),
         raw_msg_count=count,
         raw_msg_sha256=sha,
         requests=dict(requests),
@@ -317,9 +320,7 @@ def poll_until_ended(
     while True:
         elapsed = time.time() - start
         if elapsed > max_wait_s:
-            raise BatchTimeout(
-                f"批次 {batch_id} 轮询超过 {max_wait_s / 3600:.0f} 小时仍未结束"
-            )
+            raise BatchTimeout(f"批次 {batch_id} 轮询超过 {max_wait_s / 3600:.0f} 小时仍未结束")
         try:
             batch = client.messages.batches.retrieve(batch_id)
         except anthropic.NotFoundError as e:
@@ -401,7 +402,10 @@ def process_results(
             message = result.result.message
             try:
                 markdown = llm_extractor.finalize_response(
-                    date_str, debug_text, message, suffix=suffix,
+                    date_str,
+                    debug_text,
+                    message,
+                    suffix=suffix,
                 )
             except llm_extractor.ExtractionError as e:
                 outcome.errors[custom_id] = str(e)
@@ -464,7 +468,11 @@ def run_batch(
     batch = poll_until_ended(client, state.batch_id, status_cb=status_cb)
     results = fetch_results(client, batch.id)
     outcome, retryable = process_results(
-        date_str, debug_text, requests, results, usage_cb=usage_cb,
+        date_str,
+        debug_text,
+        requests,
+        results,
+        usage_cb=usage_cb,
     )
 
     if retryable:
@@ -491,7 +499,11 @@ def run_batch(
             cancel_batch(client, retry_batch.id)
             raise
         retry_outcome, still_failing = process_results(
-            date_str, debug_text, retryable, retry_results, usage_cb=usage_cb,
+            date_str,
+            debug_text,
+            retryable,
+            retry_results,
+            usage_cb=usage_cb,
         )
         outcome.reports.update(retry_outcome.reports)
         outcome.errors.update(retry_outcome.errors)

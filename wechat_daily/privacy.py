@@ -20,6 +20,7 @@ class LeakDetected(Exception):
 @dataclasses.dataclass
 class TokenMap:
     """Bidirectional mapping: wxid ↔ token (= default_anon)."""
+
     _fwd: dict[str, str]  # wxid → token
     _rev: dict[str, str]  # token → wxid
 
@@ -164,9 +165,9 @@ def _replace_names(
 
 
 _TOKENIZE_PROTECT_RE = re.compile(
-    r'\]\([^)]*\)'
-    r'|<https?://[^>\s]+>'
-    r'|https?://[^\s)]+'
+    r"\]\([^)]*\)"
+    r"|<https?://[^>\s]+>"
+    r"|https?://[^\s)]+"
 )
 
 
@@ -179,11 +180,11 @@ def _replace_unprotected(
     out: list[str] = []
     pos = 0
     for m in _TOKENIZE_PROTECT_RE.finditer(text):
-        out.append(pattern.sub(repl, text[pos:m.start()]))
+        out.append(pattern.sub(repl, text[pos : m.start()]))
         out.append(m.group(0))
         pos = m.end()
     out.append(pattern.sub(repl, text[pos:]))
-    return ''.join(out)
+    return "".join(out)
 
 
 def _tap_has_optout_party(
@@ -209,7 +210,7 @@ def _tap_has_optout_party(
         if nickname in remaining:
             if wxid in optout:
                 return True
-            remaining = remaining.replace(nickname, ' ')
+            remaining = remaining.replace(nickname, " ")
     return False
 
 
@@ -229,16 +230,16 @@ def tokenize_messages(
     # tokens. Pre-allocating for every contact (potentially thousands across
     # private chats and other groups) would exhaust the 1600-combo namespace
     # for no benefit, since unmentioned contacts never appear in the LLM input.
-    sender_wxids: set[str] = {
-        msg.sender_wxid for msg in messages if msg.sender_wxid
-    }
+    sender_wxids: set[str] = {msg.sender_wxid for msg in messages if msg.sender_wxid}
     mentioned_wxids = _scan_mentioned_wxids(messages, contact_map)
     all_wxids = sender_wxids | mentioned_wxids
     token_map = TokenMap.build(list(all_wxids), alias_db)
 
     # Precompute regex pattern + mapping; restrict to wxids we've tokenized.
     pattern, mapping = build_replace_state(
-        contact_map, token_map, only_wxids=all_wxids,
+        contact_map,
+        token_map,
+        only_wxids=all_wxids,
     )
 
     result: list[message_parser.Message] = []
@@ -252,21 +253,21 @@ def tokenize_messages(
             return
         first = optout_run[0]
         last = optout_run[-1]
-        ts_start = datetime.datetime.fromtimestamp(first.create_time).strftime('%H:%M')
+        ts_start = datetime.datetime.fromtimestamp(first.create_time).strftime("%H:%M")
         if len(optout_run) == 1:
             placeholder = message_parser.Message(
                 create_time=first.create_time,
                 local_type=first.local_type,
-                sender_wxid='',
+                sender_wxid="",
                 content=f"[{ts_start}] [此消息已隐藏]",
             )
         else:
-            ts_end = datetime.datetime.fromtimestamp(last.create_time).strftime('%H:%M')
+            ts_end = datetime.datetime.fromtimestamp(last.create_time).strftime("%H:%M")
             n = len(optout_run)
             placeholder = message_parser.Message(
                 create_time=first.create_time,
                 local_type=first.local_type,
-                sender_wxid='',
+                sender_wxid="",
                 content=f"[{ts_start}–{ts_end}] [某群友连续发言 {n} 条已隐藏]",
             )
         result.append(placeholder)
@@ -280,31 +281,41 @@ def tokenize_messages(
             flush_optout_run()
             content = msg.content
             if _tap_has_optout_party(content, contact_map, alias_db):
-                result.append(message_parser.Message(
-                    create_time=msg.create_time, local_type=msg.local_type,
-                    sender_wxid='', content='[某人做了个动作]',
-                ))
+                result.append(
+                    message_parser.Message(
+                        create_time=msg.create_time,
+                        local_type=msg.local_type,
+                        sender_wxid="",
+                        content="[某人做了个动作]",
+                    )
+                )
             else:
-                result.append(message_parser.Message(
-                    create_time=msg.create_time, local_type=msg.local_type,
-                    sender_wxid='',
-                    content=_replace_names(content, pattern, mapping),
-                ))
+                result.append(
+                    message_parser.Message(
+                        create_time=msg.create_time,
+                        local_type=msg.local_type,
+                        sender_wxid="",
+                        content=_replace_names(content, pattern, mapping),
+                    )
+                )
         elif msg.local_type == message_parser.MSG_SYSTEM:
             # ── System messages: tokenize names, pass through ───────────────
             flush_optout_run()
-            result.append(message_parser.Message(
-                create_time=msg.create_time, local_type=msg.local_type,
-                sender_wxid='',
-                content=_replace_names(msg.content, pattern, mapping),
-            ))
+            result.append(
+                message_parser.Message(
+                    create_time=msg.create_time,
+                    local_type=msg.local_type,
+                    sender_wxid="",
+                    content=_replace_names(msg.content, pattern, mapping),
+                )
+            )
         elif sender and alias_db.is_optout(sender):
             # ── Optout sender: accumulate run ────────────────────────────────
             optout_run.append(msg)
         else:
             flush_optout_run()
             # ── Normal message: tokenize sender + content ────────────────────
-            token = token_map.token(sender) if sender else ''
+            token = token_map.token(sender) if sender else ""
             content = _replace_names(msg.content, pattern, mapping)
 
             quoted = msg.quoted
@@ -312,8 +323,8 @@ def tokenize_messages(
                 if quoted.speaker_wxid and alias_db.is_optout(quoted.speaker_wxid):
                     quoted = message_parser.QuotedMessage(
                         speaker_wxid=quoted.speaker_wxid,
-                        speaker_name='',
-                        content='[引用内容已隐藏]',
+                        speaker_name="",
+                        content="[引用内容已隐藏]",
                         ref_type=quoted.ref_type,
                     )
                 else:
@@ -324,17 +335,19 @@ def tokenize_messages(
                         ref_type=quoted.ref_type,
                     )
 
-            result.append(message_parser.Message(
-                create_time=msg.create_time,
-                local_type=msg.local_type,
-                sender_wxid=token,
-                content=content,
-                quoted=quoted,
-                image_md5=msg.image_md5,
-                link=msg.link,
-                inline_links=msg.inline_links,
-                link_context=msg.link_context,
-            ))
+            result.append(
+                message_parser.Message(
+                    create_time=msg.create_time,
+                    local_type=msg.local_type,
+                    sender_wxid=token,
+                    content=content,
+                    quoted=quoted,
+                    image_md5=msg.image_md5,
+                    link=msg.link,
+                    inline_links=msg.inline_links,
+                    link_context=msg.link_context,
+                )
+            )
 
         if progress_cb:
             progress_cb(idx + 1, total)
@@ -344,7 +357,8 @@ def tokenize_messages(
 
 
 def _format_one_line(
-    msg: message_parser.Message, captions: dict[str, str] | None = None,
+    msg: message_parser.Message,
+    captions: dict[str, str] | None = None,
 ) -> str | None:
     """Render one Message as a chat-history line, or None to skip.
 
@@ -353,7 +367,7 @@ def _format_one_line(
     placeholder becomes ``[图片：<caption>]``. The Claude block path passes
     ``None`` so it keeps bare placeholders + real inline images.
     """
-    ts = datetime.datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
+    ts = datetime.datetime.fromtimestamp(msg.create_time).strftime("%H:%M")
 
     if msg.local_type == message_parser.MSG_TAP:
         return f"[{ts}] {msg.content}"
@@ -362,9 +376,9 @@ def _format_one_line(
 
     name = msg.sender_wxid  # already a token, or '' for placeholders
     is_placeholder = not name and (
-        msg.content == '[此消息已隐藏]'
-        or msg.content.startswith('[')
-        and ('已隐藏]' in msg.content)
+        msg.content == "[此消息已隐藏]"
+        or msg.content.startswith("[")
+        and ("已隐藏]" in msg.content)
     )
     if is_placeholder:
         return msg.content
@@ -375,7 +389,7 @@ def _format_one_line(
     if captions and msg.local_type == message_parser.MSG_IMAGE and msg.image_md5:
         cap = captions.get(msg.image_md5)
         if cap:
-            content = content.replace('[图片]', f'[图片：{cap}]')
+            content = content.replace("[图片]", f"[图片：{cap}]")
     line = f"[{ts}] {name}: {content}"
     if msg.link_context:
         for context in msg.link_context.splitlines():
@@ -387,7 +401,8 @@ def _format_one_line(
 
 
 def format_tokenized_messages(
-    messages: list[message_parser.Message], captions: dict[str, str] | None = None,
+    messages: list[message_parser.Message],
+    captions: dict[str, str] | None = None,
 ) -> str:
     """Format tokenized messages into plain-text chat history for LLM consumption.
 
@@ -395,11 +410,8 @@ def format_tokenized_messages(
     descriptions as ``[图片：…]`` for the text-only DeepSeek path. Omit it
     (the default) to keep bare ``[图片]`` placeholders.
     """
-    lines = [
-        line for msg in messages
-        if (line := _format_one_line(msg, captions)) is not None
-    ]
-    return '\n'.join(lines)
+    lines = [line for msg in messages if (line := _format_one_line(msg, captions)) is not None]
+    return "\n".join(lines)
 
 
 def format_tokenized_messages_blocks(
@@ -433,14 +445,16 @@ def format_tokenized_messages_blocks(
             if jpeg is not None:
                 flush_text()
                 data = base64.standard_b64encode(jpeg.read_bytes()).decode("ascii")
-                blocks.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": data,
-                    },
-                })
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": data,
+                        },
+                    }
+                )
 
     flush_text()
     return blocks
@@ -449,7 +463,7 @@ def format_tokenized_messages_blocks(
 # ── Leak detection ───────────────────────────────────────────────────────────────
 
 LEAK_MARK_OPEN = '<mark class="leak-warn">'
-LEAK_MARK_CLOSE = '</mark>'
+LEAK_MARK_CLOSE = "</mark>"
 
 
 def leak_check(
@@ -466,13 +480,13 @@ def leak_check(
         if anon in markdown:
             raise LeakDetected(f"Optout 用户默认匿名名泄漏: 「{anon}」")
 
-    if re.search(r'\bwxid_\w+', markdown):
+    if re.search(r"\bwxid_\w+", markdown):
         raise LeakDetected("检测到原始 wxid 字符串泄漏")
 
     # token⟨原文⟩ disambiguation markers must never reach output. The system
     # prompt instructs the model to pick one side; any leftover ⟨ or ⟩ is a
     # model failure, surface it rather than silently ship malformed text.
-    if '⟨' in markdown or '⟩' in markdown:
+    if "⟨" in markdown or "⟩" in markdown:
         raise LeakDetected("输出残留 ⟨…⟩ 同名消歧标记")
 
 
@@ -487,9 +501,9 @@ def leak_check(
 #   <https://…>       — autolinks; same URL-corruption concern as above.
 _PROTECT_RE = re.compile(
     r'<span class="mention">[^<]*</span>'
-    r'|\]\([^)]*\)'
-    r'|`[^`\n]+`'
-    r'|<https?://[^>\s]+>'
+    r"|\]\([^)]*\)"
+    r"|`[^`\n]+`"
+    r"|<https?://[^>\s]+>"
 )
 
 
@@ -541,8 +555,8 @@ def mark_leaks(markdown: str, contact_map: contacts.ContactMap) -> str:
     out: list[str] = []
     pos = 0
     for pm in _PROTECT_RE.finditer(markdown):
-        out.append(pattern.sub(wrap, markdown[pos:pm.start()]))
+        out.append(pattern.sub(wrap, markdown[pos : pm.start()]))
         out.append(pm.group(0))
         pos = pm.end()
     out.append(pattern.sub(wrap, markdown[pos:]))
-    return ''.join(out)
+    return "".join(out)

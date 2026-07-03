@@ -48,6 +48,7 @@ DB_RELS = ["message/message_0.db", "message/message_1.db"]
 
 # ── Time parsing ──────────────────────────────────────────────────────────────
 
+
 def parse_when(s: str, *, is_end: bool) -> int:
     """Parse 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM[:SS]' into a Unix timestamp.
 
@@ -70,6 +71,7 @@ def parse_when(s: str, *, is_end: bool) -> int:
 
 
 # ── DB query ──────────────────────────────────────────────────────────────────
+
 
 def fetch_messages(
     start_ts: int | None,
@@ -123,9 +125,10 @@ def fetch_messages(
             id2wxid = name2id_map(cur)
             cur.execute(sql, params)
             for ct, lt, mc, lid, sid, rsid in cur.fetchall():
-                raw_rows.append((ct, lt, mc, lid, sid, id2wxid.get(rsid, '')))
+                raw_rows.append((ct, lt, mc, lid, sid, id2wxid.get(rsid, "")))
         except Exception as e:
             import warnings
+
             warnings.warn(f"[query_chatlog] 跳过损坏数据库 {rel}: {e}")
             continue
 
@@ -147,6 +150,7 @@ def fetch_messages(
 
 
 # ── Keyword filtering ───────────────────────────────────────────────────────────
+
 
 def _matches(msg: Message, kw_lower: str) -> bool:
     if msg.content and kw_lower in msg.content.lower():
@@ -188,6 +192,7 @@ def select_messages(
 
 # ── Formatting ────────────────────────────────────────────────────────────────
 
+
 def _is_hidden_placeholder(msg: Message) -> bool:
     return (
         not msg.sender_wxid
@@ -211,9 +216,7 @@ def build_formatter(token_map, alias_db, decoder):
 
     toks = sorted(token_to_public, key=len, reverse=True)
     mention_re = (
-        re.compile("(" + "|".join(re.escape(t) for t in toks) + r")⟨([^⟩]*)⟩")
-        if toks
-        else None
+        re.compile("(" + "|".join(re.escape(t) for t in toks) + r")⟨([^⟩]*)⟩") if toks else None
     )
 
     def demark(text: str) -> str:
@@ -229,9 +232,7 @@ def build_formatter(token_map, alias_db, decoder):
         if not text:
             return text
         if mention_re:
-            text = mention_re.sub(
-                lambda m: f"{token_to_public[m.group(1)]}⟨{m.group(2)}⟩", text
-            )
+            text = mention_re.sub(lambda m: f"{token_to_public[m.group(1)]}⟨{m.group(2)}⟩", text)
         return text
 
     def fmt(msg: Message) -> str | None:
@@ -278,38 +279,49 @@ def build_formatter(token_map, alias_db, decoder):
 
 # ── Main ────────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="查询群聊记录（匿名化纯文本输出，可选解码图片）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--since", metavar="TIME",
+        "--since",
+        metavar="TIME",
         help="起始时间（含），YYYY-MM-DD 或 'YYYY-MM-DD HH:MM'；不填则不限",
     )
     parser.add_argument(
-        "--until", metavar="TIME",
+        "--until",
+        metavar="TIME",
         help="结束时间，YYYY-MM-DD（含当天）或 'YYYY-MM-DD HH:MM'；不填则不限",
     )
     parser.add_argument(
-        "--keyword", metavar="KW",
+        "--keyword",
+        metavar="KW",
         help="关键词，对消息正文/引用做大小写不敏感子串匹配",
     )
     parser.add_argument(
-        "--context", type=int, default=0, metavar="N",
+        "--context",
+        type=int,
+        default=0,
+        metavar="N",
         help="关键词命中时附带前后各 N 条消息（默认 0）",
     )
     parser.add_argument(
-        "--limit", type=int, default=20, metavar="N",
-        help="消息数量上限，取最新 N 条（默认 20；0 表示不限）。"
-             "有关键词时上限作用于命中消息数",
+        "--limit",
+        type=int,
+        default=20,
+        metavar="N",
+        help="消息数量上限，取最新 N 条（默认 20；0 表示不限）。有关键词时上限作用于命中消息数",
     )
     parser.add_argument(
-        "--decode-images", action="store_true",
+        "--decode-images",
+        action="store_true",
         help="解码图片到临时目录，并在文本中嵌入图片路径",
     )
     parser.add_argument(
-        "--image-dir", metavar="DIR",
+        "--image-dir",
+        metavar="DIR",
         help="图片输出目录（默认自动创建临时目录）；隐含 --decode-images",
     )
     args = parser.parse_args()
@@ -341,6 +353,7 @@ def main() -> None:
     image_dir: Path | None = None
     if args.decode_images or args.image_dir:
         from wechat_daily.image_decoder import ImageDecoder
+
         image_dir = (
             Path(args.image_dir).expanduser()
             if args.image_dir

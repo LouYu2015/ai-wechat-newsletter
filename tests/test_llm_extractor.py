@@ -88,7 +88,9 @@ def test_streams_text_into_markdown(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["intro\n\n", "## 行业新闻\n\n", "### x\nbody\n"])
 
-    report = llm_extractor.extract_report("2026-04-30", "chat history", api_key="fake", client=client)
+    report = llm_extractor.extract_report(
+        "2026-04-30", "chat history", api_key="fake", client=client
+    )
 
     assert isinstance(report, models.DailyReport)
     assert report.date == "2026-04-30"
@@ -115,6 +117,7 @@ def test_no_tool_use_in_request(monkeypatch, tmp_path):
 def test_default_model_is_opus(monkeypatch, tmp_path):
     """Without an explicit model, the main path uses the published model."""
     from wechat_daily import config
+
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
     llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
@@ -127,8 +130,12 @@ def test_model_and_debug_suffix_forwarded(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["intro\n\n### x\nbody\n"])
     llm_extractor.extract_report(
-        "2026-04-30", "chat", api_key="fake", client=client,
-        model="claude-fable-5", debug_suffix=".fable-5",
+        "2026-04-30",
+        "chat",
+        api_key="fake",
+        client=client,
+        model="claude-fable-5",
+        debug_suffix=".fable-5",
     )
     # Model reaches the API call.
     assert client.messages.calls[0]["model"] == "claude-fable-5"
@@ -187,7 +194,10 @@ def test_roster_prepended(monkeypatch, tmp_path):
 
     roster = "## 群友花名册\n- 沉稳的狐狸：鸭哥"
     llm_extractor.extract_report(
-        "2026-04-30", "chat history", api_key="fake", client=client,
+        "2026-04-30",
+        "chat history",
+        api_key="fake",
+        client=client,
         roster_text=roster,
     )
 
@@ -217,7 +227,10 @@ def test_progress_cb_monotonic(monkeypatch, tmp_path):
 
     calls: list[tuple[int, int]] = []
     llm_extractor.extract_report(
-        "2026-04-30", "chat", api_key="fake", client=client,
+        "2026-04-30",
+        "chat",
+        api_key="fake",
+        client=client,
         progress_cb=lambda received, attempt: calls.append((received, attempt)),
     )
 
@@ -247,7 +260,10 @@ def test_usage_cb_receives_response_usage_and_input_chars(monkeypatch, tmp_path)
     seen: list[tuple[object, int]] = []
 
     llm_extractor.extract_report(
-        "2026-04-30", "chat history", api_key="fake", client=client,
+        "2026-04-30",
+        "chat history",
+        api_key="fake",
+        client=client,
         usage_cb=lambda usage, chars: seen.append((usage, chars)),
     )
 
@@ -266,7 +282,10 @@ def test_usage_cb_not_called_on_failure(monkeypatch, tmp_path):
 
     with pytest.raises(llm_extractor.ExtractionError):
         llm_extractor.extract_report(
-            "2026-04-30", "chat", api_key="fake", client=client,
+            "2026-04-30",
+            "chat",
+            api_key="fake",
+            client=client,
             usage_cb=lambda usage, chars: seen.append((usage, chars)),
         )
     assert seen == []
@@ -286,7 +305,10 @@ def test_prior_reports_injected_before_chat_log(monkeypatch, tmp_path):
         ("2026-04-29", "## 工具\n\n### 另一话题\nbody\n"),
     ]
     llm_extractor.extract_report(
-        "2026-04-30", "today's chat", api_key="fake", client=client,
+        "2026-04-30",
+        "today's chat",
+        api_key="fake",
+        client=client,
         roster_text=roster,
         prior_reports=priors,
     )
@@ -310,7 +332,10 @@ def test_prior_reports_omitted_when_none(monkeypatch, tmp_path):
     client = _FakeClient(text_chunks=["x"])
 
     llm_extractor.extract_report(
-        "2026-04-30", "chat history", api_key="fake", client=client,
+        "2026-04-30",
+        "chat history",
+        api_key="fake",
+        client=client,
     )
 
     user_msg = client.messages.calls[0]["messages"][0]["content"]
@@ -324,7 +349,10 @@ def test_prior_reports_empty_list_omits_block(monkeypatch, tmp_path):
     client = _FakeClient(text_chunks=["x"])
 
     llm_extractor.extract_report(
-        "2026-04-30", "chat history", api_key="fake", client=client,
+        "2026-04-30",
+        "chat history",
+        api_key="fake",
+        client=client,
         prior_reports=[],
     )
 
@@ -340,7 +368,10 @@ def test_prior_reports_with_chat_blocks(monkeypatch, tmp_path):
     priors = [("2026-04-29", "yesterday's body")]
     chat_blocks = [{"type": "text", "text": "[14:00] alice: hi\n"}]
     llm_extractor.extract_report(
-        "2026-04-30", "ignored", api_key="fake", client=client,
+        "2026-04-30",
+        "ignored",
+        api_key="fake",
+        client=client,
         prior_reports=priors,
         chat_blocks=chat_blocks,
     )
@@ -379,7 +410,10 @@ def test_prior_report_titles_injected_before_prior_reports(monkeypatch, tmp_path
     ]
     priors = [("2026-04-29", "## 工具\n\n### 近话题\nbody")]
     llm_extractor.extract_report(
-        "2026-04-30", "today's chat", api_key="fake", client=client,
+        "2026-04-30",
+        "today's chat",
+        api_key="fake",
+        client=client,
         prior_reports=priors,
         prior_report_titles=titles,
     )
@@ -401,7 +435,10 @@ def test_prior_report_titles_alone_emitted(monkeypatch, tmp_path):
     client = _FakeClient(text_chunks=["x"])
 
     llm_extractor.extract_report(
-        "2026-04-30", "today's chat", api_key="fake", client=client,
+        "2026-04-30",
+        "today's chat",
+        api_key="fake",
+        client=client,
         prior_report_titles=[("2026-04-24", "## A\n### B")],
     )
 
@@ -427,7 +464,10 @@ def test_prior_report_titles_empty_list_omits_block(monkeypatch, tmp_path):
     client = _FakeClient(text_chunks=["x"])
 
     llm_extractor.extract_report(
-        "2026-04-30", "chat", api_key="fake", client=client,
+        "2026-04-30",
+        "chat",
+        api_key="fake",
+        client=client,
         prior_report_titles=[],
     )
 

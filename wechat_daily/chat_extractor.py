@@ -13,12 +13,14 @@ def _db_rels() -> list[str]:
     return ["message/message_0.db", "message/message_1.db"]
 
 
-def extract_messages(date_str: str, contact_map: contacts.ContactMap | None = None) -> list[message_parser.Message]:
+def extract_messages(
+    date_str: str, contact_map: contacts.ContactMap | None = None
+) -> list[message_parser.Message]:
     """Return raw Message objects for *date_str* (YYYY-MM-DD), window ±1h."""
     if contact_map is None:
         contact_map = contacts.ContactMap.from_db()
 
-    date = datetime.datetime.strptime(date_str, '%Y-%m-%d')
+    date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
     start_ts = int((date - datetime.timedelta(hours=1)).timestamp())
     end_ts = int((date + datetime.timedelta(days=1, hours=1)).timestamp())
 
@@ -45,11 +47,12 @@ def extract_messages(date_str: str, contact_map: contacts.ContactMap | None = No
                 (start_ts, end_ts),
             )
             for ct, lt, mc, lid, sid, rsid in cur.fetchall():
-                rows.append((ct, lt, mc, lid, sid, id2wxid.get(rsid, '')))
+                rows.append((ct, lt, mc, lid, sid, id2wxid.get(rsid, "")))
         except FileNotFoundError:
             continue
         except Exception as e:
             import warnings
+
             warnings.warn(f"[chat_extractor] 跳过损坏数据库 {rel}: {e}")
             continue
 
@@ -61,7 +64,11 @@ def extract_messages(date_str: str, contact_map: contacts.ContactMap | None = No
         msg = message_parser.parse_row(create_time, local_type, message_content, sender_wxid)
         if msg is None:
             continue
-        if msg.local_type == message_parser.MSG_IMAGE and local_id is not None and server_id is not None:
+        if (
+            msg.local_type == message_parser.MSG_IMAGE
+            and local_id is not None
+            and server_id is not None
+        ):
             image_keys.append((msg, local_id, server_id))
         messages.append(msg)
 
@@ -103,11 +110,13 @@ def _fill_image_md5s(image_keys: list[tuple[message_parser.Message, int, int]]) 
                 msg.image_md5 = md5.lower()
 
 
-def format_messages(messages: list[message_parser.Message], contact_map: contacts.ContactMap) -> str:
+def format_messages(
+    messages: list[message_parser.Message], contact_map: contacts.ContactMap
+) -> str:
     """Format a list of Message objects into chat history text (current behaviour)."""
     lines: list[str] = []
     for msg in messages:
-        ts = datetime.datetime.fromtimestamp(msg.create_time).strftime('%H:%M')
+        ts = datetime.datetime.fromtimestamp(msg.create_time).strftime("%H:%M")
 
         if msg.local_type == message_parser.MSG_TAP:
             lines.append(f"[{ts}] {msg.content}")
@@ -117,7 +126,7 @@ def format_messages(messages: list[message_parser.Message], contact_map: contact
             lines.append(f"[{ts}] [系统] {msg.content}")
             continue
 
-        name = contact_map.by_wxid(msg.sender_wxid) if msg.sender_wxid else ''
+        name = contact_map.by_wxid(msg.sender_wxid) if msg.sender_wxid else ""
         if not name:
             continue
 
@@ -126,7 +135,7 @@ def format_messages(messages: list[message_parser.Message], contact_map: contact
             line += f"\n  > 引用 {msg.quoted.content}"
         lines.append(line)
 
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def extract_chat_from_db(date_str: str) -> str:
@@ -141,7 +150,7 @@ def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
     existing: set[str] = set()
     if config.ARCHIVE_DIR.exists():
         for pdf in config.ARCHIVE_DIR.rglob("*.pdf"):
-            m = re.match(r'^(\d{4}-\d{2}-\d{2})\b', pdf.stem)
+            m = re.match(r"^(\d{4}-\d{2}-\d{2})\b", pdf.stem)
             if m:
                 existing.add(m.group(1))
 
@@ -172,13 +181,13 @@ def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
         last_complete = max(last_complete, (last_dt - datetime.timedelta(hours=1)).date())
 
     if not existing:
-        return [last_complete.strftime('%Y-%m-%d')]
+        return [last_complete.strftime("%Y-%m-%d")]
 
-    max_archive = datetime.datetime.strptime(max(existing), '%Y-%m-%d').date()
+    max_archive = datetime.datetime.strptime(max(existing), "%Y-%m-%d").date()
     missing: list[str] = []
     current = max_archive + datetime.timedelta(days=1)
     while current <= last_complete:
-        date_str = current.strftime('%Y-%m-%d')
+        date_str = current.strftime("%Y-%m-%d")
         if date_str not in existing:
             missing.append(date_str)
         current += datetime.timedelta(days=1)

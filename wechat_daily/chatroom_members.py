@@ -67,7 +67,7 @@ def _parse_member(sub: bytes) -> dict[int, object]:
         fnum, wt = tag >> 3, tag & 7
         if wt == 2:
             ln, i = _parse_varint(sub, i)
-            out[fnum] = sub[i:i + ln].decode("utf-8", "replace")
+            out[fnum] = sub[i : i + ln].decode("utf-8", "replace")
             i += ln
         elif wt == 0:
             v, i = _parse_varint(sub, i)
@@ -87,7 +87,7 @@ def _parse_member_buffer(buf: bytes) -> dict[str, str]:
         if tag != 0x0A:  # outer field 1 (length-delimited)
             break
         ln, i = _parse_varint(buf, i)
-        m = _parse_member(buf[i:i + ln])
+        m = _parse_member(buf[i : i + ln])
         i += ln
         wxid = m.get(1)
         disp = m.get(2)

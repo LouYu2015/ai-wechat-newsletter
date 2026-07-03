@@ -31,6 +31,7 @@ class ExtractionError(Exception):
 
 def _default_client(api_key: str):
     import anthropic
+
     return anthropic.Anthropic(
         api_key=api_key,
         timeout=httpx.Timeout(600.0, connect=30.0),
@@ -81,9 +82,7 @@ def build_extract_user_content(
             {"type": "text", "text": suffix},
         ]
         debug_text = (
-            prefix
-            + "".join(b["text"] for b in chat_blocks if b.get("type") == "text")
-            + suffix
+            prefix + "".join(b["text"] for b in chat_blocks if b.get("type") == "text") + suffix
         )
     else:
         user_content = prefix + tokenized_chat + suffix
@@ -121,13 +120,9 @@ def build_request_params(model: str, user_content: str | list[dict]) -> dict:
 def harvest_message_text(response) -> tuple[str, str]:
     """Extract ``(markdown, thinking_text)`` from a final Message's blocks."""
     blocks = getattr(response, "content", None) or []
-    markdown = "".join(
-        getattr(b, "text", "") for b in blocks
-        if getattr(b, "type", None) == "text"
-    )
+    markdown = "".join(getattr(b, "text", "") for b in blocks if getattr(b, "type", None) == "text")
     thinking = "".join(
-        getattr(b, "thinking", "") or "" for b in blocks
-        if getattr(b, "type", None) == "thinking"
+        getattr(b, "thinking", "") or "" for b in blocks if getattr(b, "type", None) == "thinking"
     )
     return markdown, thinking
 
@@ -266,9 +261,7 @@ def extract_report(
                         header_cb("body", level, m.group(2).strip(), attempt)
                 return remainder
 
-            with client.messages.stream(
-                **build_request_params(model, user_content)
-            ) as stream:
+            with client.messages.stream(**build_request_params(model, user_content)) as stream:
                 for event in stream:
                     etype = getattr(event, "type", None)
 
@@ -300,7 +293,9 @@ def extract_report(
                 response = stream.get_final_message()
 
             markdown = finalize_response(
-                date_str, debug_text, response,
+                date_str,
+                debug_text,
+                response,
                 markdown="".join(buffer_parts),
                 thinking_text="".join(thinking_parts),
                 suffix=debug_suffix,
@@ -322,8 +317,6 @@ def extract_report(
 
     _save_failure(date_str, debug_text, None, str(last_exc), suffix=debug_suffix)
     raise last_exc  # type: ignore[misc]
-
-
 
 
 def _save_extract(
@@ -349,8 +342,6 @@ def _save_extract(
         (d / f"extract{suffix}.thinking.md").write_text(thinking_text, encoding="utf-8")
 
 
-
-
 def _save_failure(
     date_str: str,
     user_content: str,
@@ -360,6 +351,7 @@ def _save_failure(
 ) -> None:
     """Persist failure details to ``debug/{date}/`` for post-mortem inspection."""
     import json
+
     d = config.debug_dir_for(date_str)
     d.mkdir(exist_ok=True, parents=True)
     path = d / f"extract{suffix}.FAILED.json"
@@ -369,5 +361,3 @@ def _save_failure(
         "input": user_content,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-

@@ -71,9 +71,7 @@ def migrate() -> None:
         "users": users,
         "alias_reservations": reservations,
     }
-    config.ALIASES_FILE.write_text(
-        json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    config.ALIASES_FILE.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[2/3] 已重新分配 {len(reassigned)} 个用户的 default_anon")
 
     # 简易 sanity check：所有新名唯一

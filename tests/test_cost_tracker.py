@@ -13,8 +13,11 @@ class _FakeUsage:
     """Anthropic SDK ``Usage`` duck-type."""
 
     def __init__(
-        self, input_tokens=0, output_tokens=0,
-        cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        self,
+        input_tokens=0,
+        output_tokens=0,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
     ) -> None:
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
@@ -45,6 +48,7 @@ def test_usage_to_dict_handles_none():
 
 def test_usage_to_dict_skips_missing_attrs():
     """A Usage object missing some attrs (e.g. cache_*) shouldn't crash."""
+
     class Sparse:
         input_tokens = 10
         output_tokens = 20
@@ -61,9 +65,13 @@ def test_usage_to_dict_skips_missing_attrs():
 
 def test_estimate_cost_opus_4_6_basic():
     # 1M input + 1M output = $5 + $25 = $30 for Opus 4.6
-    cost = cost_tracker.estimate_cost("claude-opus-4-6", {
-        "input_tokens": 1_000_000, "output_tokens": 1_000_000,
-    })
+    cost = cost_tracker.estimate_cost(
+        "claude-opus-4-6",
+        {
+            "input_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+        },
+    )
     assert cost == pytest.approx(30.0)
 
 
@@ -87,22 +95,34 @@ def test_estimate_cost_unknown_model_returns_zero():
 
 def test_estimate_cost_sonnet_and_haiku_rates():
     # Sonnet 4.6: 1M in + 1M out = $3 + $15 = $18
-    sonnet_cost = cost_tracker.estimate_cost("claude-sonnet-4-6", {
-        "input_tokens": 1_000_000, "output_tokens": 1_000_000,
-    })
+    sonnet_cost = cost_tracker.estimate_cost(
+        "claude-sonnet-4-6",
+        {
+            "input_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+        },
+    )
     assert sonnet_cost == pytest.approx(18.0)
     # Haiku 4.5: 1M in + 1M out = $1 + $5 = $6
-    haiku_cost = cost_tracker.estimate_cost("claude-haiku-4-5", {
-        "input_tokens": 1_000_000, "output_tokens": 1_000_000,
-    })
+    haiku_cost = cost_tracker.estimate_cost(
+        "claude-haiku-4-5",
+        {
+            "input_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+        },
+    )
     assert haiku_cost == pytest.approx(6.0)
 
 
 def test_estimate_cost_realistic_mixed_call():
     # Realistic Opus daily-report call: 45k in, 14k out, no caching
-    cost = cost_tracker.estimate_cost("claude-opus-4-6", {
-        "input_tokens": 45_000, "output_tokens": 14_000,
-    })
+    cost = cost_tracker.estimate_cost(
+        "claude-opus-4-6",
+        {
+            "input_tokens": 45_000,
+            "output_tokens": 14_000,
+        },
+    )
     # 45e3 * 5e-6 + 14e3 * 25e-6 = 0.225 + 0.350 = 0.575
     assert cost == pytest.approx(0.575)
 
@@ -128,8 +148,12 @@ def test_estimate_cost_batch_halves_everything():
 def test_log_call_appends_jsonl_record(tmp_path):
     usage = _FakeUsage(input_tokens=100, output_tokens=50)
     record = cost_tracker.log_call(
-        date="2026-05-18", stage="extract", model="claude-opus-4-6",
-        usage=usage, duration_s=12.3, input_chars=500,
+        date="2026-05-18",
+        stage="extract",
+        model="claude-opus-4-6",
+        usage=usage,
+        duration_s=12.3,
+        input_chars=500,
         debug_dir=tmp_path,
     )
     assert isinstance(record, cost_tracker.CostRecord)
@@ -152,12 +176,22 @@ def test_log_call_appends_jsonl_record(tmp_path):
 
 def test_log_call_appends_multiple_records(tmp_path):
     """Successive calls append; they don't overwrite."""
-    cost_tracker.log_call(date="2026-05-18", stage="extract", model="claude-opus-4-6",
-             usage=_FakeUsage(input_tokens=10), duration_s=1.0,
-             debug_dir=tmp_path)
-    cost_tracker.log_call(date="2026-05-18", stage="link", model="claude-sonnet-4-6",
-             usage=_FakeUsage(input_tokens=20), duration_s=2.0,
-             debug_dir=tmp_path)
+    cost_tracker.log_call(
+        date="2026-05-18",
+        stage="extract",
+        model="claude-opus-4-6",
+        usage=_FakeUsage(input_tokens=10),
+        duration_s=1.0,
+        debug_dir=tmp_path,
+    )
+    cost_tracker.log_call(
+        date="2026-05-18",
+        stage="link",
+        model="claude-sonnet-4-6",
+        usage=_FakeUsage(input_tokens=20),
+        duration_s=2.0,
+        debug_dir=tmp_path,
+    )
     lines = (tmp_path / "costs.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert json.loads(lines[0])["stage"] == "extract"
@@ -167,8 +201,13 @@ def test_log_call_appends_multiple_records(tmp_path):
 def test_log_call_batch_flag_halves_cost_and_lands_on_ledger(tmp_path):
     usage = _FakeUsage(input_tokens=100, output_tokens=50)
     record = cost_tracker.log_call(
-        date="2026-05-18", stage="extract", model="claude-opus-4-6",
-        usage=usage, duration_s=600.0, debug_dir=tmp_path, batch=True,
+        date="2026-05-18",
+        stage="extract",
+        model="claude-opus-4-6",
+        usage=usage,
+        duration_s=600.0,
+        debug_dir=tmp_path,
+        batch=True,
     )
     assert record.batch is True
     # Half of the standard 0.00175.
@@ -180,8 +219,12 @@ def test_log_call_batch_flag_halves_cost_and_lands_on_ledger(tmp_path):
 def test_log_call_handles_none_usage(tmp_path):
     """Stream that failed to surface usage: log a zero-cost zero-token row."""
     record = cost_tracker.log_call(
-        date="2026-05-18", stage="link", model="claude-sonnet-4-6",
-        usage=None, duration_s=1.5, debug_dir=tmp_path,
+        date="2026-05-18",
+        stage="link",
+        model="claude-sonnet-4-6",
+        usage=None,
+        duration_s=1.5,
+        debug_dir=tmp_path,
     )
     assert record.input_tokens == 0
     assert record.output_tokens == 0
@@ -191,8 +234,11 @@ def test_log_call_handles_none_usage(tmp_path):
 def test_log_call_creates_debug_dir_if_missing(tmp_path):
     target = tmp_path / "nested" / "debug"
     record = cost_tracker.log_call(
-        date="2026-05-18", stage="extract", model="claude-opus-4-6",
-        usage=_FakeUsage(input_tokens=1), duration_s=0.1,
+        date="2026-05-18",
+        stage="extract",
+        model="claude-opus-4-6",
+        usage=_FakeUsage(input_tokens=1),
+        duration_s=0.1,
         debug_dir=target,
     )
     assert record.input_tokens == 1
@@ -204,10 +250,18 @@ def test_log_call_creates_debug_dir_if_missing(tmp_path):
 
 def _record(**overrides) -> cost_tracker.CostRecord:
     defaults = dict(
-        ts="2026-05-18T10:00:00+08:00", date="2026-05-18", stage="extract",
-        model="claude-opus-4-6", input_tokens=1000, output_tokens=200,
-        cache_creation_input_tokens=0, cache_read_input_tokens=0,
-        duration_s=10.0, estimated_cost_usd=0.01, input_chars=2500, prices={},
+        ts="2026-05-18T10:00:00+08:00",
+        date="2026-05-18",
+        stage="extract",
+        model="claude-opus-4-6",
+        input_tokens=1000,
+        output_tokens=200,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
+        duration_s=10.0,
+        estimated_cost_usd=0.01,
+        input_chars=2500,
+        prices={},
     )
     defaults.update(overrides)
     return cost_tracker.CostRecord(**defaults)
@@ -216,12 +270,24 @@ def _record(**overrides) -> cost_tracker.CostRecord:
 def test_summarize_returns_renderable_with_groups():
     """Two calls with same (date, stage, model) collapse to one row."""
     records = [
-        _record(stage="link", model="claude-sonnet-4-6",
-                input_tokens=100, output_tokens=50,
-                estimated_cost_usd=0.001, duration_s=2.0, input_chars=500),
-        _record(stage="link", model="claude-sonnet-4-6",
-                input_tokens=200, output_tokens=80,
-                estimated_cost_usd=0.002, duration_s=3.0, input_chars=600),
+        _record(
+            stage="link",
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=50,
+            estimated_cost_usd=0.001,
+            duration_s=2.0,
+            input_chars=500,
+        ),
+        _record(
+            stage="link",
+            model="claude-sonnet-4-6",
+            input_tokens=200,
+            output_tokens=80,
+            estimated_cost_usd=0.002,
+            duration_s=3.0,
+            input_chars=600,
+        ),
     ]
     table = cost_tracker.summarize(records)
     # Aggregation is verified directly via _aggregate; here just confirm a
@@ -237,12 +303,30 @@ def test_summarize_empty_records_does_not_add_total_row():
 def test_aggregate_sums_per_group():
     """Multiple records grouped by (date, stage, model) sum correctly."""
     records = [
-        _record(stage="link", input_tokens=100, output_tokens=20,
-                input_chars=500, duration_s=2.0, estimated_cost_usd=0.001),
-        _record(stage="link", input_tokens=300, output_tokens=80,
-                input_chars=1500, duration_s=5.0, estimated_cost_usd=0.005),
-        _record(stage="extract", input_tokens=50000, output_tokens=10000,
-                input_chars=200000, duration_s=60.0, estimated_cost_usd=0.5),
+        _record(
+            stage="link",
+            input_tokens=100,
+            output_tokens=20,
+            input_chars=500,
+            duration_s=2.0,
+            estimated_cost_usd=0.001,
+        ),
+        _record(
+            stage="link",
+            input_tokens=300,
+            output_tokens=80,
+            input_chars=1500,
+            duration_s=5.0,
+            estimated_cost_usd=0.005,
+        ),
+        _record(
+            stage="extract",
+            input_tokens=50000,
+            output_tokens=10000,
+            input_chars=200000,
+            duration_s=60.0,
+            estimated_cost_usd=0.5,
+        ),
     ]
     rows = cost_tracker._aggregate(records)
     assert len(rows) == 2

@@ -1,11 +1,10 @@
 """Unit tests for privacy.py — 100% branch coverage target."""
 
-
 import pytest
 
 from wechat_daily import aliases, contacts, message_parser, privacy
 
-SALT = b'\x00' * 32
+SALT = b"\x00" * 32
 
 
 def _contact_map(data: dict) -> contacts.ContactMap:
@@ -17,28 +16,46 @@ def _alias_db(optout_wxids=(), alias_map=()) -> aliases.AliasDB:
     for wxid in ["wxid_alice", "wxid_bob", "wxid_carol"]:
         db.get_or_create_user(wxid)
     for wxid in optout_wxids:
-        db._users.setdefault(wxid, {
-            'default_anon': aliases.compute_default_anon(wxid, SALT),
-            'real_name_seen': wxid, 'public_alias': None,
-            'optout': False, 'last_command_ts': None, 'last_command': None,
-        })
-        db._users[wxid]['optout'] = True
+        db._users.setdefault(
+            wxid,
+            {
+                "default_anon": aliases.compute_default_anon(wxid, SALT),
+                "real_name_seen": wxid,
+                "public_alias": None,
+                "optout": False,
+                "last_command_ts": None,
+                "last_command": None,
+            },
+        )
+        db._users[wxid]["optout"] = True
     for wxid, alias in alias_map:
-        db._users.setdefault(wxid, {
-            'default_anon': aliases.compute_default_anon(wxid, SALT),
-            'real_name_seen': wxid, 'public_alias': None,
-            'optout': False, 'last_command_ts': None, 'last_command': None,
-        })
-        db._users[wxid]['public_alias'] = alias
+        db._users.setdefault(
+            wxid,
+            {
+                "default_anon": aliases.compute_default_anon(wxid, SALT),
+                "real_name_seen": wxid,
+                "public_alias": None,
+                "optout": False,
+                "last_command_ts": None,
+                "last_command": None,
+            },
+        )
+        db._users[wxid]["public_alias"] = alias
     return db
 
 
 def _msg(create_time, local_type, sender, content, quoted=None):
-    return message_parser.Message(create_time=create_time, local_type=local_type,
-                   sender_wxid=sender, content=content, quoted=quoted)
+    return message_parser.Message(
+        create_time=create_time,
+        local_type=local_type,
+        sender_wxid=sender,
+        content=content,
+        quoted=quoted,
+    )
 
 
 # ── TokenMap ────────────────────────────────────────────────────────────────────
+
 
 def test_token_map_build():
     db = _alias_db()
@@ -57,6 +74,7 @@ def test_token_map_unknown_wxid_falls_back():
 
 
 # ── Token-ization ───────────────────────────────────────────────────────────────
+
 
 def test_tokenize_replaces_sender():
     contacts = _contact_map({"wxid_alice": "Alice"})
@@ -121,6 +139,7 @@ def test_tokenize_longest_first():
 
 # ── Optout masking ──────────────────────────────────────────────────────────────
 
+
 def test_optout_single_message_hidden():
     contacts = _contact_map({"wxid_alice": "Alice"})
     db = _alias_db(optout_wxids=["wxid_alice"])
@@ -170,8 +189,9 @@ def test_optout_run_interrupted():
 def test_optout_quoted_content_hidden():
     contacts = _contact_map({"wxid_alice": "Alice", "wxid_bob": "Bob"})
     db = _alias_db(optout_wxids=["wxid_alice"])
-    quoted = message_parser.QuotedMessage(speaker_wxid="wxid_alice", speaker_name="Alice",
-                           content="Alice: Secret", ref_type="1")
+    quoted = message_parser.QuotedMessage(
+        speaker_wxid="wxid_alice", speaker_name="Alice", content="Alice: Secret", ref_type="1"
+    )
     messages = [_msg(1000, message_parser.MSG_QUOTE, "wxid_bob", "I agree", quoted=quoted)]
     result, _ = privacy.tokenize_messages(messages, contacts, db)
     assert result[0].quoted.content == "[引用内容已隐藏]"
@@ -216,6 +236,7 @@ def test_system_message_passes_through_non_names():
 
 # ── format_tokenized_messages ───────────────────────────────────────────────────
 
+
 def test_format_normal_message():
     contacts = _contact_map({"wxid_alice": "Alice"})
     db = _alias_db()
@@ -256,7 +277,8 @@ def test_format_optout_placeholder_no_double_timestamp():
     output = privacy.format_tokenized_messages(tokenized)
     # Only one timestamp bracket should appear (no double [HH:MM] [HH:MM])
     import re
-    timestamps = re.findall(r'\[\d{2}:\d{2}\]', output)
+
+    timestamps = re.findall(r"\[\d{2}:\d{2}\]", output)
     assert len(timestamps) == 1
 
 
@@ -295,8 +317,9 @@ def test_format_tap_message():
 def test_format_message_with_quote():
     contacts = _contact_map({"wxid_alice": "Alice", "wxid_bob": "Bob"})
     db = _alias_db()
-    quoted = message_parser.QuotedMessage(speaker_wxid="wxid_alice", speaker_name="Alice",
-                           content="Alice: hi", ref_type="1")
+    quoted = message_parser.QuotedMessage(
+        speaker_wxid="wxid_alice", speaker_name="Alice", content="Alice: hi", ref_type="1"
+    )
     messages = [_msg(1000, message_parser.MSG_QUOTE, "wxid_bob", "agreed", quoted=quoted)]
     tokenized, token_map = privacy.tokenize_messages(messages, contacts, db)
     output = privacy.format_tokenized_messages(tokenized)
@@ -307,12 +330,15 @@ def test_format_message_with_quote():
 
 def test_format_no_sender_no_placeholder_skipped():
     """Messages with empty sender and non-placeholder content are silently skipped."""
-    msg = message_parser.Message(create_time=1000, local_type=message_parser.MSG_TEXT, sender_wxid='', content='orphan')
+    msg = message_parser.Message(
+        create_time=1000, local_type=message_parser.MSG_TEXT, sender_wxid="", content="orphan"
+    )
     output = privacy.format_tokenized_messages([msg])
     assert "orphan" not in output
 
 
 # ── Leak detection (hard gates only) ───────────────────────────────────────────
+
 
 def test_leak_check_clean_no_hard_gate():
     db = _alias_db()
@@ -491,6 +517,7 @@ def test_replace_names_ascii_word_boundary():
 
 
 # ── TAP substring safety ───────────────────────────────────────────────────────
+
 
 def test_tap_substring_optout_not_false_positive():
     """Optout '李' must NOT trigger on 'Bob 拍了拍 李明' when '李明' is a different user.

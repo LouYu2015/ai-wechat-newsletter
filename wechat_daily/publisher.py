@@ -26,8 +26,9 @@ def ensure_repo() -> pathlib.Path:
     """
     if (config.PUBLIC_REPO_DIR / ".git").exists():
         result = _run(
-            ['git', 'remote', 'get-url', 'origin'],
-            cwd=config.PUBLIC_REPO_DIR, check=False,
+            ["git", "remote", "get-url", "origin"],
+            cwd=config.PUBLIC_REPO_DIR,
+            check=False,
         )
         if result.returncode == 0:
             actual = result.stdout.strip()
@@ -41,18 +42,18 @@ def ensure_repo() -> pathlib.Path:
         return config.PUBLIC_REPO_DIR
 
     config.PUBLIC_REPO_DIR.parent.mkdir(parents=True, exist_ok=True)
-    _run(['git', 'clone', config.PUBLIC_REPO_URL, str(config.PUBLIC_REPO_DIR)])
+    _run(["git", "clone", config.PUBLIC_REPO_URL, str(config.PUBLIC_REPO_DIR)])
     return config.PUBLIC_REPO_DIR
 
 
 def write_post(date_str: str, markdown: str) -> pathlib.Path:
     """Write the public Markdown post into _posts/YYYY/MM/."""
     repo = ensure_repo()
-    year, month, _ = date_str.split('-')
-    post_dir = repo / '_posts' / year / month
+    year, month, _ = date_str.split("-")
+    post_dir = repo / "_posts" / year / month
     post_dir.mkdir(parents=True, exist_ok=True)
     post_path = post_dir / f"{date_str}-daily.md"
-    post_path.write_text(markdown, encoding='utf-8')
+    post_path.write_text(markdown, encoding="utf-8")
     return post_path
 
 
@@ -62,16 +63,16 @@ def commit(date_str: str) -> bool:
     Returns True if a commit was made, False if nothing changed (idempotent).
     """
     repo = ensure_repo()
-    year, month, _ = date_str.split('-')
+    year, month, _ = date_str.split("-")
     rel = f"_posts/{year}/{month}/{date_str}-daily.md"
-    _run(['git', 'add', rel], cwd=repo)
+    _run(["git", "add", rel], cwd=repo)
 
     # Only commit if there are staged changes (handles re-runs on same date)
-    diff = _run(['git', 'diff', '--cached', '--quiet'], cwd=repo, check=False)
+    diff = _run(["git", "diff", "--cached", "--quiet"], cwd=repo, check=False)
     if diff.returncode == 0:
         return False  # nothing to commit
 
-    _run(['git', 'commit', '-m', f"Add daily report for {date_str}"], cwd=repo)
+    _run(["git", "commit", "-m", f"Add daily report for {date_str}"], cwd=repo)
     return True
 
 
@@ -85,20 +86,23 @@ def push_pending() -> bool:
 
     # Check whether origin/main exists (first push scenario)
     remote_check = _run(
-        ['git', 'rev-parse', '--verify', 'origin/main'],
-        cwd=repo, check=False,
+        ["git", "rev-parse", "--verify", "origin/main"],
+        cwd=repo,
+        check=False,
     )
     if remote_check.returncode != 0:
         # origin/main doesn't exist yet; check if we have any local commits
         head_check = _run(
-            ['git', 'rev-parse', '--verify', 'HEAD'],
-            cwd=repo, check=False,
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=repo,
+            check=False,
         )
         if head_check.returncode != 0:
             return False  # empty repo, nothing to push
         result = _run(
-            ['git', 'push', '-u', 'origin', 'main'],
-            cwd=repo, check=False,
+            ["git", "push", "-u", "origin", "main"],
+            cwd=repo,
+            check=False,
         )
         if result.returncode != 0:
             raise RuntimeError(f"git push 失败:\n{result.stderr}")
@@ -106,15 +110,16 @@ def push_pending() -> bool:
 
     # Check for unpushed commits
     count_result = _run(
-        ['git', 'rev-list', '--count', 'origin/main..HEAD'],
-        cwd=repo, check=False,
+        ["git", "rev-list", "--count", "origin/main..HEAD"],
+        cwd=repo,
+        check=False,
     )
     if count_result.returncode != 0:
         raise RuntimeError(f"无法检查待推送 commit:\n{count_result.stderr}")
-    if count_result.stdout.strip() == '0':
+    if count_result.stdout.strip() == "0":
         return False
 
-    push_result = _run(['git', 'push', 'origin', 'main'], cwd=repo, check=False)
+    push_result = _run(["git", "push", "origin", "main"], cwd=repo, check=False)
     if push_result.returncode != 0:
         raise RuntimeError(f"git push 失败:\n{push_result.stderr}")
     return True
@@ -123,6 +128,7 @@ def push_pending() -> bool:
 def preview(date_str: str, markdown: str, open_browser: bool = True) -> pathlib.Path:
     """Generate a standalone HTML preview. Opens browser unless open_browser=False."""
     import subprocess as sp
+
     debug_day = config.debug_dir_for(date_str)
     debug_day.mkdir(exist_ok=True, parents=True)
     html_body = md_lib.markdown(
@@ -147,7 +153,7 @@ def preview(date_str: str, markdown: str, open_browser: bool = True) -> pathlib.
 </body>
 </html>"""
     out = debug_day / "preview.html"
-    out.write_text(full_html, encoding='utf-8')
+    out.write_text(full_html, encoding="utf-8")
     if open_browser:
-        sp.run(['open', str(out)], check=False)
+        sp.run(["open", str(out)], check=False)
     return out
