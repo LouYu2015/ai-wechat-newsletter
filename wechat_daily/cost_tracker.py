@@ -73,8 +73,15 @@ def usage_to_dict(usage: Any) -> dict[str, int]:
 # ── Cost estimation ─────────────────────────────────────────────────────────────
 
 
-def estimate_cost(model: str, usage: dict[str, int]) -> float:
+# Anthropic Message Batches bill every token category at 50% of standard
+# prices (https://platform.claude.com/docs/en/build-with-claude/batch-processing).
+BATCH_DISCOUNT = 0.5
+
+
+def estimate_cost(model: str, usage: dict[str, int], *, batch: bool = False) -> float:
     """Estimate USD cost of one Anthropic call from usage counts.
+
+    *batch* applies the Batch API's 50% across-the-board discount.
 
     Unknown models return ``0.0`` — we'd rather under-report than crash a
     daily run. The CLI displays the raw model name so over-reporting wouldn't
@@ -87,12 +94,13 @@ def estimate_cost(model: str, usage: dict[str, int]) -> float:
     n_output = usage.get("output_tokens", 0)
     n_cache_write = usage.get("cache_creation_input_tokens", 0)
     n_cache_read = usage.get("cache_read_input_tokens", 0)
-    return (
+    cost = (
         n_input * prices["input"]
         + n_output * prices["output"]
         + n_cache_write * prices["cache_write_5m"]
         + n_cache_read * prices["cache_read"]
     ) / 1_000_000.0
+    return cost * BATCH_DISCOUNT if batch else cost
 
 
 # ── Record + log ────────────────────────────────────────────────────────────────
@@ -114,6 +122,7 @@ class CostRecord:
     estimated_cost_usd: float
     input_chars: int | None = None
     prices: dict[str, float] = field(default_factory=dict)
+    batch: bool = False
 
 
 def log_call(
@@ -125,17 +134,20 @@ def log_call(
     duration_s: float,
     input_chars: int | None = None,
     debug_dir: Path | None = None,
+    batch: bool = False,
 ) -> CostRecord:
     """Append one cost record to ``debug/costs.jsonl`` and return it.
 
     *date* — report date (``YYYY-MM-DD``) the call belongs to.
     *stage* — free-form tag (``extract`` / ``extract-compare`` / ``link``).
     *usage* — Anthropic SDK ``Usage`` object (or dict, or ``None``).
-    *duration_s* — wall-clock seconds the call took (caller measures).
+    *duration_s* — wall-clock seconds the call took (caller measures). For
+    batch calls this is submit→results wall time, not model compute time.
     *input_chars* — len of prompt text for tok/char tokenizer-efficiency ratio.
+    *batch* — Batch API call: 50% pricing, recorded on the ledger row.
     """
     u = usage_to_dict(usage)
-    cost = estimate_cost(model, u)
+    cost = estimate_cost(model, u, batch=batch)
     record = CostRecord(
         ts=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         date=date,
@@ -149,6 +161,7 @@ def log_call(
         estimated_cost_usd=round(cost, 6),
         input_chars=input_chars,
         prices=dict(MODEL_PRICES.get(model, {})),
+        batch=batch,
     )
     path = (debug_dir or DEBUG_DIR) / "costs.jsonl"
     path.parent.mkdir(exist_ok=True, parents=True)
@@ -165,13 +178,14 @@ def _aggregate(records: Iterable[CostRecord]) -> list[dict]:
 
     Returned in input order of first-seen group key.
     """
-    groups: dict[tuple[str, str, str], dict] = {}
-    order: list[tuple[str, str, str]] = []
+    groups: dict[tuple[str, str, str, bool], dict] = {}
+    order: list[tuple[str, str, str, bool]] = []
     for r in records:
-        key = (r.date, r.stage, r.model)
+        key = (r.date, r.stage, r.model, r.batch)
         if key not in groups:
             groups[key] = {
                 "date": r.date, "stage": r.stage, "model": r.model,
+                "batch": r.batch,
                 "input_tokens": 0, "output_tokens": 0,
                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
                 "duration_s": 0.0, "estimated_cost_usd": 0.0,
@@ -219,8 +233,9 @@ def summarize(records: Iterable[CostRecord]):
             tok_per_char = f"{g['input_tokens'] / g['input_chars']:.3f}"
         else:
             tok_per_char = "—"
+        model_label = f"{g['model']} [dim](batch 5折)[/dim]" if g.get("batch") else g["model"]
         table.add_row(
-            g["date"], g["stage"], g["model"],
+            g["date"], g["stage"], model_label,
             str(g["calls"]),
             f"{g['input_tokens']:,}",
             f"{g['output_tokens']:,}",
