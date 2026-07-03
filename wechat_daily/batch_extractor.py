@@ -94,6 +94,53 @@ def state_path(date_str: str) -> Path:
     return debug_dir_for(date_str) / "batch_state.json"
 
 
+def content_snapshot_path(date_str: str) -> Path:
+    """Full submitted ``user_content`` (block list incl. base64 images).
+
+    Written at submit time so a resumed run's RETRY round can replay input
+    byte-identical to the original submission — the text-only
+    ``batch_input.txt`` audit sidecar can't serve that purpose (images are
+    reduced to placeholders there). Large (base64 images), therefore deleted
+    by :func:`mark_consumed`; it only lives while the batch is in flight.
+    """
+    return debug_dir_for(date_str) / "batch_content.json"
+
+
+def save_content_snapshot(date_str: str, user_content) -> None:
+    path = content_snapshot_path(date_str)
+    path.parent.mkdir(exist_ok=True, parents=True)
+    path.write_text(
+        json.dumps(user_content, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+
+def load_content_snapshot(date_str: str):
+    """Return the submitted user_content, or ``None`` if absent/corrupt
+    (caller falls back to a local rebuild without link summaries)."""
+    path = content_snapshot_path(date_str)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def snapshot_debug_text(user_content) -> str:
+    """Reconstruct the flat debug text from a content snapshot.
+
+    Mirrors ``build_extract_user_content``'s *debug_text*: the concatenation
+    of all text blocks (images contribute nothing). Accepts the flat-string
+    form too, for completeness.
+    """
+    if isinstance(user_content, str):
+        return user_content
+    return "".join(
+        b.get("text", "") for b in user_content if b.get("type") == "text"
+    )
+
+
 def load_state(date_str: str) -> BatchState | None:
     """Load the date's batch state; ``None`` if absent.
 
@@ -129,8 +176,15 @@ def save_state(state: BatchState) -> None:
 
 
 def mark_consumed(state: BatchState) -> None:
+    """Flag the batch as consumed and drop the bulky content snapshot.
+
+    The snapshot exists only to make retries byte-identical while the batch
+    is in flight; once results are processed it's dead weight (megabytes of
+    base64 images). The text audit sidecar (``batch_input.txt``) stays.
+    """
     state.consumed = True
     save_state(state)
+    content_snapshot_path(state.date).unlink(missing_ok=True)
 
 
 # ── Raw-message fingerprint ─────────────────────────────────────────────────────
@@ -219,6 +273,9 @@ def submit_batch(
             for custom_id, model in requests.items()
         ]
     )
+    # Snapshot the exact submitted content so a resumed run's retry round can
+    # replay it byte-identical (deleted again by mark_consumed).
+    save_content_snapshot(date_str, user_content)
     count, sha = fingerprint
     state = BatchState(
         batch_id=batch.id,

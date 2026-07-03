@@ -183,6 +183,50 @@ def test_mark_consumed_persists(debug_dir):
     assert bx.load_state("2026-07-02").consumed is True
 
 
+# ── Content snapshot ───────────────────────────────────────────────────────────
+
+
+_BLOCKS = [
+    {"type": "text", "text": "<chat_log>\n[10:00] 沉稳的大象: 你好\n"},
+    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}},
+    {"type": "text", "text": "\n</chat_log>\n指令"},
+]
+
+
+def test_content_snapshot_roundtrip(debug_dir):
+    bx.save_content_snapshot("2026-07-02", _BLOCKS)
+    assert bx.load_content_snapshot("2026-07-02") == _BLOCKS
+
+
+def test_load_content_snapshot_missing_or_corrupt_returns_none(debug_dir):
+    assert bx.load_content_snapshot("2026-07-02") is None
+    path = bx.content_snapshot_path("2026-07-02")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{broken", encoding="utf-8")
+    assert bx.load_content_snapshot("2026-07-02") is None
+
+
+def test_snapshot_debug_text_matches_build_semantics():
+    # Text blocks concatenated, images contribute nothing — mirrors
+    # build_extract_user_content's debug_text.
+    assert bx.snapshot_debug_text(_BLOCKS) == (
+        "<chat_log>\n[10:00] 沉稳的大象: 你好\n\n</chat_log>\n指令"
+    )
+    assert bx.snapshot_debug_text("flat string") == "flat string"
+
+
+def test_submit_writes_snapshot_and_consume_removes_it(debug_dir):
+    client = _FakeClient()
+    state = bx.submit_batch(
+        client, "2026-07-02", {"main": "claude-opus-4-6"}, _BLOCKS, (1, "sha"),
+    )
+    assert bx.load_content_snapshot("2026-07-02") == _BLOCKS
+    bx.mark_consumed(state)
+    assert not bx.content_snapshot_path("2026-07-02").exists()
+    # State survives the cleanup.
+    assert bx.load_state("2026-07-02").consumed is True
+
+
 # ── Fingerprint ─────────────────────────────────────────────────────────────────
 
 
@@ -381,6 +425,8 @@ def test_run_batch_fresh_submit_success(debug_dir):
     state = bx.load_state("2026-07-02")
     assert state.consumed is True
     assert state.batch_id == "msgbatch_001"
+    # The bulky content snapshot is cleaned up once results are consumed.
+    assert not bx.content_snapshot_path("2026-07-02").exists()
 
 
 def test_run_batch_resume_uses_state_requests_and_skips_create(debug_dir):

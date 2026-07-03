@@ -794,36 +794,56 @@ def _run_batch_extraction(
         if cost_records is not None:
             cost_records.append(record)
 
+    # Resume: prefer the submit-time content snapshot — the retry round then
+    # replays the EXACT submitted input (images + link summaries included),
+    # and image re-decoding is skipped entirely. Falls back to a local
+    # rebuild (missing the nondeterministic link summaries) when the
+    # snapshot is gone — e.g. reusing an already-consumed batch.
+    user_content = None
+    if state is not None:
+        user_content = batch_extractor.load_content_snapshot(date_str)
+
     with tempfile.TemporaryDirectory(prefix="wechat_daily_imgs_") as td:
-        decoder = ImageDecoder(Path(td))
-        chat_blocks = format_tokenized_messages_blocks(tokenized, decoder)
-        n_images = sum(1 for m in tokenized if m.image_md5)
-        n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
-        if n_images:
-            n_missing = n_images - n_decoded
-            style = "yellow" if n_missing else "dim"
-            note = f"（{n_missing} 张无法解码，已降级为 [图片] 占位）" if n_missing else ""
-            console.print(f"[{style}]图片解码 {n_decoded}/{n_images} 张成功{note}[/{style}]")
-
-        user_content, debug_text = build_extract_user_content(
-            date_str=date_str,
-            tokenized_chat=chat_history,
-            roster_text=roster_text or None,
-            chat_blocks=chat_blocks,
-            prior_reports=prior_reports or None,
-            prior_report_titles=prior_report_titles or None,
-        )
-
-        if state is None:
-            # Snapshot the exact submitted input so a resumed run's debug
-            # sidecars stay byte-faithful to what the model actually saw.
-            input_snapshot.write_text(debug_text, encoding="utf-8")
-        elif input_snapshot.exists():
-            debug_text = input_snapshot.read_text(encoding="utf-8")
-        else:
-            console.print(
-                "[dim]未找到提交时的输入快照，debug sidecar 将缺少链接摘要（不影响结果）。[/dim]"
+        if user_content is not None:
+            debug_text = (
+                input_snapshot.read_text(encoding="utf-8")
+                if input_snapshot.exists()
+                else batch_extractor.snapshot_debug_text(user_content)
             )
+            console.print(
+                "[dim]已加载提交时的输入快照（含图片与链接摘要），重试轮与原输入字节一致。[/dim]"
+            )
+        else:
+            decoder = ImageDecoder(Path(td))
+            chat_blocks = format_tokenized_messages_blocks(tokenized, decoder)
+            n_images = sum(1 for m in tokenized if m.image_md5)
+            n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
+            if n_images:
+                n_missing = n_images - n_decoded
+                style = "yellow" if n_missing else "dim"
+                note = f"（{n_missing} 张无法解码，已降级为 [图片] 占位）" if n_missing else ""
+                console.print(f"[{style}]图片解码 {n_decoded}/{n_images} 张成功{note}[/{style}]")
+
+            user_content, debug_text = build_extract_user_content(
+                date_str=date_str,
+                tokenized_chat=chat_history,
+                roster_text=roster_text or None,
+                chat_blocks=chat_blocks,
+                prior_reports=prior_reports or None,
+                prior_report_titles=prior_report_titles or None,
+            )
+
+            if state is None:
+                # Human-readable audit copy of the submitted input; the
+                # machine-replayable block-list snapshot is written by
+                # submit_batch (and cleaned up on consumption).
+                input_snapshot.write_text(debug_text, encoding="utf-8")
+            elif input_snapshot.exists():
+                debug_text = input_snapshot.read_text(encoding="utf-8")
+            else:
+                console.print(
+                    "[dim]未找到提交时的输入快照，重试轮输入与 debug sidecar 将缺少链接摘要（不影响已生成结果）。[/dim]"
+                )
 
         progress = Progress(
             SpinnerColumn(),
