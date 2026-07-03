@@ -170,11 +170,13 @@ def debug_suffix_for(custom_id: str, model: str) -> str:
 # ── Client plumbing ─────────────────────────────────────────────────────────────
 
 
-def _default_client(api_key: str):
+def make_client(api_key: str):
+    """Anthropic client tuned for batch control-plane calls.
+
+    Individual calls (create/retrieve/results) are small; 120s is generous.
+    The long wait happens in *our* poll loop, not in one HTTP request.
+    """
     import anthropic
-    # Individual control-plane calls (create/retrieve/results) are small;
-    # 120s is generous. The long wait happens in *our* poll loop, not in one
-    # HTTP request.
     return anthropic.Anthropic(
         api_key=api_key,
         timeout=httpx.Timeout(120.0, connect=15.0),

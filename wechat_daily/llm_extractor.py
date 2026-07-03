@@ -39,7 +39,7 @@ def _default_client(api_key: str):
     )
 
 
-def _build_extract_user_content(
+def build_extract_user_content(
     *,
     date_str: str,
     tokenized_chat: str,
@@ -237,7 +237,7 @@ def extract_report(
     if client is None:
         client = _default_client(api_key)
 
-    user_content, debug_text = _build_extract_user_content(
+    user_content, debug_text = build_extract_user_content(
         date_str=date_str,
         tokenized_chat=tokenized_chat,
         roster_text=roster_text,
