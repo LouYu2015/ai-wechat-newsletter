@@ -545,7 +545,7 @@ def summarize_text(
     else:
         prompt = _SUMMARY_PROMPT_NO_CONTEXT.format(webpage_block=webpage_block)
 
-    # DeepSeek backend (current AB-test config): no Anthropic SDK, thinking off
+    # DeepSeek backend (current AB-test config): no Anthropic SDK, thinking on
     # for summaries. The Anthropic path below is kept as a fallback in case
     # LINK_SUMMARY_MODEL is pointed back at a Claude model.
     if config.LINK_SUMMARY_MODEL.startswith("deepseek") and client is None:
@@ -590,7 +590,7 @@ def _summarize_deepseek(
     prompt: str,
     delta_cb: Callable[[str], None] | None,
 ) -> tuple[str, object, float, int]:
-    """Link-summary via DeepSeek (OpenAI-compatible), thinking disabled.
+    """Link-summary via DeepSeek (OpenAI-compatible), thinking enabled.
 
     Same return contract as :func:`summarize_text`. Raises ``RuntimeError``
     if the key is missing — :func:`enrich_link_messages` catches summary
@@ -610,7 +610,7 @@ def _summarize_deepseek(
         model=config.LINK_SUMMARY_MODEL,
         system="你是一个网页内容摘要器。直接输出摘要正文。",
         user=prompt,
-        thinking=False,
+        thinking=True,
         max_tokens=2500,
         content_cb=delta_cb,
     )

@@ -8,8 +8,8 @@ and exposes the pieces the pipeline needs:
 - separate ``content`` vs ``reasoning_content`` deltas. V4 Pro is a reasoning
   model: its chain-of-thought streams in ``reasoning_content`` and the final
   answer in ``content`` (see https://api-docs.deepseek.com/guides/thinking_mode).
-- a ``thinking`` on/off toggle — link summaries run with it off (cheaper,
-  faster), report generation with it on.
+- a ``thinking`` on/off toggle — both link summaries and report generation
+  run with it on.
 - usage in DeepSeek's native shape (``prompt_tokens`` / ``completion_tokens`` /
   ``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens``); cost_tracker
   normalizes it to the Anthropic-shaped fields.

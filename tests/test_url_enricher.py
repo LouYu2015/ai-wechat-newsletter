@@ -618,7 +618,7 @@ def test_enrich_appends_multiple_inline_link_contexts():
 
 def test_enrich_routes_to_deepseek_when_no_client(monkeypatch):
     """With LINK_SUMMARY_MODEL=deepseek-* and no injected client, summaries go
-    through deepseek_client.stream_chat (thinking disabled), not Anthropic."""
+    through deepseek_client.stream_chat (thinking enabled), not Anthropic."""
     import wechat_daily.config as cfg
 
     monkeypatch.setattr(cfg, "LINK_SUMMARY_MODEL", "deepseek-v4-pro")
@@ -646,4 +646,4 @@ def test_enrich_routes_to_deepseek_when_no_client(monkeypatch):
     assert msg.link_context == "DS 摘要"
     assert len(calls) == 1
     assert calls[0]["model"] == "deepseek-v4-pro"
-    assert calls[0]["thinking"] is False
+    assert calls[0]["thinking"] is True
