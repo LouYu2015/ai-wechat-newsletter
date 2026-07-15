@@ -27,6 +27,7 @@ import functools
 import pathlib
 import re
 import sys
+import urllib.parse
 from typing import TYPE_CHECKING, Callable
 
 from wechat_daily import config, models, privacy
@@ -262,6 +263,119 @@ def _drop_empty_h2(lines: list[str]) -> list[str]:
 
 def _collapse_blanks(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip("\n") + "\n"
+
+
+# ── URL tracking-param cleaning ─────────────────────────────────────────────────
+
+# Per-host tracking params to strip from link URLs. Keys not listed are kept
+# verbatim ("其他参数一律保留，不确定的不删"). For 公众号 links the reading
+# params __biz/mid/idx/sn/chksm are absent from every strip set on purpose —
+# dropping them makes the link un-openable.
+_UTM_PREFIX = "utm_"
+
+_WEIXIN_STRIP = frozenset(
+    {"mpshare", "scene", "srcid", "sharer_shareinfo", "sharer_shareinfo_first"}
+)
+_BILI_STRIP = frozenset(
+    {
+        "share_source",
+        "vd_source",
+        "share_medium",
+        "share_plat",
+        "share_session_id",
+        "share_tag",
+        "spm_id_from",
+    }
+)
+# 知乎 分享尾巴形如 #showWechatShareTip?utm_source=…&wechatShare=1&s_r=0：utm_*
+# 已由通用规则清掉，另补 wechatShare / s_r 这两个明确的微信分享跟踪键。
+_ZHIHU_STRIP = frozenset({"wechatShare", "s_r"})
+
+# Match an http(s) URL (bare or inside a markdown link's ``(…)``). Boundaries
+# stop at whitespace, markdown/HTML delimiters, and common CJK closing
+# punctuation so a trailing 。」）等 in prose isn't swallowed into the URL.
+_URL_RE = re.compile(r"https?://[^\s)>\]<」），。、；！？“”]+")
+# Inline code span — protected so URLs inside `code` are left untouched.
+_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+_URL_OR_CODE_RE = re.compile(rf"(?P<code>{_INLINE_CODE_RE.pattern})|(?P<url>{_URL_RE.pattern})")
+# Opening/closing line of a fenced code block (``` or ~~~).
+_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+
+
+def _host_dropper(netloc: str) -> Callable[[str], bool]:
+    """Return a predicate ``key → should_drop`` tuned to the URL's host."""
+    host = netloc.lower()
+
+    def drop(key: str) -> bool:
+        if key.startswith(_UTM_PREFIX):
+            return True
+        if host.endswith("weixin.qq.com"):
+            return key in _WEIXIN_STRIP
+        if host.endswith("bilibili.com") or host.endswith("b23.tv"):
+            return key in _BILI_STRIP
+        if host.endswith("zhihu.com"):
+            return key in _ZHIHU_STRIP
+        return False
+
+    return drop
+
+
+def _strip_keys_from_query(query: str, drop: Callable[[str], bool]) -> str:
+    """Drop ``key=value`` pairs whose key matches *drop*, preserving order/format."""
+    if not query:
+        return query
+    kept = [p for p in query.split("&") if not drop(p.split("=", 1)[0])]
+    return "&".join(kept)
+
+
+def _clean_url(url: str) -> str:
+    """Strip tracking params from a single URL; keep everything else intact.
+
+    Handles the well-formed ``?a&b#frag`` shape and the malformed 知乎 form
+    where the query rides *inside* the fragment
+    (``…/p/123#showWechatShareTip?utm_source=…``). A query left empty after
+    stripping loses its now-dangling ``?``.
+    """
+    parts = urllib.parse.urlsplit(url)
+    drop = _host_dropper(parts.netloc)
+
+    query = _strip_keys_from_query(parts.query, drop)
+
+    fragment = parts.fragment
+    if "?" in fragment:
+        fbase, fquery = fragment.split("?", 1)
+        fquery = _strip_keys_from_query(fquery, drop)
+        fragment = f"{fbase}?{fquery}" if fquery else fbase
+
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, query, fragment))
+
+
+def _clean_line_urls(line: str) -> str:
+    """Clean every URL on *line* while leaving inline-code spans untouched."""
+
+    def sub(m: re.Match[str]) -> str:
+        if m.group("code") is not None:
+            return m.group(0)
+        return _clean_url(m.group("url"))
+
+    return _URL_OR_CODE_RE.sub(sub, line)
+
+
+def _clean_tracking_params(markdown: str) -> str:
+    """Strip URL tracking params from every link in the body.
+
+    Covers markdown-link URLs and bare URLs alike, skipping fenced code blocks
+    and inline code spans so example snippets stay verbatim.
+    """
+    out: list[str] = []
+    in_fence = False
+    for line in _split_lines(markdown):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        out.append(line if in_fence else _clean_line_urls(line))
+    return "\n".join(out)
 
 
 # ── Cross-day reference expansion ───────────────────────────────────────────────
@@ -542,6 +656,7 @@ def render_group(
     """Render the internal version: real names, 🔒 markers, [TOC], command log."""
 
     body, tags = _strip_trailing_tags(report.markdown)
+    body = _clean_tracking_params(body)
     body = _annotate_hidden_for_group(body)
     body = _expand_refs_group(body)
     body = _insert_toc(body)
@@ -630,6 +745,7 @@ def render_public(
     """Render the public version: anonymized, hidden sections fully removed."""
 
     body, tags = _strip_trailing_tags(report.markdown)
+    body = _clean_tracking_params(body)
     body = _strip_hidden_for_public(body)
     body = _expand_refs_public(body)
     body = _validate_final_refs_public(body)

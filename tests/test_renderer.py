@@ -701,3 +701,113 @@ def test_render_public_expands_ref_to_link_when_post_exists(monkeypatch, tmp_pat
     md = "intro 昨天 [[ref:2026-05-09|某话题]] 已经写过\n\n## A\n\n### x\nbody\n"
     out = renderer.render_public(_wrap(md), _make_db())
     assert "[「某话题」]({{ '/daily/2026/05/09/daily/#某话题' | relative_url }})" in out
+
+
+# ── URL tracking-param cleaning ────────────────────────────────────────────────
+
+
+def test_clean_url_weixin_strips_share_tail_keeps_reading_params():
+    """公众号 link: drop mpshare/scene/srcid/sharer_shareinfo*, keep __biz/mid/idx/sn/chksm."""
+    url = (
+        "https://mp.weixin.qq.com/s?__biz=MzIyMzA5NjEyMA==&mid=2647684233&idx=1"
+        "&sn=391c84ef158f723c83108c29d8e2d666"
+        "&chksm=f1ad35033b666b99941064ecaea284a87daf08c949c9f1e81de8fe49531abae8"
+        "&mpshare=1&scene=1&srcid=0713RGLlyOjOmY2kzYhgqbAa"
+        "&sharer_shareinfo=73acbae4a8efb9178cc64ea88d52a5df"
+        "&sharer_shareinfo_first=73acbae4a8efb9178cc64ea88d52a5df#rd"
+    )
+    out = renderer._clean_url(url)
+    assert out == (
+        "https://mp.weixin.qq.com/s?__biz=MzIyMzA5NjEyMA==&mid=2647684233&idx=1"
+        "&sn=391c84ef158f723c83108c29d8e2d666"
+        "&chksm=f1ad35033b666b99941064ecaea284a87daf08c949c9f1e81de8fe49531abae8#rd"
+    )
+    for gone in ("mpshare", "scene=", "srcid", "sharer_shareinfo"):
+        assert gone not in out
+    for kept in ("__biz", "mid=", "idx=", "sn=", "chksm="):
+        assert kept in out
+
+
+def test_clean_url_weixin_keeps_unknown_param():
+    """Params not on the strip list survive (e.g. xtrack); scene still goes."""
+    url = "https://mp.weixin.qq.com/s?__biz=A&sn=B&scene=0&xtrack=1#rd"
+    out = renderer._clean_url(url)
+    assert out == "https://mp.weixin.qq.com/s?__biz=A&sn=B&xtrack=1#rd"
+
+
+def test_clean_url_generic_utm_stripped_on_any_host():
+    url = "https://example.com/a?x=1&utm_source=news&utm_medium=email&y=2"
+    assert renderer._clean_url(url) == "https://example.com/a?x=1&y=2"
+
+
+def test_clean_url_zhihu_malformed_fragment_query():
+    """知乎 share tail: query rides inside the fragment after '#'."""
+    url = (
+        "https://zhuanlan.zhihu.com/p/2059827535890878759#showWechatShareTip"
+        "?utm_source=wechat_session&utm_medium=social&wechatShare=1&s_r=0"
+    )
+    out = renderer._clean_url(url)
+    assert out == "https://zhuanlan.zhihu.com/p/2059827535890878759#showWechatShareTip"
+
+
+def test_clean_url_bilibili_strips_share_params():
+    url = (
+        "https://www.bilibili.com/video/BV1UoNn6pExS/"
+        "?share_source=copy_web&vd_source=5844e923d38f06c074049013c344b1a7"
+    )
+    assert renderer._clean_url(url) == "https://www.bilibili.com/video/BV1UoNn6pExS/"
+
+
+def test_clean_url_empty_query_drops_dangling_question_mark():
+    url = "https://www.bilibili.com/video/BV1x/?share_source=copy_web"
+    out = renderer._clean_url(url)
+    assert "?" not in out
+    assert out == "https://www.bilibili.com/video/BV1x/"
+
+
+def test_clean_url_no_tracking_unchanged():
+    url = "https://mp.weixin.qq.com/s/2GhWYcLU1U4QrNHB1j2VSw"
+    assert renderer._clean_url(url) == url
+
+
+def test_clean_tracking_params_in_markdown_link():
+    md = (
+        "分享[《标题》](https://mp.weixin.qq.com/s?__biz=A&sn=B&mpshare=1&scene=1"
+        "&srcid=0713x&sharer_shareinfo=abc#rd)，配评。"
+    )
+    out = renderer._clean_tracking_params(md)
+    assert "[《标题》](https://mp.weixin.qq.com/s?__biz=A&sn=B#rd)" in out
+    assert "mpshare" not in out
+    assert "sharer_shareinfo" not in out
+
+
+def test_clean_tracking_params_skips_fenced_code():
+    md = "```\ncurl 'https://mp.weixin.qq.com/s?__biz=A&mpshare=1&scene=1'\n```\n"
+    out = renderer._clean_tracking_params(md)
+    assert "mpshare=1&scene=1" in out  # untouched inside the fence
+
+
+def test_clean_tracking_params_skips_inline_code():
+    md = "看 `https://x.com/a?utm_source=z` 这个例子"
+    out = renderer._clean_tracking_params(md)
+    assert "utm_source=z" in out  # inline code preserved verbatim
+
+
+def test_render_group_cleans_tracking_params():
+    url = "https://mp.weixin.qq.com/s?__biz=A&sn=B&mpshare=1&scene=1&sharer_shareinfo=abc#rd"
+    md = f"## A\n\n### x\n分享[《标题》]({url})。\n"
+    out = renderer.render_group(_wrap(md), _make_db(), _make_contacts(), command_log=[])
+    assert "mpshare" not in out
+    assert "sharer_shareinfo" not in out
+    assert "__biz=A&sn=B#rd" in out
+
+
+def test_render_public_cleans_tracking_params():
+    url = (
+        "https://zhuanlan.zhihu.com/p/123#showWechatShareTip"
+        "?utm_source=wechat_session&utm_medium=social"
+    )
+    md = f"## A\n\n### x\n知乎长文[《标题》]({url})。\n"
+    out = renderer.render_public(_wrap(md), _make_db())
+    assert "utm_source" not in out
+    assert "[《标题》](https://zhuanlan.zhihu.com/p/123#showWechatShareTip)" in out
