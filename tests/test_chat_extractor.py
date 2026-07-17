@@ -128,3 +128,159 @@ def test_find_missing_allow_incomplete_includes_today(
     out = mod.find_missing_dates(allow_incomplete=True)
     assert "2026-04-16" in out
     assert "2026-04-17" in out
+
+
+# ── extract_messages window start (overlap min + coverage anchor) ───────────────
+
+
+def _ts(y, mo, d, h=0, mi=0) -> int:
+    """Local-timezone unix ts (never hard-code raw seconds)."""
+    return int(datetime.datetime(y, mo, d, h, mi).timestamp())
+
+
+def _make_full_db(tmp_path, entries: list[tuple[int, str]]) -> sqlite3.Connection:
+    """Synth message db with the columns extract_messages selects + Name2Id.
+
+    *entries* is ``[(create_time, text), ...]`` — all authored by a single
+    sender (rowid 1 → wxid_alice) as plain MSG_TEXT rows.
+    """
+    conn = sqlite3.connect(str(tmp_path / "full.db"))
+    conn.execute(
+        f"CREATE TABLE {config.GROUP_TABLE} ("
+        f"  create_time INTEGER, local_type INTEGER, message_content BLOB,"
+        f"  local_id INTEGER, server_id INTEGER, real_sender_id INTEGER"
+        f")"
+    )
+    conn.execute("CREATE TABLE Name2Id (user_name TEXT)")
+    conn.execute("INSERT INTO Name2Id (rowid, user_name) VALUES (1, 'wxid_alice')")
+    for i, (ct, text) in enumerate(entries):
+        conn.execute(
+            f"INSERT INTO {config.GROUP_TABLE} VALUES (?, 1, ?, ?, ?, 1)",
+            (ct, f"wxid_alice:\n{text}".encode(), i, i),
+        )
+    conn.commit()
+    return conn
+
+
+@pytest.fixture
+def window_env(monkeypatch, tmp_path):
+    """extract_messages against a synth db, DEBUG_DIR isolated for coverage."""
+    import wechat_daily.chat_extractor as mod
+    from wechat_daily import contacts
+
+    monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
+    contact_map = contacts.ContactMap.from_dict({"wxid_alice": "Alice"})
+
+    def _install(entries):
+        conn = _make_full_db(tmp_path, entries)
+        monkeypatch.setattr(
+            "wechat_daily.wechat_db.get_conn",
+            lambda rel: conn if "message_0" in rel else (_ for _ in ()).throw(FileNotFoundError()),
+        )
+        return conn
+
+    return mod, contact_map, _install
+
+
+def _times(messages) -> set[int]:
+    return {m.create_time for m in messages}
+
+
+def test_window_dense_evening_keeps_minus_1h_start(window_env):
+    """密集夜晚：倒数第 20 条落在 23:00 之后，min 生效，起点仍是 −1h（23:00）。"""
+    mod, cm, install = window_env
+    # 30 messages 23:00–23:29 (dense) + one at 22:00 (before the −1h boundary).
+    entries = [(_ts(2026, 3, 9, 23, m), f"m{m}") for m in range(30)]
+    entries.append((_ts(2026, 3, 9, 22, 0), "early"))
+    entries.append((_ts(2026, 3, 10, 10, 0), "today"))
+    install(entries)
+
+    msgs = mod.extract_messages("2026-03-10", cm)
+    times = _times(msgs)
+    assert _ts(2026, 3, 9, 22, 0) not in times  # before 23:00 start, excluded
+    assert _ts(2026, 3, 9, 23, 0) in times
+    assert _ts(2026, 3, 10, 10, 0) in times
+
+
+def test_window_sparse_evening_extends_to_20th(window_env):
+    """稀疏夜晚：起点提前到倒数第 20 条，比 −1h 更早，纳入更多前夜消息。"""
+    mod, cm, install = window_env
+    # 21 hourly messages 03-09 03:00..23:00 → 20th newest is 04:00.
+    entries = [(_ts(2026, 3, 9, h), f"h{h}") for h in range(3, 24)]
+    entries.append((_ts(2026, 3, 10, 10, 0), "today"))
+    install(entries)
+
+    msgs = mod.extract_messages("2026-03-10", cm)
+    times = _times(msgs)
+    assert _ts(2026, 3, 9, 3) not in times  # 21st-newest, before the 20-msg start
+    assert _ts(2026, 3, 9, 4) in times  # 20th-newest = start
+    assert _ts(2026, 3, 9, 10) in times  # would be excluded under a −1h window
+
+
+def test_window_clamped_to_prev_midnight(window_env):
+    """极稀疏：倒数第 20 条跨进大前天，起点钳在前一天 00:00。"""
+    mod, cm, install = window_env
+    # Only 3 messages on 03-09; the rest on 03-08 → 20th newest lands on 03-08.
+    entries = [(_ts(2026, 3, 9, h), f"a{h}") for h in (2, 8, 14)]
+    entries += [(_ts(2026, 3, 8, h), f"b{h}") for h in range(0, 24)]
+    entries.append((_ts(2026, 3, 10, 10, 0), "today"))
+    install(entries)
+
+    msgs = mod.extract_messages("2026-03-10", cm)
+    times = _times(msgs)
+    assert _ts(2026, 3, 8, 23) not in times  # before prev-day midnight, clamped out
+    assert _ts(2026, 3, 9, 2) in times  # first 03-09 message survives
+    assert _ts(2026, 3, 10, 10, 0) in times
+
+
+def test_window_uses_coverage_anchor_pulls_untold_tail(window_env):
+    """前日 21:00 提前生成：anchor=21:00，21:00–24:00 从未被报道的尾巴进入窗口。"""
+    mod, cm, install = window_env
+    from wechat_daily import coverage
+
+    # 20 messages 20:00–20:57 (all ≤ 21:00 anchor) + an untold tail after 21:00.
+    entries = [(_ts(2026, 3, 9, 20, m * 3), f"e{m}") for m in range(20)]
+    entries += [
+        (_ts(2026, 3, 9, 22, 0), "tail1"),
+        (_ts(2026, 3, 9, 22, 30), "tail2"),
+        (_ts(2026, 3, 9, 23, 30), "tail3"),
+        (_ts(2026, 3, 10, 1, 0), "today"),
+    ]
+    install(entries)
+    # Yesterday's report was submitted at 21:00 → covered only up to then.
+    coverage.record("2026-03-09", _ts(2026, 3, 9, 21, 0))
+
+    msgs = mod.extract_messages("2026-03-10", cm)
+    times = _times(msgs)
+    # The 22:30 tail would be excluded under a plain −1h (23:00) window; the
+    # coverage anchor pulls the whole 21:00–24:00 stretch in.
+    assert _ts(2026, 3, 9, 22, 30) in times
+    assert _ts(2026, 3, 9, 20, 0) in times  # start reached back to the 20th msg
+    assert _ts(2026, 3, 10, 1, 0) in times
+
+
+def test_window_no_history_falls_back_to_minus_1h(window_env):
+    """无任何历史消息：candidate=None，起点退回 −1h，仅当天消息返回。"""
+    mod, cm, install = window_env
+    entries = [
+        (_ts(2026, 3, 10, 1, 0), "a"),
+        (_ts(2026, 3, 10, 12, 0), "b"),
+    ]
+    install(entries)
+
+    msgs = mod.extract_messages("2026-03-10", cm)
+    assert _times(msgs) == {_ts(2026, 3, 10, 1, 0), _ts(2026, 3, 10, 12, 0)}
+
+
+def test_nth_recent_ts_fewer_than_n_returns_oldest(window_env):
+    mod, _cm, install = window_env
+    install([(_ts(2026, 3, 9, h), f"h{h}") for h in (5, 9, 15)])
+    # Only 3 messages ≤ anchor → returns the oldest.
+    assert mod._nth_recent_ts(_ts(2026, 3, 10, 0, 0)) == _ts(2026, 3, 9, 5)
+
+
+def test_nth_recent_ts_none_when_empty(window_env):
+    mod, _cm, install = window_env
+    install([(_ts(2026, 3, 10, 12, 0), "future")])
+    # Nothing at/before the anchor.
+    assert mod._nth_recent_ts(_ts(2026, 3, 9, 0, 0)) is None

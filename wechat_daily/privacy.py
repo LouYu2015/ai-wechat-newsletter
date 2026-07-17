@@ -400,6 +400,15 @@ def _format_one_line(
     return line
 
 
+def _date_divider(day: datetime.date) -> str:
+    """跨日分界线：标明其后消息所属的日历日期（破折号为三个 U+2014）。
+
+    窗口两端各伸入相邻天（开头带前一日尾巴、结尾伸入次日），模型靠这行判断某段
+    消息属于哪一天；语义/去重规则集中在 prompt，这里只陈述日期。
+    """
+    return f"——— 以下消息发生在 {day.strftime('%Y-%m-%d')} ———"
+
+
 def format_tokenized_messages(
     messages: list[message_parser.Message],
     captions: dict[str, str] | None = None,
@@ -409,8 +418,21 @@ def format_tokenized_messages(
     *captions* (``{image_md5: caption}``) inlines vision-model image
     descriptions as ``[图片：…]`` for the text-only DeepSeek path. Omit it
     (the default) to keep bare ``[图片]`` placeholders.
+
+    第一条消息前、以及每次本地日历日期变化时插入一条日期分界线；以实际输出的
+    消息为准判断日期变化（被跳过的消息不触发分界线）。
     """
-    lines = [line for msg in messages if (line := _format_one_line(msg, captions)) is not None]
+    lines: list[str] = []
+    last_date: datetime.date | None = None
+    for msg in messages:
+        line = _format_one_line(msg, captions)
+        if line is None:
+            continue
+        msg_date = datetime.datetime.fromtimestamp(msg.create_time).date()
+        if msg_date != last_date:
+            lines.append(_date_divider(msg_date))
+            last_date = msg_date
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -428,6 +450,7 @@ def format_tokenized_messages_blocks(
 
     blocks: list[dict] = []
     text_buf: list[str] = []
+    last_date: datetime.date | None = None
 
     def flush_text() -> None:
         if text_buf:
@@ -438,6 +461,10 @@ def format_tokenized_messages_blocks(
         line = _format_one_line(msg)
         if line is None:
             continue
+        msg_date = datetime.datetime.fromtimestamp(msg.create_time).date()
+        if msg_date != last_date:
+            text_buf.append(_date_divider(msg_date))
+            last_date = msg_date
         text_buf.append(line)
 
         if msg.local_type == message_parser.MSG_IMAGE and msg.image_md5:

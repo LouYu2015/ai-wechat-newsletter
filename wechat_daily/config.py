@@ -34,6 +34,12 @@ WECHAT_DATA_DIR = (
     / "Data/Documents/xwechat_files"
 )
 
+# ── Cross-day overlap ───────────────────────────────────────────────────────────
+# 跨日重叠窗口的消息数下限：安静的夜晚 ±1h 里可能只有两三条消息，跨天话题接不上，
+# 故起点在固定的 -1h 之外再往前延伸，保证重叠段 ≥ 这么多条消息（见 chat_extractor
+# 的窗口起点算法）。
+OVERLAP_MIN_MESSAGES = 20
+
 # ── Group Chat ──────────────────────────────────────────────────────────────────
 GROUP_CHAT_ID = "26389512912@chatroom"
 # MD5 of GROUP_CHAT_ID

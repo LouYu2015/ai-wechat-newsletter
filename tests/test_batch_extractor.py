@@ -241,6 +241,7 @@ def test_submit_writes_snapshot_and_consume_removes_it(debug_dir):
         {"main": "claude-opus-4-6"},
         _BLOCKS,
         (1, "sha"),
+        1_789_000_000,
     )
     assert bx.load_content_snapshot("2026-07-02") == _BLOCKS
     bx.mark_consumed(state)
@@ -289,6 +290,8 @@ def test_debug_suffix_convention():
 
 
 def test_submit_batch_persists_state_and_builds_requests(debug_dir):
+    from wechat_daily import coverage
+
     client = _FakeClient()
     state = bx.submit_batch(
         client,
@@ -296,10 +299,13 @@ def test_submit_batch_persists_state_and_builds_requests(debug_dir):
         {"main": "claude-opus-4-6", "compare": "claude-fable-5"},
         "user content",
         (412, "deadbeef"),
+        1_789_000_000,
     )
     assert state.batch_id == "msgbatch_001"
     assert state.raw_msg_count == 412
     assert bx.load_state("2026-07-02") == state
+    # 提交时刻同步写下覆盖水位线（与 save_state 同时）。
+    assert coverage.last_covered_ts("2026-07-02") == 1_789_000_000
 
     reqs = client.messages.batches.created[0]["requests"]
     assert [r["custom_id"] for r in reqs] == ["main", "compare"]
@@ -455,6 +461,7 @@ def test_run_batch_fresh_submit_success(debug_dir):
         user_content="uc",
         fingerprint=(2, "sha"),
         requests=requests,
+        last_message_ts=1_789_000_042,
     )
     assert set(outcome.reports) == {"main", "compare"}
     state = bx.load_state("2026-07-02")
@@ -462,6 +469,10 @@ def test_run_batch_fresh_submit_success(debug_dir):
     assert state.batch_id == "msgbatch_001"
     # The bulky content snapshot is cleaned up once results are consumed.
     assert not bx.content_snapshot_path("2026-07-02").exists()
+    # Fresh submission records the coverage water-mark.
+    from wechat_daily import coverage
+
+    assert coverage.last_covered_ts("2026-07-02") == 1_789_000_042
 
 
 def test_run_batch_resume_uses_state_requests_and_skips_create(debug_dir):
@@ -485,6 +496,11 @@ def test_run_batch_resume_uses_state_requests_and_skips_create(debug_dir):
     assert not client.messages.batches.created  # no new submission
     assert set(outcome.reports) == {"main"}
     assert bx.load_state("2026-07-02").consumed is True
+    # Resume never touches the coverage water-mark — it was frozen at the
+    # original submit; re-recording (with more messages) would over-report.
+    from wechat_daily import coverage
+
+    assert coverage.last_covered_ts("2026-07-02") is None
 
 
 def test_run_batch_retries_server_errors_once(debug_dir):

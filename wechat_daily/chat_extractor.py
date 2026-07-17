@@ -6,22 +6,78 @@ import datetime
 import re
 import sys
 
-from wechat_daily import config, contacts, message_parser, wechat_db
+from wechat_daily import config, contacts, coverage, message_parser, wechat_db
 
 
 def _db_rels() -> list[str]:
     return ["message/message_0.db", "message/message_1.db"]
 
 
+def _nth_recent_ts(anchor_ts: int, n: int = config.OVERLAP_MIN_MESSAGES) -> int | None:
+    """跨两个消息库，返回 create_time <= *anchor_ts* 的倒数第 *n* 条消息的 create_time。
+
+    不足 n 条时返回最旧的那条；一条都没有返回 None。用来把重叠窗口起点从固定的
+    -1h 往前延伸到「至少 n 条消息」，避免安静的夜晚重叠段消息太少接不上跨日话题。
+    容错写法与 extract_messages 一致：库缺失/表缺失跳过、损坏库 warn 跳过。
+    """
+    candidates: list[int] = []
+    for rel in _db_rels():
+        try:
+            conn = wechat_db.get_conn(rel)
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{config.GROUP_TABLE}'"
+            )
+            if not cur.fetchone():
+                continue
+            cur.execute(
+                f"SELECT create_time FROM {config.GROUP_TABLE} "
+                f"WHERE create_time <= ? ORDER BY create_time DESC LIMIT ?",
+                (anchor_ts, n),
+            )
+            candidates.extend(ct for (ct,) in cur.fetchall())
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            import warnings
+
+            warnings.warn(f"[chat_extractor] 跳过损坏数据库 {rel}: {e}")
+            continue
+    if not candidates:
+        return None
+    # 每库各取了自己最新的 n 条，全局第 n 新必在这些候选里；从新到旧取第 n 条
+    # （不足 n 条则取最旧的）。
+    candidates.sort(reverse=True)
+    return candidates[min(n, len(candidates)) - 1]
+
+
 def extract_messages(
     date_str: str, contact_map: contacts.ContactMap | None = None
 ) -> list[message_parser.Message]:
-    """Return raw Message objects for *date_str* (YYYY-MM-DD), window ±1h."""
+    """Return raw Message objects for *date_str* (YYYY-MM-DD).
+
+    结尾窗口固定为次日 00:00+1h；起点则是「D 00:00−1h」和「重叠段倒数第 20 条」
+    里更早的那个（``config.OVERLAP_MIN_MESSAGES``），并钳在前一天 00:00 不再往前。
+    重叠段的锚点优先用前一天日报的覆盖水位线（``coverage.last_covered_ts``）——若
+    昨天 21:00 提前生成（``--allow-incomplete``），今天就从「21:00 往前数 20 条」
+    开始，把昨天 21:00–24:00 从未被报道的尾巴全部纳入今天的输入；缺覆盖记录时锚点
+    退回 D 00:00，等价于「假设昨天覆盖到了午夜」。重叠因此 ≥ max(1 小时, 20 条)。
+    """
     if contact_map is None:
         contact_map = contacts.ContactMap.from_db()
 
     date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-    start_ts = int((date - datetime.timedelta(hours=1)).timestamp())
+    prev_day = date - datetime.timedelta(days=1)
+    default_start = int((date - datetime.timedelta(hours=1)).timestamp())
+
+    anchor_ts = coverage.last_covered_ts(prev_day.strftime("%Y-%m-%d"))
+    if anchor_ts is None:
+        anchor_ts = int(date.timestamp())
+    candidate = _nth_recent_ts(anchor_ts)
+    start_ts = default_start if candidate is None else min(default_start, candidate)
+    # 回溯上限：不早于前一天 00:00——更早的内容 previous_reports 已覆盖，再往前拉
+    # 只会白白重复（例如 20 条稀疏到跨进大前天时，钳在前一天午夜）。
+    start_ts = max(start_ts, int(prev_day.timestamp()))
     end_ts = int((date + datetime.timedelta(days=1, hours=1)).timestamp())
 
     # Each message DB carries its own Name2Id table mapping the integer

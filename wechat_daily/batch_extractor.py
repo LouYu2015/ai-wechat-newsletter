@@ -48,7 +48,7 @@ from typing import Callable
 
 import httpx
 
-from wechat_daily import config, llm_extractor, models
+from wechat_daily import config, coverage, llm_extractor, models
 
 STATE_VERSION = 1
 POLL_INTERVAL_S = 30.0
@@ -278,12 +278,18 @@ def submit_batch(
     requests: dict[str, str],
     user_content,
     fingerprint: tuple[int, str],
+    last_message_ts: int,
 ) -> BatchState:
     """Create the batch and persist the state file; returns the new state.
 
     *requests* maps custom_id → model. All requests share *user_content*
     (identical prompt; only the model differs — same invariant as the
     streaming AB-test path).
+
+    *last_message_ts* 是提交时刻本期日报覆盖到的最后一条消息时间戳。覆盖记录
+    与 :func:`save_state` 同时写下——「提交时刻」就是快照定格的时刻。resume/复用
+    路径不经过本函数，天然不覆写：resume 时重新提取的消息可能比提交时多，覆写
+    就虚报了。次日的重叠窗口据此把从未被报道的尾巴纳入（见 :mod:`coverage`）。
     """
     batch = client.messages.batches.create(
         requests=[
@@ -309,6 +315,7 @@ def submit_batch(
         requests=dict(requests),
     )
     save_state(state)
+    coverage.record(date_str, last_message_ts)
     return state
 
 
@@ -526,6 +533,7 @@ def run_batch(
     user_content,
     fingerprint: tuple[int, str],
     requests: dict[str, str],
+    last_message_ts: int = 0,
     state: BatchState | None = None,
     status_cb: Callable[[object | None, float, str], None] | None = None,
     usage_cb: Callable[[str, str, object], None] | None = None,
@@ -536,7 +544,10 @@ def run_batch(
 
     *state* is a pre-loaded resumable state (same date, caller already
     decided to continue it); ``None`` submits a fresh batch. The state file
-    is marked consumed after results are processed.
+    is marked consumed after results are processed. *last_message_ts* is only
+    used on a fresh submission (forwarded to :func:`submit_batch` to record
+    the coverage water-mark); resume ignores it — the water-mark was frozen
+    at the original submit.
 
     Retry semantics: server-errored/expired requests are resubmitted ONCE as
     a fresh batch. The state file keeps pointing at the ORIGINAL batch —
@@ -546,7 +557,7 @@ def run_batch(
     batch is cancelled best-effort if the retry round itself dies.
     """
     if state is None:
-        state = submit_batch(client, date_str, requests, user_content, fingerprint)
+        state = submit_batch(client, date_str, requests, user_content, fingerprint, last_message_ts)
         if note_cb:
             note_cb(f"已提交批次 {state.batch_id}（{len(requests)} 个请求，5 折计费）")
     else:

@@ -24,6 +24,7 @@ from wechat_daily import (
     config,
     contacts,
     cost_tracker,
+    coverage,
     lanes_ui,
     llm_extractor,
     pdf,
@@ -125,7 +126,12 @@ def _run_db_pipeline(
     # ── A: Extract raw messages ─────────────────────────────────────────────
     console.rule(f"[bold]数据库提取  [cyan]{date_str}[/cyan]")
     messages = chat_extractor.extract_messages(date_str, contact_map)
-    if not messages:
+    # 窗口起点变长后（重叠段 ≥20 条），可能出现「当天一条没有、只有前夜重叠段」的
+    # 情况。以「当天 [D 00:00, D+1 00:00) 内有无消息」为准判断空日，而非整个窗口。
+    day_midnight = datetime.datetime(target_date.year, target_date.month, target_date.day)
+    day_start_ts = int(day_midnight.timestamp())
+    day_end_ts = int((day_midnight + datetime.timedelta(days=1)).timestamp())
+    if not any(day_start_ts <= m.create_time < day_end_ts for m in messages):
         console.print(f"[yellow]  {date_str} 当天无消息，跳过[/yellow]")
         return
 
@@ -272,6 +278,11 @@ def _run_db_pipeline(
     if prior_days > 0 or prior_report_titles:
         console.print()
 
+    # 覆盖水位线 = 提交时刻本期覆盖到的最后一条消息（messages 已按 create_time
+    # 升序，故取末条）。批量路径由 submit_batch 在「提交时刻」写入（resume 不覆写，
+    # 避免虚报）；流式路径没有 submit_batch，在此直接记录。
+    last_message_ts = messages[-1].create_time
+
     # ── C: Report generation — Batch API (default) or legacy streaming ─────
     compare_report = None
     if use_batch:
@@ -286,6 +297,7 @@ def _run_db_pipeline(
             run_compare=run_compare,
             state=batch_state,
             fingerprint=fingerprint,
+            last_message_ts=last_message_ts,
             cost_records=cost_records,
         )
         if not reports or "main" not in reports:
@@ -294,6 +306,7 @@ def _run_db_pipeline(
         report = reports["main"]
         compare_report = reports.get("compare")
     else:
+        coverage.record(date_str, last_message_ts)
         report = _run_streaming_extraction(
             date_str=date_str,
             chat_history=chat_history,
@@ -781,6 +794,7 @@ def _run_batch_extraction(
     run_compare: bool,
     state,
     fingerprint: tuple[int, str],
+    last_message_ts: int,
     cost_records: list[cost_tracker.CostRecord] | None,
 ) -> dict:
     """Generate main + compare reports through one Message Batch (50% price).
@@ -909,6 +923,7 @@ def _run_batch_extraction(
                     user_content=user_content,
                     fingerprint=fingerprint,
                     requests=requests,
+                    last_message_ts=last_message_ts,
                     state=state,
                     status_cb=_status_cb,
                     usage_cb=_usage_cb,

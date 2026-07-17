@@ -337,6 +337,81 @@ def test_format_no_sender_no_placeholder_skipped():
     assert "orphan" not in output
 
 
+# ── Date dividers (cross-day boundary lines) ────────────────────────────────────
+
+import datetime as _dt  # noqa: E402
+
+
+def _local_ts(y, mo, d, h=0, mi=0) -> int:
+    return int(_dt.datetime(y, mo, d, h, mi).timestamp())
+
+
+def test_format_single_day_one_leading_divider():
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    db = _alias_db()
+    messages = [
+        _msg(_local_ts(2026, 3, 10, 9, 0), message_parser.MSG_TEXT, "wxid_alice", "one"),
+        _msg(_local_ts(2026, 3, 10, 10, 0), message_parser.MSG_TEXT, "wxid_alice", "two"),
+    ]
+    tokenized, _ = privacy.tokenize_messages(messages, contacts, db)
+    output = privacy.format_tokenized_messages(tokenized)
+    assert output.count("——— 以下消息发生在") == 1
+    assert output.startswith("——— 以下消息发生在 2026-03-10 ———")
+
+
+def test_format_cross_midnight_two_dividers():
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    db = _alias_db()
+    messages = [
+        _msg(_local_ts(2026, 3, 9, 23, 30), message_parser.MSG_TEXT, "wxid_alice", "late"),
+        _msg(_local_ts(2026, 3, 10, 0, 30), message_parser.MSG_TEXT, "wxid_alice", "early"),
+    ]
+    tokenized, _ = privacy.tokenize_messages(messages, contacts, db)
+    output = privacy.format_tokenized_messages(tokenized)
+    assert "——— 以下消息发生在 2026-03-09 ———" in output
+    assert "——— 以下消息发生在 2026-03-10 ———" in output
+    assert output.count("——— 以下消息发生在") == 2
+
+
+def test_format_skipped_message_no_extra_divider():
+    """A dropped message (empty sender, non-placeholder) must not trigger a
+    divider — date changes are judged on actually-emitted lines only."""
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    db = _alias_db()
+    messages = [
+        _msg(_local_ts(2026, 3, 9, 22, 0), message_parser.MSG_TEXT, "wxid_alice", "kept"),
+        # Skipped: empty sender, non-placeholder → _format_one_line returns None.
+        _msg(_local_ts(2026, 3, 10, 0, 10), message_parser.MSG_TEXT, "", "ghost"),
+        _msg(_local_ts(2026, 3, 10, 0, 20), message_parser.MSG_TEXT, "wxid_alice", "real"),
+    ]
+    tokenized, _ = privacy.tokenize_messages(messages, contacts, db)
+    output = privacy.format_tokenized_messages(tokenized)
+    assert "ghost" not in output
+    assert output.count("——— 以下消息发生在") == 2  # 03-09 once, 03-10 once
+    # The 03-10 divider sits right before the first emitted 03-10 line ("real").
+    assert "——— 以下消息发生在 2026-03-10 ———\n" in output
+    assert output.rindex("——— 以下消息发生在 2026-03-10 ———") < output.rindex("real")
+
+
+class _NullDecoder:
+    def decode(self, _md5):
+        return None
+
+
+def test_format_blocks_insert_dividers_in_text():
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    db = _alias_db()
+    messages = [
+        _msg(_local_ts(2026, 3, 9, 23, 30), message_parser.MSG_TEXT, "wxid_alice", "late"),
+        _msg(_local_ts(2026, 3, 10, 0, 30), message_parser.MSG_TEXT, "wxid_alice", "early"),
+    ]
+    tokenized, _ = privacy.tokenize_messages(messages, contacts, db)
+    blocks = privacy.format_tokenized_messages_blocks(tokenized, _NullDecoder())
+    text = "\n".join(b["text"] for b in blocks if b["type"] == "text")
+    assert "——— 以下消息发生在 2026-03-09 ———" in text
+    assert "——— 以下消息发生在 2026-03-10 ———" in text
+
+
 # ── Leak detection (hard gates only) ───────────────────────────────────────────
 
 
