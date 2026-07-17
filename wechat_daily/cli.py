@@ -913,6 +913,9 @@ def _run_batch_extraction(
                     status_cb=_status_cb,
                     usage_cb=_usage_cb,
                     note_cb=lambda msg: progress.console.print(f"[dim]{msg}[/dim]"),
+                    # 死连接池不会自愈：睡眠恢复/连续失败时 poll 用这个工厂造一个
+                    # 全新的 client（=新连接池），等价于用户 ctrl+c 重跑那招。
+                    rebuild_client=lambda: batch_extractor.make_client(anthropic_key),
                 )
         except KeyboardInterrupt:
             st = state or batch_extractor.load_state(date_str)

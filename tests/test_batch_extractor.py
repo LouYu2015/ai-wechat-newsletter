@@ -70,7 +70,8 @@ class _Batch:
 
 
 class _FakeBatches:
-    def __init__(self):
+    def __init__(self, owner):
+        self.owner = owner  # 回指 _FakeClient，用来复现"关闭后任何调用即抛"
         self.created: list[dict] = []  # kwargs of each create()
         self.retrieve_script: list = []  # popped per retrieve(); last repeats
         self.results_map: dict[str, list] = {}  # batch_id → result list
@@ -78,12 +79,14 @@ class _FakeBatches:
         self._n = 0
 
     def create(self, *, requests):
+        self.owner._check_open()
         self._n += 1
         batch_id = f"msgbatch_{self._n:03d}"
         self.created.append({"id": batch_id, "requests": requests})
         return _Batch(batch_id)
 
     def retrieve(self, batch_id):
+        self.owner._check_open()
         if self.retrieve_script:
             item = self.retrieve_script.pop(0)
             if isinstance(item, Exception):
@@ -92,16 +95,33 @@ class _FakeBatches:
         return _Batch(batch_id, "ended")
 
     def results(self, batch_id):
+        self.owner._check_open()
         yield from self.results_map.get(batch_id, [])
 
     def cancel(self, batch_id):
+        self.owner._check_open()
         self.cancelled.append(batch_id)
 
 
 class _FakeClient:
     def __init__(self):
         self.messages = type("M", (), {})()
-        self.messages.batches = _FakeBatches()
+        self.messages.batches = _FakeBatches(self)
+        self.closed = False
+
+    def with_options(self, **_kwargs):
+        # 真 SDK 会返回配置副本；测试里同一个 fake 就够用了（选项本身不影响假响应）。
+        self._check_open()
+        return self
+
+    def close(self):
+        self.closed = True
+
+    def _check_open(self):
+        # 复现真实 SDK：close() 后底层 httpx client 关闭，任何请求都抛 RuntimeError。
+        # 这条不变量顺带守住"重建后不得再用旧 client"。
+        if self.closed:
+            raise RuntimeError("Cannot send a request, as the client has been closed.")
 
 
 @pytest.fixture()
@@ -544,3 +564,168 @@ def test_run_batch_cancels_retry_batch_on_interrupt(debug_dir):
     assert client.messages.batches.cancelled == ["msgbatch_002"]
     # Original batch stays resumable.
     assert bx.load_state("2026-07-02").consumed is False
+
+
+# ── Sleep/wake hardening ─────────────────────────────────────────────────────────
+
+
+def test_poll_rebuilds_client_after_consecutive_failures():
+    """连续 ≥2 轮失败 → 丢弃死连接池、用工厂重建一个全新 client。"""
+    client = _FakeClient()
+    client.messages.batches.retrieve_script = [
+        httpx.ConnectError("dead pool 1"),
+        httpx.ConnectError("dead pool 2"),
+        _Batch("b", "ended"),  # 不会用到：第 2 次失败后已换 client
+    ]
+    built = []
+
+    def factory():
+        fresh = _FakeClient()
+        fresh.messages.batches.retrieve_script = [_Batch("b", "ended")]
+        built.append(fresh)
+        return fresh
+
+    notes = []
+    batch = bx.poll_until_ended(
+        client,
+        "b",
+        status_cb=lambda b, e, n: notes.append((b, n)),
+        rebuild_client=factory,
+    )
+    assert batch.processing_status == "ended"
+    assert len(built) == 1  # 恰好在第 2 次连续失败时重建一次
+    assert client.closed  # 旧 client best-effort close
+    assert any(b is None and "重建连接" in n for b, n in notes)
+
+
+def test_run_batch_uses_rebuilt_client_for_fetch_and_retry(debug_dir):
+    """回归：轮询中途重建 client 后，run_batch 后续的 fetch_results / 重试轮 create
+    必须用重建后的新 client——若仍握着已 close 的旧引用，任何调用都会抛 RuntimeError。"""
+    requests = {"main": "claude-opus-4-6"}
+    original = _FakeClient()
+    # 原 client 连续两次失败触发重建，之后再被 poll/fetch 使用就会抛 RuntimeError。
+    original.messages.batches.retrieve_script = [
+        httpx.ConnectError("dead pool 1"),
+        httpx.ConnectError("dead pool 2"),
+    ]
+    rebuilt = _FakeClient()
+    rebuilt.messages.batches.retrieve_script = [_Batch("msgbatch_001", "ended")]
+    _wire_success(rebuilt, "msgbatch_001", requests)
+
+    # 用 resume（state 已给）跳过提交，让 fetch_results 直接落在重建后的 client 上。
+    state = _state(batch_id="msgbatch_001", requests=requests)
+    bx.save_state(state)
+
+    outcome = bx.run_batch(
+        client=original,
+        date_str="2026-07-02",
+        debug_text="input",
+        user_content="uc",
+        fingerprint=(412, "deadbeef"),
+        requests=requests,
+        state=state,
+        rebuild_client=lambda: rebuilt,
+    )
+    assert original.closed  # 旧 client 已被 close
+    # 结果来自重建后的 client；若用了 closed 的 original，fetch 会抛 RuntimeError 崩掉。
+    assert set(outcome.reports) == {"main"}
+    assert bx.load_state("2026-07-02").consumed is True
+
+
+def test_poll_rebuilds_on_sleep_gap(monkeypatch):
+    """两轮迭代墙钟间隔异常大 → 判定系统睡眠恢复，主动重建连接。"""
+    client = _FakeClient()
+    client.messages.batches.retrieve_script = [_Batch("b", "in_progress")]
+    built = []
+
+    def factory():
+        fresh = _FakeClient()
+        fresh.messages.batches.retrieve_script = [_Batch("b", "ended")]
+        built.append(fresh)
+        return fresh
+
+    # time.time 序列：start → iter1 → iter2（跳 1 小时），之后恒定。
+    ticks = iter([0.0, 0.0, 3600.0])
+    last = [3600.0]
+
+    def fake_time():
+        try:
+            last[0] = next(ticks)
+        except StopIteration:
+            pass
+        return last[0]
+
+    monkeypatch.setattr(time, "time", fake_time)
+
+    notes = []
+    batch = bx.poll_until_ended(
+        client,
+        "b",
+        status_cb=lambda b, e, n: notes.append((b, n)),
+        rebuild_client=factory,
+    )
+    assert batch.processing_status == "ended"
+    assert len(built) == 1
+    assert any(b is None and "休眠恢复" in n for b, n in notes)
+
+
+def test_poll_timeout_counts_iterations_not_wallclock(monkeypatch):
+    """上限按活跃轮询次数计：即便墙钟每次都暴涨，也只在轮询到顶时才超时。"""
+    client = _FakeClient()
+    calls = []
+
+    def _retrieve(batch_id):
+        calls.append(batch_id)
+        return _Batch(batch_id, "in_progress")
+
+    client.messages.batches.retrieve = _retrieve
+
+    # 每次读钟都跳一大截：若按墙钟早该超时；上限只认轮询次数。
+    t = [0.0]
+
+    def fake_time():
+        t[0] += 10_000.0
+        return t[0]
+
+    monkeypatch.setattr(time, "time", fake_time)
+
+    with pytest.raises(bx.BatchTimeout):
+        bx.poll_until_ended(client, "b", poll_interval=30.0, max_wait_s=90.0)
+    assert len(calls) == 3  # max_wait_s/poll_interval = 3 次活跃轮询，第 4 次触顶
+
+
+def test_poll_failure_note_has_consecutive_count():
+    """失败 note 带连续重试计数；成功一轮后计数清零。"""
+    client = _FakeClient()
+    client.messages.batches.retrieve_script = [
+        httpx.ConnectError("x"),
+        httpx.ConnectError("y"),
+        _Batch("b", "in_progress"),  # 成功一轮 → 计数清零
+        httpx.ConnectError("z"),
+        _Batch("b", "ended"),
+    ]
+    notes = []
+    bx.poll_until_ended(client, "b", status_cb=lambda b, e, n: notes.append((b, n)))
+    err = [n for b, n in notes if b is None]
+    assert "连续第 1 次" in err[0]
+    assert "连续第 2 次" in err[1]
+    assert "连续第 1 次" in err[2]  # 清零后重新从 1 计
+
+
+def test_fetch_results_note_cb_reports_retries():
+    """fetch_results 重试时通过 note_cb 报告（否则完全静默）。"""
+    client = _FakeClient()
+    calls = [0]
+
+    def _results(batch_id):
+        calls[0] += 1
+        if calls[0] < 3:
+            raise httpx.ConnectError("blip")
+        return iter([_Result("main", "succeeded", _Message("ok"))])
+
+    client.messages.batches.results = _results
+    notes = []
+    out = bx.fetch_results(client, "b", note_cb=lambda n: notes.append(n))
+    assert set(out) == {"main"}
+    assert len(notes) == 2  # 前两次失败各报一次，第 3 次成功
+    assert "取结果失败" in notes[0] and "第 1/5 次" in notes[0]

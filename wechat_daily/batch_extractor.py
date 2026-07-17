@@ -7,7 +7,8 @@ this module is built around three interruption scenarios:
 
 - **机器休眠**: the batch runs server-side; polling just resumes after wake.
   Every poll iteration is individually fault-tolerant (network errors back
-  off and retry forever within the wall-clock cap).
+  off and retry forever, capped by active-poll count so sleep doesn't count);
+  a detected wake-up or a run of failures rebuilds the dead connection pool.
 - **进程退出（Ctrl-C / 崩溃）**: the batch id is persisted to
   ``debug/{date}/batch_state.json`` right after submission. Re-running the
   same command resumes polling instead of resubmitting.
@@ -52,7 +53,11 @@ from wechat_daily import config, llm_extractor, models
 STATE_VERSION = 1
 POLL_INTERVAL_S = 30.0
 # Server-side cap is 24h; give one extra hour of polling slack before giving up.
+# 计的是"活跃轮询次数"（MAX_WAIT_S / poll_interval，≈3000 次），不是墙钟——
+# 合盖睡一夜期间根本不轮询，那段时间不该算进上限（详见 poll_until_ended）。
 MAX_WAIT_S = 25 * 3600
+# retrieve 响应很小，轮询里单独用这个更短的超时快速失败（见 _retrieve_batch）。
+POLL_RETRIEVE_TIMEOUT_S = 30.0
 
 
 class BatchStateError(Exception):
@@ -220,8 +225,9 @@ def debug_suffix_for(custom_id: str, model: str) -> str:
 def make_client(api_key: str):
     """Anthropic client tuned for batch control-plane calls.
 
-    Individual calls (create/retrieve/results) are small; 120s is generous.
-    The long wait happens in *our* poll loop, not in one HTTP request.
+    create（大请求）和 results（要下完整输出）走 SDK 默认重试 + 这里的 120s——
+    宽裕即可，长等待发生在*我们*的轮询循环里，不在单个 HTTP 请求里。轮询里的
+    retrieve 另有一套快速失败配置（见 :func:`_retrieve_batch`），不受此处影响。
     """
     import anthropic
 
@@ -229,6 +235,26 @@ def make_client(api_key: str):
         api_key=api_key,
         timeout=httpx.Timeout(120.0, connect=15.0),
     )
+
+
+def _retrieve_batch(client, batch_id: str):
+    """轮询专用的 retrieve：禁用 SDK 内部重试、把超时压到 30s。
+
+    合盖睡醒后 httpx 连接池里全是死连接，而 SDK 默认自带 2 次内部退避重试、
+    读超时 120s——一次 retrieve 会经历"死连接→读超时→内部退避→又摸到死连接"，
+    单次调用能挂 6–8 分钟，期间 status_cb 完全不更新，界面像假死。retrieve 的
+    响应很小，这里 max_retries=0 + 30s 超时让死连接尽快暴露成一个可重试错误，
+    交给外层轮询循环处理（必要时重建整个连接池）。
+
+    create（大请求）和 results（要下完整输出）不走这里，保持 SDK 默认语义。
+    """
+    with_options = getattr(client, "with_options", None)
+    if with_options is not None:
+        client = with_options(
+            max_retries=0,
+            timeout=httpx.Timeout(POLL_RETRIEVE_TIMEOUT_S, connect=15.0),
+        )
+    return client.messages.batches.retrieve(batch_id)
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -301,38 +327,85 @@ def poll_until_ended(
     poll_interval: float = POLL_INTERVAL_S,
     max_wait_s: float = MAX_WAIT_S,
     status_cb: Callable[[object | None, float, str], None] | None = None,
+    rebuild_client: Callable[[], object] | None = None,
 ):
     """Poll until ``processing_status == "ended"``; return the final batch.
 
-    Sleep/wake-safe by construction: elapsed time uses the wall clock
-    (``time.time()``), and every retrieve is wrapped so connection errors —
-    exactly what a wake-up or a flaky network produces — just wait one
-    interval and try again. Only client-side errors (e.g. 404 = the batch id
-    no longer exists) raise immediately, as :class:`BatchNotFound`.
+    Sleep/wake-safe by construction. Every retrieve is fast-failing
+    (:func:`_retrieve_batch`) and wrapped so connection errors — exactly what a
+    wake-up or a flaky network produces — just wait one interval and try again.
+    Only client-side errors (e.g. 404 = the batch id no longer exists) raise
+    immediately, as :class:`BatchNotFound`.
+
+    两处睡眠加固（*rebuild_client* 提供时才生效——它造一个全新的
+    ``anthropic.Anthropic``，即"新进程=新连接池"那招，唯一能让死连接池自愈的动作）：
+
+    - 两轮迭代的实际墙钟间隔 > 5×poll_interval：判定刚从系统睡眠恢复，旧连接池
+      多半全是死连接，主动丢弃重建；
+    - 连续失败 ≥2 轮：连接池不会自愈，重建。
+
+    超时上限按"活跃轮询次数"（max_wait_s/poll_interval）计，不看墙钟——睡眠期间不
+    轮询、自然不计入，长挂机不会误触发 :class:`BatchTimeout`。
 
     *status_cb(batch_or_none, elapsed_s, note)* fires once per iteration —
-    ``batch_or_none`` is ``None`` when the iteration failed (note carries the
-    error text).
+    ``batch_or_none`` is ``None`` when the iteration failed or a rebuild fired
+    (note carries the error/rebuild text).
     """
     import anthropic
 
+    max_iterations = max(1, int(max_wait_s / poll_interval))
     start = time.time()
-    while True:
-        elapsed = time.time() - start
-        if elapsed > max_wait_s:
-            raise BatchTimeout(f"批次 {batch_id} 轮询超过 {max_wait_s / 3600:.0f} 小时仍未结束")
+    last_tick = start  # 上一轮迭代的墙钟时刻，用来识别系统睡眠造成的大间隔
+    iterations = 0
+    consecutive_failures = 0
+
+    def _rebuild(note: str) -> None:
+        nonlocal client
+        if rebuild_client is None:
+            return
         try:
-            batch = client.messages.batches.retrieve(batch_id)
+            client.close()
+        except Exception:
+            pass  # best-effort：旧连接可能已经死了，close 报错无所谓
+        client = rebuild_client()
+        if status_cb:
+            status_cb(None, time.time() - start, note)
+
+    while True:
+        iterations += 1
+        if iterations > max_iterations:
+            raise BatchTimeout(
+                f"批次 {batch_id} 已活跃轮询 {max_iterations} 次"
+                f"（约 {max_wait_s / 3600:.0f} 小时）仍未结束"
+            )
+        now = time.time()
+        gap = now - last_tick
+        last_tick = now
+        if iterations > 1 and gap > 5 * poll_interval:
+            _rebuild(f"检测到系统休眠恢复（间隔 {gap / 60:.0f} 分钟），已重建连接")
+
+        elapsed = now - start
+        try:
+            batch = _retrieve_batch(client, batch_id)
         except anthropic.NotFoundError as e:
             raise BatchNotFound(f"批次 {batch_id} 不存在（可能已删除或换了 API Key）") from e
         except Exception as e:  # noqa: BLE001 — classified below
             if not _is_retryable(e):
                 raise
+            consecutive_failures += 1
             if status_cb:
-                status_cb(None, elapsed, f"网络错误，{poll_interval:.0f}s 后重试：{e}")
+                status_cb(
+                    None,
+                    elapsed,
+                    f"网络错误（连续第 {consecutive_failures} 次），"
+                    f"{poll_interval:.0f}s 后重试：{e}",
+                )
+            if consecutive_failures >= 2:
+                _rebuild(f"连续 {consecutive_failures} 次轮询失败，已重建连接")
             time.sleep(poll_interval)
             continue
 
+        consecutive_failures = 0
         if status_cb:
             status_cb(batch, elapsed, "")
         if batch.processing_status == "ended":
@@ -340,10 +413,20 @@ def poll_until_ended(
         time.sleep(poll_interval)
 
 
-def fetch_results(client, batch_id: str, *, max_attempts: int = 5) -> dict[str, object]:
+def fetch_results(
+    client,
+    batch_id: str,
+    *,
+    max_attempts: int = 5,
+    note_cb: Callable[[str], None] | None = None,
+) -> dict[str, object]:
     """Fetch all results, keyed by custom_id (stream order is NOT request
     order — always key, never index). Network errors retry a few times;
-    a partially-consumed iterator is re-fetched from scratch."""
+    a partially-consumed iterator is re-fetched from scratch.
+
+    *note_cb* 报告每次重试（默认下载走 SDK 全套重试 + 120s 超时，故这里的
+    重试属于兜底）——否则重试完全静默，用户只看到界面卡着不动。
+    """
     last: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
@@ -353,6 +436,11 @@ def fetch_results(client, batch_id: str, *, max_attempts: int = 5) -> dict[str, 
                 raise
             last = e
             if attempt < max_attempts:
+                if note_cb:
+                    note_cb(
+                        f"取结果失败（第 {attempt}/{max_attempts} 次），"
+                        f"{POLL_INTERVAL_S:.0f}s 后重试：{e}"
+                    )
                 time.sleep(POLL_INTERVAL_S)
     raise last  # type: ignore[misc]
 
@@ -442,6 +530,7 @@ def run_batch(
     status_cb: Callable[[object | None, float, str], None] | None = None,
     usage_cb: Callable[[str, str, object], None] | None = None,
     note_cb: Callable[[str], None] | None = None,
+    rebuild_client: Callable[[], object] | None = None,
 ) -> BatchOutcome:
     """Submit (or resume) → poll → fetch → finalize, with one retry round.
 
@@ -465,8 +554,19 @@ def run_batch(
             note_cb(f"续接批次 {state.batch_id}（提交于 {state.submitted_at}）")
         requests = dict(state.requests)
 
-    batch = poll_until_ended(client, state.batch_id, status_cb=status_cb)
-    results = fetch_results(client, batch.id)
+    # poll_until_ended 重建连接时（睡眠恢复/连续失败），必须同步 run_batch 自己的
+    # client 引用：否则轮询结束后的 fetch_results / 重试轮 create 仍握着那个已被
+    # close 的旧 client，会抛 RuntimeError（不在 _is_retryable 名单里）直接崩掉——
+    # 而重建恰恰发生在批次即将完成、马上要取结果的时刻，比不重建更糟。
+    def _swap_client():
+        nonlocal client
+        client = rebuild_client()
+        return client
+
+    swap = _swap_client if rebuild_client is not None else None
+
+    batch = poll_until_ended(client, state.batch_id, status_cb=status_cb, rebuild_client=swap)
+    results = fetch_results(client, batch.id, note_cb=note_cb)
     outcome, retryable = process_results(
         date_str,
         debug_text,
@@ -491,8 +591,8 @@ def run_batch(
             ]
         )
         try:
-            poll_until_ended(client, retry_batch.id, status_cb=status_cb)
-            retry_results = fetch_results(client, retry_batch.id)
+            poll_until_ended(client, retry_batch.id, status_cb=status_cb, rebuild_client=swap)
+            retry_results = fetch_results(client, retry_batch.id, note_cb=note_cb)
         except BaseException:
             # Includes KeyboardInterrupt: don't leave the orphan retry batch
             # billing away — the state file still points at the original.
