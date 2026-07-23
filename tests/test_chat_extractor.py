@@ -63,7 +63,8 @@ def test_find_missing_no_archive_returns_last_complete(
 ):
     """With no archive, returns exactly the last-complete day."""
     mod, _ = patched_extractor
-    # last message at 2026-04-17 05:00 local → last_complete = (04-17 04:00).date() - 1 day = 04-16
+    # last message at 2026-04-17 05:00 local (well before the 21:00 cutoff) →
+    # in-progress day is still 04-17, so last_complete = 04-16
     last_ts = int(datetime.datetime(2026, 4, 17, 5, 0).timestamp())
     conn = _make_synth_msg_db(tmp_path, last_ts)
     _stub_db(monkeypatch, mod, conn)
@@ -187,40 +188,41 @@ def _times(messages) -> set[int]:
 
 
 def test_window_dense_evening_keeps_minus_1h_start(window_env):
-    """密集夜晚：倒数第 20 条落在 23:00 之后，min 生效，起点仍是 −1h（23:00）。"""
+    """密集夜晚：倒数第 20 条落在 20:00 之后，min 生效，起点仍是 −1h（20:00）。"""
     mod, cm, install = window_env
-    # 30 messages 23:00–23:29 (dense) + one at 22:00 (before the −1h boundary).
-    entries = [(_ts(2026, 3, 9, 23, m), f"m{m}") for m in range(30)]
-    entries.append((_ts(2026, 3, 9, 22, 0), "early"))
+    # 30 messages 20:00–20:29 (dense) + one at 19:00 (before the −1h boundary).
+    entries = [(_ts(2026, 3, 9, 20, m), f"m{m}") for m in range(30)]
+    entries.append((_ts(2026, 3, 9, 19, 0), "early"))
     entries.append((_ts(2026, 3, 10, 10, 0), "today"))
     install(entries)
 
     msgs = mod.extract_messages("2026-03-10", cm)
     times = _times(msgs)
-    assert _ts(2026, 3, 9, 22, 0) not in times  # before 23:00 start, excluded
-    assert _ts(2026, 3, 9, 23, 0) in times
+    assert _ts(2026, 3, 9, 19, 0) not in times  # before 20:00 start, excluded
+    assert _ts(2026, 3, 9, 20, 0) in times
     assert _ts(2026, 3, 10, 10, 0) in times
 
 
 def test_window_sparse_evening_extends_to_20th(window_env):
     """稀疏夜晚：起点提前到倒数第 20 条，比 −1h 更早，纳入更多前夜消息。"""
     mod, cm, install = window_env
-    # 21 hourly messages 03-09 03:00..23:00 → 20th newest is 04:00.
-    entries = [(_ts(2026, 3, 9, h), f"h{h}") for h in range(3, 24)]
+    # 21 hourly messages 03-09 00:00..20:00 (21:00 截止线之前) → 20th newest is 01:00.
+    entries = [(_ts(2026, 3, 9, h), f"h{h}") for h in range(0, 21)]
     entries.append((_ts(2026, 3, 10, 10, 0), "today"))
     install(entries)
 
     msgs = mod.extract_messages("2026-03-10", cm)
     times = _times(msgs)
-    assert _ts(2026, 3, 9, 3) not in times  # 21st-newest, before the 20-msg start
-    assert _ts(2026, 3, 9, 4) in times  # 20th-newest = start
+    assert _ts(2026, 3, 9, 0) not in times  # 21st-newest, before the 20-msg start
+    assert _ts(2026, 3, 9, 1) in times  # 20th-newest = start
     assert _ts(2026, 3, 9, 10) in times  # would be excluded under a −1h window
 
 
-def test_window_clamped_to_prev_midnight(window_env):
-    """极稀疏：倒数第 20 条跨进大前天，起点钳在前一天 00:00。"""
+def test_window_clamped_to_prev_window_start(window_env):
+    """极稀疏：倒数第 20 条跨进大前天，起点钳在前一天的窗口起点（03-08 21:00）。"""
     mod, cm, install = window_env
-    # Only 3 messages on 03-09; the rest on 03-08 → 20th newest lands on 03-08.
+    # Only 3 messages on 03-09 (before the 21:00 anchor); the rest on 03-08 →
+    # 20th newest lands before the clamp.
     entries = [(_ts(2026, 3, 9, h), f"a{h}") for h in (2, 8, 14)]
     entries += [(_ts(2026, 3, 8, h), f"b{h}") for h in range(0, 24)]
     entries.append((_ts(2026, 3, 10, 10, 0), "today"))
@@ -228,13 +230,14 @@ def test_window_clamped_to_prev_midnight(window_env):
 
     msgs = mod.extract_messages("2026-03-10", cm)
     times = _times(msgs)
-    assert _ts(2026, 3, 8, 23) not in times  # before prev-day midnight, clamped out
+    assert _ts(2026, 3, 8, 20) not in times  # before the clamp (03-08 21:00)
+    assert _ts(2026, 3, 8, 21) in times  # clamp boundary itself survives
     assert _ts(2026, 3, 9, 2) in times  # first 03-09 message survives
     assert _ts(2026, 3, 10, 10, 0) in times
 
 
 def test_window_uses_coverage_anchor_pulls_untold_tail(window_env):
-    """前日 21:00 提前生成：anchor=21:00，21:00–24:00 从未被报道的尾巴进入窗口。"""
+    """前日 21:00 按时生成：anchor=21:00，21:00 之后从未被报道的尾巴进入窗口。"""
     mod, cm, install = window_env
     from wechat_daily import coverage
 

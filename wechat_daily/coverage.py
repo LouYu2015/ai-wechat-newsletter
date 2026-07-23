@@ -5,8 +5,8 @@
 无法从 DB 得知「提交那一刻覆盖到哪」。必须在提交时刻把水位线定格下来。
 
 下游用途：次日 ``chat_extractor.extract_messages`` 用前一天的水位线做重叠窗口的
-锚点——保证昨天 21:00–24:00 这段从未被报道的尾巴进入今天的输入。缺记录时下游
-退化为「从午夜倒数」，无害。
+锚点——保证昨天 21:00 截止点之后从未被报道的尾巴进入今天的输入。缺记录时下游
+退化为「从 21:00 截止点倒数」，无害。
 
 存放位置沿用 per-day debug 产物约定：``debug/YYYY/MM/DD/coverage.json``。
 """
@@ -47,8 +47,8 @@ def record(date_str: str, last_message_ts: int) -> None:
 def last_covered_ts(date_str: str) -> int | None:
     """返回 *date_str* 日报覆盖到的最后一条消息时间戳；缺失/损坏/字段缺失均返回 None。
 
-    fallback 无害：下游把 None 当作「假设前一天覆盖到了午夜」，重叠窗口退化为
-    从午夜倒数。
+    fallback 无害：下游把 None 当作「假设前一天覆盖到了自己的 21:00 截止点」，
+    重叠窗口退化为从该截止点倒数。
     """
     try:
         data = json.loads(_path(date_str).read_text(encoding="utf-8"))

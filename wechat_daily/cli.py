@@ -127,10 +127,13 @@ def _run_db_pipeline(
     console.rule(f"[bold]数据库提取  [cyan]{date_str}[/cyan]")
     messages = chat_extractor.extract_messages(date_str, contact_map)
     # 窗口起点变长后（重叠段 ≥20 条），可能出现「当天一条没有、只有前夜重叠段」的
-    # 情况。以「当天 [D 00:00, D+1 00:00) 内有无消息」为准判断空日，而非整个窗口。
+    # 情况。以「当天 [D-1 21:00, D 21:00) 内有无消息」为准判断空日，而非整个窗口
+    # （日界线与 chat_extractor.extract_messages 的 day_start/day_end 一致，只是
+    # 不带 ±1h buffer）。
     day_midnight = datetime.datetime(target_date.year, target_date.month, target_date.day)
-    day_start_ts = int(day_midnight.timestamp())
-    day_end_ts = int((day_midnight + datetime.timedelta(days=1)).timestamp())
+    day_cutoff = datetime.timedelta(hours=config.DAY_CUTOFF_HOUR)
+    day_start_ts = int((day_midnight - datetime.timedelta(days=1) + day_cutoff).timestamp())
+    day_end_ts = int((day_midnight + day_cutoff).timestamp())
     if not any(day_start_ts <= m.create_time < day_end_ts for m in messages):
         console.print(f"[yellow]  {date_str} 当天无消息，跳过[/yellow]")
         return
@@ -977,7 +980,7 @@ def main() -> None:
     parser.add_argument(
         "--allow-incomplete",
         action="store_true",
-        help="也为最后一天（尚未过午夜+1小时）生成不完整日报",
+        help="也为最后一天（尚未过当日 21:00+1小时）生成不完整日报",
     )
     parser.add_argument(
         "--no-batch",

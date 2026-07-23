@@ -56,29 +56,34 @@ def extract_messages(
 ) -> list[message_parser.Message]:
     """Return raw Message objects for *date_str* (YYYY-MM-DD).
 
-    结尾窗口固定为次日 00:00+1h；起点则是「D 00:00−1h」和「重叠段倒数第 20 条」
-    里更早的那个（``config.OVERLAP_MIN_MESSAGES``），并钳在前一天 00:00 不再往前。
-    重叠段的锚点优先用前一天日报的覆盖水位线（``coverage.last_covered_ts``）——若
-    昨天 21:00 提前生成（``--allow-incomplete``），今天就从「21:00 往前数 20 条」
-    开始，把昨天 21:00–24:00 从未被报道的尾巴全部纳入今天的输入；缺覆盖记录时锚点
-    退回 D 00:00，等价于「假设昨天覆盖到了午夜」。重叠因此 ≥ max(1 小时, 20 条)。
+    每日消息以 ``config.DAY_CUTOFF_HOUR``（21:00）分界而非午夜：日报「D」覆盖
+    [D-1 21:00, D 21:00)，21:00 之后的消息算作次日。结尾窗口固定为「D 21:00+1h」；
+    起点则是「D-1 21:00−1h」和「重叠段倒数第 20 条」里更早的那个
+    （``config.OVERLAP_MIN_MESSAGES``），并钳在前一天的窗口起点（D-2 21:00）不再
+    往前。重叠段的锚点优先用前一天日报的覆盖水位线（``coverage.last_covered_ts``）
+    ——若昨天按时（21:00）生成，今天就从「21:00 往前数 20 条」开始，把昨天 21:00
+    之后从未被报道的尾巴全部纳入今天的输入；缺覆盖记录时锚点退回 D-1 21:00，等价
+    于「假设昨天覆盖到了自己的截止点」。重叠因此 ≥ max(1 小时, 20 条)。
     """
     if contact_map is None:
         contact_map = contacts.ContactMap.from_db()
 
     date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
     prev_day = date - datetime.timedelta(days=1)
-    default_start = int((date - datetime.timedelta(hours=1)).timestamp())
+    cutoff = datetime.timedelta(hours=config.DAY_CUTOFF_HOUR)
+    day_start = prev_day + cutoff  # D-1 21:00：今天窗口的起点（不含 buffer）
+    day_end = date + cutoff  # D 21:00：今天窗口的终点（不含 buffer）
+    default_start = int((day_start - datetime.timedelta(hours=1)).timestamp())
 
     anchor_ts = coverage.last_covered_ts(prev_day.strftime("%Y-%m-%d"))
     if anchor_ts is None:
-        anchor_ts = int(date.timestamp())
+        anchor_ts = int(day_start.timestamp())
     candidate = _nth_recent_ts(anchor_ts)
     start_ts = default_start if candidate is None else min(default_start, candidate)
-    # 回溯上限：不早于前一天 00:00——更早的内容 previous_reports 已覆盖，再往前拉
-    # 只会白白重复（例如 20 条稀疏到跨进大前天时，钳在前一天午夜）。
-    start_ts = max(start_ts, int(prev_day.timestamp()))
-    end_ts = int((date + datetime.timedelta(days=1, hours=1)).timestamp())
+    # 回溯上限：不早于前一天的窗口起点（D-2 21:00）——更早的内容 previous_reports
+    # 已覆盖，再往前拉只会白白重复（例如 20 条稀疏到跨进大前天时，钳在这里）。
+    start_ts = max(start_ts, int((day_start - datetime.timedelta(days=1)).timestamp()))
+    end_ts = int((day_end + datetime.timedelta(hours=1)).timestamp())
 
     # Each message DB carries its own Name2Id table mapping the integer
     # ``real_sender_id`` column → wxid. This is the authoritative sender source
@@ -201,6 +206,16 @@ def extract_chat_from_db(date_str: str) -> str:
     return format_messages(messages, contact_map)
 
 
+def _cutoff_day(dt: datetime.datetime) -> datetime.date:
+    """*dt* 所属的截止日：以 ``config.DAY_CUTOFF_HOUR`` 为界，[D-1 21:00, D 21:00)
+    记为 D。用于把一个原始时间戳换算成它落在哪一天的日报窗口里。
+    """
+    boundary = dt.replace(
+        hour=config.DAY_CUTOFF_HOUR, minute=0, second=0, microsecond=0
+    )
+    return dt.date() if dt < boundary else dt.date() + datetime.timedelta(days=1)
+
+
 def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
     """Return sorted list of dates (YYYY-MM-DD) that lack an archive PDF."""
     existing: set[str] = set()
@@ -231,10 +246,13 @@ def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
         return []
 
     last_dt = datetime.datetime.fromtimestamp(last_ts)
-    last_complete = (last_dt - datetime.timedelta(hours=1)).date() - datetime.timedelta(days=1)
+    # in_progress：last_dt 减去 1 小时 buffer 之后所属的截止日——即当前正在累积、
+    # 尚未确认完整的那一天。last_complete 是它的前一天（buffer 已过，确认完整）。
+    in_progress = _cutoff_day(last_dt - datetime.timedelta(hours=1))
+    last_complete = in_progress - datetime.timedelta(days=1)
     if allow_incomplete:
-        # buffer zone（午夜前后 1 小时）内不推进到新一天
-        last_complete = max(last_complete, (last_dt - datetime.timedelta(hours=1)).date())
+        # buffer zone（截止时刻前后 1 小时）内也推进到进行中的这一天
+        last_complete = max(last_complete, in_progress)
 
     if not existing:
         return [last_complete.strftime("%Y-%m-%d")]
