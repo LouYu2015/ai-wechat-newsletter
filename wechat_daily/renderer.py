@@ -585,8 +585,7 @@ def _mention(name: str) -> str:
 
     Every render target styles the ``mention`` class (PDF CSS in ``pdf.py``,
     preview HTML in ``publisher.preview``, public site in the Chirpy theme's
-    ``custom.scss``). ``privacy._PROTECT_RE`` also keys off this exact markup
-    to skip already-resolved names during leak marking — keep the two in sync.
+    ``custom.scss``).
     """
     return f'<span class="mention">@{name}</span>'
 
@@ -673,11 +672,6 @@ def render_group(
     extra = token_map.all_tokens() if token_map else None
     text_resolver = _build_token_replacer(alias_db, token_to_real, extra)
     body = text_resolver(body)
-    # mark_leaks runs after token replacement so CJK substrings (e.g. 「企鹅」
-    # inside the token 「开朗的企鹅」) don't get a <mark> inserted that breaks
-    # the subsequent token regex match. Token-resolved <u>…</u> regions are
-    # skipped inside mark_leaks.
-    body = privacy.mark_leaks(body, contact_map)
 
     parts = [
         f"# {report.date} 群聊日报",

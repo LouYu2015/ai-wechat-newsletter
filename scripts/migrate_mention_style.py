@@ -27,7 +27,7 @@ from pathlib import Path
 
 from wechat_daily.config import PUBLIC_REPO_DIR
 
-# 与 renderer._mention / privacy._PROTECT_RE 保持一致：裸 <u>，内容不含 '<'。
+# 与 renderer._mention 保持一致：裸 <u>，内容不含 '<'。
 _U_RE = re.compile(r"<u>([^<]*)</u>")
 
 

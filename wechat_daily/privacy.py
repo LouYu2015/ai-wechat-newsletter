@@ -489,20 +489,12 @@ def format_tokenized_messages_blocks(
 
 # ── Leak detection ───────────────────────────────────────────────────────────────
 
-LEAK_MARK_OPEN = '<mark class="leak-warn">'
-LEAK_MARK_CLOSE = "</mark>"
-
 
 def leak_check(
     markdown: str,
     alias_db: aliases.AliasDB,
 ) -> None:
-    """Raise LeakDetected on the three hard-gate violations.
-
-    Nickname leaks are no longer raised here — the group renderer wraps
-    suspect occurrences with ``<mark class="leak-warn">…</mark>`` so the
-    author can spot-check them visually before publishing.
-    """
+    """Raise LeakDetected on the three hard-gate violations."""
     for anon in alias_db.optout_anons():
         if anon in markdown:
             raise LeakDetected(f"Optout 用户默认匿名名泄漏: 「{anon}」")
@@ -515,75 +507,3 @@ def leak_check(
     # model failure, surface it rather than silently ship malformed text.
     if "⟨" in markdown or "⟩" in markdown:
         raise LeakDetected("输出残留 ⟨…⟩ 同名消歧标记")
-
-
-# Regions that ``mark_leaks`` must not touch:
-#   <span class="mention">…</span>
-#                     — already token-resolved real names (the @mention pill);
-#                       marking them again double-wraps every legit reference.
-#   ](url)            — markdown link target; inserting <mark> inside breaks
-#                       the URL (saw ``wei<mark>xin.</mark>qq.com`` in 05-02).
-#   `inline code`     — code spans with identifier-shaped contents (e.g.
-#                       ``config``) collide with English nicknames.
-#   <https://…>       — autolinks; same URL-corruption concern as above.
-_PROTECT_RE = re.compile(
-    r'<span class="mention">[^<]*</span>'
-    r"|\]\([^)]*\)"
-    r"|`[^`\n]+`"
-    r"|<https?://[^>\s]+>"
-)
-
-
-def _mark_leaks_threshold_pairs(
-    contact_map: contacts.ContactMap,
-) -> list[tuple[str, str]]:
-    """Stricter filter than ``_nickname_pairs``: ASCII ≥ 4, CJK/other ≥ 3.
-
-    The chat-history scanner aggressively matches ≥ 2 codepoints because the
-    LLM gets ``token⟨原文⟩`` and can disambiguate. ``mark_leaks`` is a human
-    review signal — every false positive is noise. Real data showed 2-char
-    nicknames colliding with token internals (``企鹅`` inside ``开朗的企鹅``)
-    and 3-char ASCII nicknames colliding with English words; raising the
-    threshold removes the worst offenders without losing real leaks (which
-    tend to be longer real names anyway).
-    """
-    out: list[tuple[str, str]] = []
-    for n, w in contact_map.all_pairs():
-        if _is_ascii_word(n):
-            if len(n) >= 4:
-                out.append((n, w))
-        else:
-            if len(n) >= 3:
-                out.append((n, w))
-    out.sort(key=lambda p: len(p[0]), reverse=True)
-    return out
-
-
-def mark_leaks(markdown: str, contact_map: contacts.ContactMap) -> str:
-    """Wrap occurrences of known real-name variants with a leak-warn mark.
-
-    Called by the group renderer *after* token replacement, so the input
-    contains ``<u>real_name</u>`` for every legitimately-resolved token —
-    those regions are skipped via ``_PROTECT_RE`` to avoid double-wrapping.
-    Markdown link URLs, inline code, and autolinks are also protected.
-
-    Tokens (default_anons / public aliases) are not wrapped — only real-name
-    variants from ``contact_map`` that survived without going through token
-    resolution (the genuine leak candidates).
-    """
-    pairs = _mark_leaks_threshold_pairs(contact_map)
-    pattern = _compile_nickname_pattern(pairs)
-    if pattern is None:
-        return markdown
-
-    def wrap(m: "re.Match[str]") -> str:
-        return f"{LEAK_MARK_OPEN}{m.group(0)}{LEAK_MARK_CLOSE}"
-
-    out: list[str] = []
-    pos = 0
-    for pm in _PROTECT_RE.finditer(markdown):
-        out.append(pattern.sub(wrap, markdown[pos : pm.start()]))
-        out.append(pm.group(0))
-        pos = pm.end()
-    out.append(pattern.sub(wrap, markdown[pos:]))
-    return "".join(out)

@@ -422,9 +422,8 @@ def test_leak_check_clean_no_hard_gate():
 
 
 def test_leak_check_nickname_no_longer_raises():
-    """Real nicknames in the public text used to raise; now they're
-    surfaced via ``mark_leaks`` in the group renderer instead, leaving
-    the public path un-blocked on this class of issue."""
+    """Real nicknames in the public text do not trigger the hard gate —
+    only optout-anon leaks, raw wxids, and disambig-marker residue do."""
     db = _alias_db()
     privacy.leak_check("AliceLongName said something", db)  # no raise
 
@@ -451,131 +450,6 @@ def test_leak_check_detects_disambig_marker_residue():
 def test_leak_check_empty_markdown():
     db = _alias_db()
     privacy.leak_check("", db)
-
-
-# ── mark_leaks / strip_leak_marks ──────────────────────────────────────────────
-
-
-def test_mark_leaks_wraps_known_nickname():
-    contacts = _contact_map({"wxid_alice": "AliceLongName"})
-    out = privacy.mark_leaks("AliceLongName said hi", contacts)
-    assert f"{privacy.LEAK_MARK_OPEN}AliceLongName{privacy.LEAK_MARK_CLOSE}" in out
-
-
-def test_mark_leaks_skips_two_codepoint_cjk():
-    """``mark_leaks`` is a review signal — its CJK threshold is ≥ 3 codepoints
-    (stricter than ``_replace_names``'s ≥ 2). 2-char nicknames like 「鸭哥」
-    cause too many false positives, including collisions with token internals
-    such as 「企鹅」 inside 「开朗的企鹅」."""
-    contacts = _contact_map({"wxid_a": "鸭哥"})
-    out = privacy.mark_leaks("早 鸭哥 起来了", contacts)
-    assert privacy.LEAK_MARK_OPEN not in out
-
-
-def test_mark_leaks_wraps_three_codepoint_cjk():
-    contacts = _contact_map({"wxid_a": "小鸭哥"})
-    out = privacy.mark_leaks("早 小鸭哥 起来了", contacts)
-    assert f"{privacy.LEAK_MARK_OPEN}小鸭哥{privacy.LEAK_MARK_CLOSE}" in out
-
-
-def test_mark_leaks_skips_one_codepoint_names():
-    contacts = _contact_map({"wxid_a": "李"})
-    out = privacy.mark_leaks("李 说话", contacts)
-    assert privacy.LEAK_MARK_OPEN not in out
-
-
-def test_mark_leaks_uses_group_display_over_wechat_nick():
-    cmap = contacts.ContactMap.from_dict(
-        {"wxid_a": "default-wechat-nick"},
-        {"wxid_a": "群昵称专属"},
-    )
-    out = privacy.mark_leaks("群昵称专属 和 default-wechat-nick", cmap)
-    # Both variants are tracked → both wrapped
-    assert f"{privacy.LEAK_MARK_OPEN}群昵称专属{privacy.LEAK_MARK_CLOSE}" in out
-    assert f"{privacy.LEAK_MARK_OPEN}default-wechat-nick{privacy.LEAK_MARK_CLOSE}" in out
-
-
-def test_mark_leaks_longest_first_avoids_partial():
-    contacts = _contact_map({"wxid_a": "张三李四王", "wxid_b": "张三李四王五"})
-    out = privacy.mark_leaks("张三李四王五 来了", contacts)
-    # Longer match wins; the prefix string must not separately wrap.
-    assert out.count(privacy.LEAK_MARK_OPEN) == 1
-    assert "张三李四王五" in out
-
-
-def test_mark_leaks_no_pairs_returns_input():
-    contacts = _contact_map({})
-    out = privacy.mark_leaks("plain text", contacts)
-    assert out == "plain text"
-
-
-def test_mark_leaks_skips_short_ascii():
-    """ASCII threshold is ≥ 4. ``tea`` is below threshold even though it is
-    a plausible nickname — too many false positives in English-heavy content."""
-    contacts = _contact_map({"wxid_a": "tea", "wxid_b": "abc"})
-    out = privacy.mark_leaks("tea time and abc 都很好", contacts)
-    assert privacy.LEAK_MARK_OPEN not in out
-
-
-def test_mark_leaks_ascii_uses_word_boundary():
-    contacts = _contact_map({"wxid_a": "team"})
-    out = privacy.mark_leaks("teamwork 完成了", contacts)
-    assert privacy.LEAK_MARK_OPEN not in out
-
-
-def test_mark_leaks_ascii_word_match_still_wraps():
-    contacts = _contact_map({"wxid_a": "team"})
-    out = privacy.mark_leaks("我们的 team 厉害", contacts)
-    assert f"{privacy.LEAK_MARK_OPEN}team{privacy.LEAK_MARK_CLOSE}" in out
-
-
-def test_mark_leaks_skips_mention_region():
-    """Token-resolved real names live inside the ``mention`` pill after
-    ``text_resolver``. Marking them again would double-wrap every legit ref."""
-    contacts = _contact_map({"wxid_a": "AliceLong"})
-    out = privacy.mark_leaks('<span class="mention">@AliceLong</span> 说话', contacts)
-    assert privacy.LEAK_MARK_OPEN not in out
-
-
-def test_mark_leaks_skips_markdown_link_url():
-    """Inserting ``<mark>`` inside a link URL breaks the link
-    (saw ``wei<mark>xin.</mark>qq.com`` corrupt the 05-02 daily)."""
-    contacts = _contact_map({"wxid_a": "weixin"})
-    out = privacy.mark_leaks("[文章](https://weixin.qq.com/foo) 链接", contacts)
-    assert privacy.LEAK_MARK_OPEN not in out
-    assert "https://weixin.qq.com/foo" in out
-
-
-def test_mark_leaks_marks_link_text():
-    """Link text (the ``[…]`` half) is still scanned — only the URL is shielded."""
-    contacts = _contact_map({"wxid_a": "AliceLong"})
-    out = privacy.mark_leaks("[AliceLong](https://x.com/p) 写道", contacts)
-    assert f"{privacy.LEAK_MARK_OPEN}AliceLong{privacy.LEAK_MARK_CLOSE}" in out
-
-
-def test_mark_leaks_skips_inline_code():
-    contacts = _contact_map({"wxid_a": "config"})
-    out = privacy.mark_leaks("看 `config.py` 文件", contacts)
-    assert privacy.LEAK_MARK_OPEN not in out
-
-
-def test_mark_leaks_skips_autolink():
-    contacts = _contact_map({"wxid_a": "example"})
-    out = privacy.mark_leaks("访问 <https://example.com/foo>", contacts)
-    assert privacy.LEAK_MARK_OPEN not in out
-
-
-def test_mark_leaks_does_not_break_token_substring():
-    """Regression: with the old in-token CJK substring matching,
-    ``mark_leaks`` running before token replacement broke
-    ``开朗的企鹅`` into ``开朗的<mark>企鹅</mark>``. Now ``mark_leaks``
-    runs *after* token replacement, so token strings never reach it."""
-    # 「企鹅」 is 2 codepoints — below the new mark_leaks threshold anyway.
-    # This test guards against regressing the threshold.
-    contacts = _contact_map({"wxid_a": "企鹅"})
-    out = privacy.mark_leaks("开朗的企鹅 说", contacts)
-    assert "开朗的企鹅" in out
-    assert privacy.LEAK_MARK_OPEN not in out
 
 
 def test_replace_names_ascii_word_boundary():

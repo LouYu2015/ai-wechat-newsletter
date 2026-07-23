@@ -65,8 +65,9 @@ class ContactMap:
     def all_pairs(self) -> list[tuple[str, str]]:
         """Return every ``(name, wxid)`` across both sources, deduped per wxid.
 
-        Used by privacy._nickname_pairs and leak_check to build a substitution /
-        scan pattern. Unsorted; callers may sort by name length as needed.
+        Used by privacy._nickname_pairs and _tap_has_optout_party to build a
+        substitution / scan pattern. Unsorted; callers may sort by name length
+        as needed.
         """
         out: list[tuple[str, str]] = []
         for wxid in set(self._group.keys()) | set(self._wechat.keys()):
