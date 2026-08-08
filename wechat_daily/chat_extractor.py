@@ -9,7 +9,27 @@ import sys
 from wechat_daily import config, contacts, coverage, message_parser, wechat_db
 
 
+_MESSAGE_SHARD_RE = re.compile(r"message_(\d+)\.db")
+
+
 def _db_rels() -> list[str]:
+    """当前存在的消息分片相对路径，按分片编号排序。
+
+    微信把群消息按时间分片存进多个数据库（message_0.db, message_1.db, ...），
+    写满一片后会滚动新建更高编号的分片继续写。这里直接扫描 db_storage/message/
+    目录发现有哪些分片，而不是硬编码固定几个——硬编码曾在 2026-08 导致微信滚动出
+    message_2.db 后消息「停更」两天都没被发现（脚本一直在读已不再写入的旧分片）。
+    找不到 db_storage（测试环境、未解密）时退回原先的两片默认值。
+    """
+    db_storage = wechat_db._find_db_storage()
+    if db_storage is not None:
+        shards: list[tuple[int, str]] = []
+        for p in (db_storage / "message").glob("message_*.db"):
+            m = _MESSAGE_SHARD_RE.fullmatch(p.name)
+            if m:
+                shards.append((int(m.group(1)), p.name))
+        if shards:
+            return [f"message/{name}" for _, name in sorted(shards)]
     return ["message/message_0.db", "message/message_1.db"]
 
 
