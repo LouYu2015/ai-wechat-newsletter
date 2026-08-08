@@ -51,13 +51,13 @@ GROUP_CHAT_ID = "26389512912@chatroom"
 GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 
 # ── Models ──────────────────────────────────────────────────────────────────────
-# AB test: 报告生成对比 Fable 5（主版本，发布 + 喂续写）vs Opus 4.6（旁路，仅本地
+# AB test: 报告生成对比 Opus 4.6（主版本，发布 + 喂续写）vs Opus 5（旁路，仅本地
 # PDF/debug）。两版都走 Anthropic 同一条 extract_report 路径、同套提示词、原生喂图，
 # 只有报告生成模型不同——把唯一变量真正收敛到模型上。链接摘要走 DeepSeek V4
 # （成本约为 Sonnet 的 1/10；deepseek 前缀触发 url_enricher 的 OpenAI 兼容分支，
 # thinking 关闭），两版日报共用同一批摘要。
-CLAUDE_MODEL = "claude-fable-5"  # 主版本报告生成（发布）
-COMPARE_REPORT_MODEL = "claude-opus-4-6"  # 对比版报告生成（旁路，不发布）
+CLAUDE_MODEL = "claude-opus-4-6"  # 主版本报告生成（发布）
+COMPARE_REPORT_MODEL = "claude-opus-5"  # 对比版报告生成（旁路，不发布）
 LINK_SUMMARY_MODEL = "deepseek-v4-pro"  # 链接摘要（DeepSeek V4，无思考）
 
 # ── Anthropic API pricing (USD per 1M tokens) ──────────────────────────────────
@@ -65,12 +65,20 @@ LINK_SUMMARY_MODEL = "deepseek-v4-pro"  # 链接摘要（DeepSeek V4，无思考
 # (verified 2026-05). Cache-write 5m = 1.25× base input; cache-read = 0.1× base
 # input; we list them out explicitly so call sites don't have to multiply.
 MODEL_PRICES: dict[str, dict[str, float]] = {
-    # Opus 4.6（对比版报告生成）：$5/M 输入、$25/M 输出。cache-write 5m = 1.25×
+    # Opus 5（对比版报告生成）：$5/M 输入、$25/M 输出。cache-write 5m = 1.25×
     # 输入、cache-read = 0.1× 输入。
-    "claude-opus-4-6": {"input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50},
-    # Fable 5（主版本报告生成）：$10/M 输入、$50/M 输出。cache-write 5m = 1.25×
-    # 输入、cache-read = 0.1× 输入。注意 Fable 新分词器同样内容 token 数约 +30%，
-    # 实际日报成本会高于这里按 token 数线性外推的直觉值。
+    "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50},
+    # Opus 4.6（主版本报告生成）：$5/M 输入、$25/M 输出。cache-write 5m = 1.25×
+    # 输入、cache-read = 0.1× 输入。
+    "claude-opus-4-6": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_write_5m": 6.25,
+        "cache_read": 0.50,
+    },
+    # Fable 5：$10/M 输入、$50/M 输出。cache-write 5m = 1.25×输入、cache-read =
+    # 0.1×输入。注意 Fable 新分词器同样内容 token 数约 +30%，实际日报成本会高于
+    # 这里按 token 数线性外推的直觉值。
     "claude-fable-5": {
         "input": 10.00,
         "output": 50.00,
