@@ -8,6 +8,7 @@ import datetime
 import os
 import pathlib
 import sys
+import time
 
 import dotenv
 import rich.console
@@ -785,6 +786,26 @@ def _decide_batch_state(
     return state
 
 
+class _NextPollColumn(rich.progress.ProgressColumn):
+    """「下次轮询还有 Ns」——纯渲染时用墙钟算，不需要逐秒回调。
+
+    Rich 的 Live/Progress 本身按 ~12.5Hz 自动重绘，即使没有新数据推送；
+    ``render`` 每次都用 ``time.time()`` 减 ``last_poll_ts`` 重算剩余时间，
+    界面就能平滑倒计时，完全不用把 poll_until_ended 里的 ``time.sleep(30)``
+    拆成逐秒 sleep + 回调（那会让 UI 需求泄漏进本就精心处理过睡眠/重连的轮询逻辑）。
+    """
+
+    def render(self, task: rich.progress.Task) -> rich.text.Text:
+        last_poll_ts = task.fields.get("last_poll_ts")
+        poll_interval = task.fields.get("poll_interval")
+        if last_poll_ts is None or poll_interval is None:
+            return rich.text.Text("")
+        remaining = poll_interval - (time.time() - last_poll_ts)
+        label = task.fields.get("next_label", "下次轮询")
+        text = f"{label} ~{remaining:.0f}s" if remaining > 0 else f"{label}中…"
+        return rich.text.Text(text, style="dim")
+
+
 def _run_batch_extraction(
     *,
     date_str: str,
@@ -899,22 +920,41 @@ def _run_batch_extraction(
             rich.progress.SpinnerColumn(),
             rich.progress.TextColumn("[bold blue]Batch 处理中..."),
             rich.progress.TextColumn("[dim]{task.description}[/dim]"),
-            rich.progress.TimeElapsedColumn(),
+            _NextPollColumn(),
+            rich.progress.TextColumn("[progress.elapsed]{task.fields[elapsed_str]}"),
             console=console,
         )
-        task = progress.add_task("提交/连接中...", total=None)
+        task = progress.add_task(
+            "提交/连接中...",
+            total=None,
+            elapsed_str="-:--:--",
+            last_poll_ts=None,
+            poll_interval=batch_extractor.POLL_INTERVAL_S,
+            next_label="下次轮询",
+        )
+
+        def _elapsed_str(elapsed: float) -> str:
+            return str(datetime.timedelta(seconds=max(0, int(elapsed))))
 
         def _status_cb(batch, elapsed: float, note: str) -> None:
             if batch is None:
-                progress.update(task, description=note)
+                # 睡眠恢复/连续失败重连已经作为永久记录走 note_cb 打出去了（见
+                # batch_extractor._rebuild），这里只会收到网络错误的重试提示。
+                progress.update(
+                    task,
+                    description=note,
+                    elapsed_str=_elapsed_str(elapsed),
+                    last_poll_ts=time.time(),
+                    next_label="下次重试",
+                )
                 return
             c = batch.request_counts
             progress.update(
                 task,
-                description=(
-                    f"处理中 {c.processing} / 成功 {c.succeeded} / "
-                    f"失败 {c.errored} · 每 {batch_extractor.POLL_INTERVAL_S:.0f}s 轮询"
-                ),
+                description=f"处理中 {c.processing} / 成功 {c.succeeded} / 失败 {c.errored}",
+                elapsed_str=_elapsed_str(elapsed),
+                last_poll_ts=time.time(),
+                next_label="下次轮询",
             )
 
         try:

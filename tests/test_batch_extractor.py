@@ -601,17 +601,21 @@ def test_poll_rebuilds_client_after_consecutive_failures():
         built.append(fresh)
         return fresh
 
-    notes = []
+    status_notes = []
+    perm_notes = []
     batch = bx.poll_until_ended(
         client,
         "b",
-        status_cb=lambda b, e, n: notes.append((b, n)),
+        status_cb=lambda b, e, n: status_notes.append((b, n)),
+        note_cb=perm_notes.append,
         rebuild_client=factory,
     )
     assert batch.processing_status == "ended"
     assert len(built) == 1  # 恰好在第 2 次连续失败时重建一次
     assert client.closed  # 旧 client best-effort close
-    assert any(b is None and "重建连接" in n for b, n in notes)
+    # 重建事件走 note_cb 永久留痕，不再经 status_cb（会被下一轮成功轮询冲掉）。
+    assert any("重建连接" in n for n in perm_notes)
+    assert not any("重建连接" in n for _, n in status_notes)
 
 
 def test_run_batch_uses_rebuilt_client_for_fetch_and_retry(debug_dir):
@@ -673,16 +677,19 @@ def test_poll_rebuilds_on_sleep_gap(monkeypatch):
 
     monkeypatch.setattr(time, "time", fake_time)
 
-    notes = []
+    status_notes = []
+    perm_notes = []
     batch = bx.poll_until_ended(
         client,
         "b",
-        status_cb=lambda b, e, n: notes.append((b, n)),
+        status_cb=lambda b, e, n: status_notes.append((b, n)),
+        note_cb=perm_notes.append,
         rebuild_client=factory,
     )
     assert batch.processing_status == "ended"
     assert len(built) == 1
-    assert any(b is None and "休眠恢复" in n for b, n in notes)
+    assert any("休眠恢复" in n for n in perm_notes)
+    assert not any("休眠恢复" in n for _, n in status_notes)
 
 
 def test_poll_timeout_counts_iterations_not_wallclock(monkeypatch):

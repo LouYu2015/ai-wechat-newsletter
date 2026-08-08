@@ -334,6 +334,7 @@ def poll_until_ended(
     poll_interval: float = POLL_INTERVAL_S,
     max_wait_s: float = MAX_WAIT_S,
     status_cb: Callable[[object | None, float, str], None] | None = None,
+    note_cb: Callable[[str], None] | None = None,
     rebuild_client: Callable[[], object] | None = None,
 ):
     """Poll until ``processing_status == "ended"``; return the final batch.
@@ -355,8 +356,13 @@ def poll_until_ended(
     轮询、自然不计入，长挂机不会误触发 :class:`BatchTimeout`。
 
     *status_cb(batch_or_none, elapsed_s, note)* fires once per iteration —
-    ``batch_or_none`` is ``None`` when the iteration failed or a rebuild fired
-    (note carries the error/rebuild text).
+    ``batch_or_none`` is ``None`` when a single retrieve fails (note carries the
+    error text; callers typically render it as an ephemeral line that the next
+    successful iteration overwrites). Reconnect events (sleep-wake detected,
+    consecutive failures) go through *note_cb(note)* instead — those are worth
+    a permanent breadcrumb, not something that should get silently clobbered by
+    the next status_cb call. Passing *status_cb* without *note_cb* silently
+    drops reconnect breadcrumbs — there is no fallback between the two.
     """
     import anthropic
 
@@ -375,8 +381,8 @@ def poll_until_ended(
         except Exception:
             pass  # best-effort：旧连接可能已经死了，close 报错无所谓
         client = rebuild_client()
-        if status_cb:
-            status_cb(None, time.time() - start, note)
+        if note_cb:
+            note_cb(note)
 
     while True:
         iterations += 1
@@ -404,8 +410,7 @@ def poll_until_ended(
                 status_cb(
                     None,
                     elapsed,
-                    f"网络错误（连续第 {consecutive_failures} 次），"
-                    f"{poll_interval:.0f}s 后重试：{e}",
+                    f"网络错误（连续第 {consecutive_failures} 次），重试中：{e}",
                 )
             if consecutive_failures >= 2:
                 _rebuild(f"连续 {consecutive_failures} 次轮询失败，已重建连接")
@@ -576,7 +581,9 @@ def run_batch(
 
     swap = _swap_client if rebuild_client is not None else None
 
-    batch = poll_until_ended(client, state.batch_id, status_cb=status_cb, rebuild_client=swap)
+    batch = poll_until_ended(
+        client, state.batch_id, status_cb=status_cb, note_cb=note_cb, rebuild_client=swap
+    )
     results = fetch_results(client, batch.id, note_cb=note_cb)
     outcome, retryable = process_results(
         date_str,
@@ -602,7 +609,9 @@ def run_batch(
             ]
         )
         try:
-            poll_until_ended(client, retry_batch.id, status_cb=status_cb, rebuild_client=swap)
+            poll_until_ended(
+                client, retry_batch.id, status_cb=status_cb, note_cb=note_cb, rebuild_client=swap
+            )
             retry_results = fetch_results(client, retry_batch.id, note_cb=note_cb)
         except BaseException:
             # Includes KeyboardInterrupt: don't leave the orphan retry batch
