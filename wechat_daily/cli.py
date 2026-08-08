@@ -248,7 +248,7 @@ def _run_db_pipeline(
             choice = (
                 console.input(
                     "[bold]继续生成今日日报？"
-                    "[c]ontinue / [s]kip 此日 / [a]bort 全部退出 (默认 c): [/bold]"
+                    "继续 (c) / 跳过此日 (s) / 全部退出 (a) (默认 c): [/bold]"
                 )
                 .strip()
                 .lower()
@@ -723,7 +723,7 @@ def _decide_batch_state(
         if force_resubmit:
             return None
         choice = (
-            console.input("[bold]状态文件不可用。[r] 重新提交 / [a] 中止 (默认 r): [/bold]")
+            console.input("[bold]状态文件不可用。重新提交 (r) / 中止 (a) (默认 r): [/bold]")
             .strip()
             .lower()
         )
@@ -749,7 +749,7 @@ def _decide_batch_state(
             console.input(
                 f"[bold]该日期批次 {state.batch_id} 之前已取回过结果"
                 f"（提交于 {state.submitted_at}）。\n"
-                "[u] 复用批次结果（重新取回，零成本） / [n] 重新提交生成 (默认 u): [/bold]"
+                "复用批次结果 (u)，重新取回、零成本 / 重新提交生成 (n) (默认 u): [/bold]"
             )
             .strip()
             .lower()
@@ -772,8 +772,8 @@ def _decide_batch_state(
     )
     choice = (
         console.input(
-            "[bold][c] 续接：日报只覆盖提交时刻的快照，之后的消息不会出现在本期\n"
-            "[r] 重新提交：取消旧批次，用当前全部消息重新生成 (默认 c): [/bold]"
+            "[bold]续接 (c)：日报只覆盖提交时刻的快照，之后的消息不会出现在本期\n"
+            "重新提交 (r)：取消旧批次，用当前全部消息重新生成 (默认 c): [/bold]"
         )
         .strip()
         .lower()
