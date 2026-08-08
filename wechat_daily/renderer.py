@@ -30,7 +30,7 @@ import sys
 import urllib.parse
 from typing import TYPE_CHECKING, Callable
 
-from wechat_daily import config, models, privacy
+from wechat_daily import config, models
 
 if TYPE_CHECKING:
     from wechat_daily import aliases, contacts
