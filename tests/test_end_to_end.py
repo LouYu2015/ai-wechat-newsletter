@@ -156,9 +156,9 @@ def test_public_has_jekyll_front_matter():
 def test_public_front_matter_carries_tags():
     db = _make_db()
     out = renderer.render_public(_make_report(db), db)
-    assert "  - model-release" in out
-    assert "  - coding" in out
-    assert "  - tool" in out
+    assert '  - "model-release"' in out
+    assert '  - "coding"' in out
+    assert '  - "tool"' in out
 
 
 def test_public_no_instruction_log():

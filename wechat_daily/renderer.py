@@ -771,7 +771,9 @@ def render_public(
     ]
     if tags:
         front_matter_lines.append("tags:")
-        front_matter_lines.extend(f"  - {t}" for t in tags)
+        # Quote: a purely numeric tag (e.g. "5090") would otherwise be parsed as
+        # an Integer, and Jekyll's slugify blows up on non-String tags.
+        front_matter_lines.extend(f'  - "{t}"' for t in tags)
     else:
         front_matter_lines.append("tags: []")
     front_matter_lines += [

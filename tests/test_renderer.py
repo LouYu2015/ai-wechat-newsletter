@@ -376,8 +376,15 @@ def test_render_public_front_matter_permalink():
 def test_render_public_front_matter_tags():
     out = renderer.render_public(_wrap(_sample_markdown()), _make_db())
     assert "tags:" in out
-    assert "  - ai" in out
-    assert "  - model-release" in out
+    assert '  - "ai"' in out
+    assert '  - "model-release"' in out
+
+
+def test_render_public_numeric_tag_quoted():
+    # An unquoted "5090" parses as a YAML Integer; Jekyll's slugify then crashes.
+    md = _sample_markdown().replace("tags: ai, model-release", "tags: 5090, ai")
+    out = renderer.render_public(_wrap(md), _make_db())
+    assert '  - "5090"' in out
 
 
 def test_render_public_no_tags_emits_empty_list():
