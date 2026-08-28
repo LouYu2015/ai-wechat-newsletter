@@ -72,8 +72,8 @@ source .venv/bin/activate
 # 通常几分钟到几十分钟完成；主版 + 对比版同批提交）
 python3 main.py
 
-# 生成后推送公开版到 GitHub Pages
-python3 main.py -y
+# 只生成、不推送（留人工审核窗口，本地 commit 保留）
+python3 main.py --no-push
 
 # 也为当天不完整日期生成日报
 python3 main.py --allow-incomplete
@@ -82,7 +82,9 @@ python3 main.py --allow-incomplete
 python3 main.py --no-batch
 ```
 
-**`-y` 标志**：推送上一次运行生成的本地 commit 到公开仓库。本次生成的 commit 下次带 `-y` 才推送，留出人工审核窗口。
+**推送时机**：默认在每天的 PDF / 公开版生成并本地 commit 后**立即推送**到公开仓库，GitHub Pages 自动构建；启动时也会先把之前攒下的未推送 commit 推掉。带 `--no-push` 则本次只做本地 commit，等人工审核后下次运行再一并推送。（旧的 `-y` 标志已废弃，保留为空操作。）
+
+> 容器里跑（`./dev.sh`）没有 SSH 私钥，推送会失败并只打印一条黄色警告；容器内建议加 `--no-push`，推送在宿主机做。
 
 ### 批量模式的断点续接
 

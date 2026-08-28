@@ -102,6 +102,7 @@ def _run_db_pipeline(
     use_batch: bool = True,
     force_resume: bool = False,
     force_resubmit: bool = False,
+    push: bool = True,
 ) -> None:
     """Full pipeline for one date: extract → tokenize → LLM → render → PDF + public.
 
@@ -120,6 +121,8 @@ def _run_db_pipeline(
     ``--no-batch`` flag flips this off for the legacy streaming path.
     *force_resume* / *force_resubmit* — skip the interactive question when a
     resumable batch state exists (``--resume`` / ``--resubmit``).
+    *push* — push the public-repo commit to GitHub right after generating it
+    (default). ``False`` (``--no-push``) leaves it as a local commit only.
     """
 
     target_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -429,7 +432,7 @@ def _run_db_pipeline(
 
     console.print("[green]泄漏检测通过[/green]\n")
 
-    # ── F: Write public post + local commit (NO push — -y handles that) ─────
+    # ── F: Write public post + local commit（默认立即推送，--no-push 可关闭）──
     post_path = publisher.write_post(date_str, public_md)
     committed = publisher.commit(date_str)
     if committed:
@@ -437,14 +440,27 @@ def _run_db_pipeline(
     else:
         console.print(f"[dim]公开版内容未变，跳过 commit: {post_path}[/dim]")
 
-    # Preview (open browser so author can spot-check before next -y push)
+    # Preview (open browser so the author can spot-check the published result)
     preview_path = publisher.preview(date_str, public_md, open_browser=True)
     console.print(f"[dim]预览: {preview_path}[/dim]")
 
-    console.print(
-        "\n[dim]公开版已本地 commit（未推送）。"
-        "下次运行带 -y 可推送到 GitHub，GitHub Pages 将自动构建。[/dim]"
-    )
+    if push:
+        try:
+            pushed = publisher.push_pending()
+        except RuntimeError as e:
+            console.print(f"[yellow]推送失败: {e}[/yellow]")
+            console.print("[dim]本地 commit 已保留，可稍后重跑或手动 git push。[/dim]")
+        else:
+            console.print(
+                "[green]已推送到 GitHub，GitHub Pages 将自动构建。[/green]"
+                if pushed
+                else "[dim]无待推送 commit。[/dim]"
+            )
+    else:
+        console.print(
+            "\n[dim]公开版已本地 commit（--no-push，未推送）。"
+            "下次运行（不带 --no-push）会一并推送到 GitHub。[/dim]"
+        )
 
 
 _COMPARE_DEBUG_SUFFIX = ".opus-4-6"
@@ -1042,9 +1058,17 @@ def main() -> None:
         help="放弃已存在的批次（尽力取消未完成请求），用当前消息重新提交。",
     )
     parser.add_argument(
+        "--no-push",
+        action="store_true",
+        help=(
+            "生成后不推送公开版，只留本地 commit（默认生成 PDF 后立即推送到 "
+            "GitHub Pages）。想先人工审核再发布时用此项。"
+        ),
+    )
+    parser.add_argument(
         "-y",
         action="store_true",
-        help="推送上次生成的公开版到 GitHub Pages（不影响本次生成流程）",
+        help="已废弃：推送现在是默认行为，此标志保留为兼容用的空操作。",
     )
     parser.add_argument(
         "--prior-days",
@@ -1095,8 +1119,9 @@ def main() -> None:
         _ensure_deepseek_key()
         console.print("[green]API Keys 就绪[/green]\n")
 
-        # Step 2: Push PREVIOUS run's pending commits (-y semantics per §7.6)
-        if args.y:
+        # Step 2: Push any pending commits left over by earlier --no-push runs.
+        # 本次生成的 commit 在各自 pipeline 末尾推送（除非 --no-push）。
+        if not args.no_push:
             console.rule("[bold]Step 2  推送上次未推送的公开版")
             try:
                 pushed = publisher.push_pending()
@@ -1155,6 +1180,7 @@ def main() -> None:
                 use_batch=not args.no_batch,
                 force_resume=args.resume,
                 force_resubmit=args.resubmit,
+                push=not args.no_push,
             )
             # Persist any tokens lazily allocated during this date's pipeline
             # so subsequent runs keep the same names.
