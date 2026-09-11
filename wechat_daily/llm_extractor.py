@@ -306,7 +306,11 @@ def extract_report(
 
         except ExtractionError:
             raise
-        except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError) as e:
+        # TransportError covers the whole family — ConnectError / ReadTimeout /
+        # RemoteProtocolError, and also ReadError, a mid-stream "connection
+        # reset by peer" that the old explicit tuple missed. That one killed a
+        # run outright after the input tokens had already been paid for.
+        except httpx.TransportError as e:
             last_exc = e
             if attempt < max_retries:
                 time.sleep(5 * attempt)
