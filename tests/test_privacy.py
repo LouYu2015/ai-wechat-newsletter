@@ -406,7 +406,7 @@ def test_format_blocks_insert_dividers_in_text():
         _msg(_local_ts(2026, 3, 10, 0, 30), message_parser.MSG_TEXT, "wxid_alice", "early"),
     ]
     tokenized, _ = privacy.tokenize_messages(messages, contacts, db)
-    blocks = privacy.format_tokenized_messages_blocks(tokenized, _NullDecoder())
+    blocks, _ = privacy.format_tokenized_messages_blocks(tokenized, _NullDecoder())
     text = "\n".join(b["text"] for b in blocks if b["type"] == "text")
     assert "——— 以下消息发生在 2026-03-09 ———" in text
     assert "——— 以下消息发生在 2026-03-10 ———" in text
@@ -507,3 +507,115 @@ def test_replace_names_no_token_corruption():
     pattern, mapping = privacy.build_replace_state(contacts, tm)
     out = privacy._replace_names("BobbySmith says hi", pattern, mapping)
     assert b_token in out
+
+
+class _FakeDecoder:
+    """Decodes every md5 to the same 1-byte file (content is irrelevant here)."""
+
+    def __init__(self, tmp_path):
+        self._jpeg = tmp_path / "fake.jpg"
+        self._jpeg.write_bytes(b"\xff")
+
+    def decode(self, _md5):
+        return self._jpeg
+
+
+def _image_msg(ts, md5):
+    m = _msg(ts, message_parser.MSG_IMAGE, "wxid_alice", "[图片]")
+    m.image_md5 = md5
+    return m
+
+
+def test_format_blocks_no_image_ids_by_default(tmp_path):
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    messages = [_image_msg(_local_ts(2026, 3, 10, 10, 0), "aa")]
+    tokenized, _ = privacy.tokenize_messages(messages, contacts, _alias_db())
+    blocks, id_map = privacy.format_tokenized_messages_blocks(tokenized, _FakeDecoder(tmp_path))
+    assert id_map == {}
+    assert "[图片]" in blocks[0]["text"]
+    assert "img:" not in blocks[0]["text"]
+
+
+_MD5_A = "3fa9c1d2" + "0" * 24
+_MD5_B = "7be41a09" + "1" * 24
+_MD5_C = "c0ffee42" + "2" * 24
+_MD5_D = "5d1e7b33" + "3" * 24
+
+
+def test_format_blocks_image_ids_come_from_md5(tmp_path):
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    messages = [
+        _image_msg(_local_ts(2026, 3, 9, 23, 0), _MD5_A),
+        _image_msg(_local_ts(2026, 3, 10, 1, 0), _MD5_B),
+    ]
+    tokenized, _ = privacy.tokenize_messages(messages, contacts, _alias_db())
+    blocks, id_map = privacy.format_tokenized_messages_blocks(
+        tokenized, _FakeDecoder(tmp_path), image_ids=True
+    )
+    assert id_map == {"3fa9c1d2": _MD5_A, "7be41a09": _MD5_B}
+    text = "".join(b["text"] for b in blocks if b["type"] == "text")
+    assert "[图片 img:7be41a09]" in text
+
+
+def test_image_ids_stable_across_overlapping_windows(tmp_path):
+    """Consecutive runs overlap; an id in yesterday's report must never name a
+    different picture today (the old per-window counter did exactly that)."""
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    yesterday = [
+        _image_msg(_local_ts(2026, 3, 9, 10, 0), _MD5_A),
+        _image_msg(_local_ts(2026, 3, 9, 20, 0), _MD5_B),
+        _image_msg(_local_ts(2026, 3, 9, 21, 0), _MD5_C),
+    ]
+    # Today's window starts where yesterday's report stopped.
+    today = yesterday[1:] + [_image_msg(_local_ts(2026, 3, 10, 9, 0), _MD5_D)]
+    decoder = _FakeDecoder(tmp_path)
+    ids_a = privacy.assign_image_ids(
+        privacy.tokenize_messages(yesterday, contacts, _alias_db())[0], decoder
+    )
+    ids_b = privacy.assign_image_ids(
+        privacy.tokenize_messages(today, contacts, _alias_db())[0], decoder
+    )
+    for img_id, md5 in ids_b.items():
+        assert ids_a.get(img_id, md5) == md5
+    assert ids_a["7be41a09"] == ids_b["7be41a09"] == _MD5_B
+
+
+def test_image_id_prefix_clash_falls_back_to_full_md5(tmp_path):
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    twin = "3fa9c1d2" + "f" * 24
+    messages = [
+        _image_msg(_local_ts(2026, 3, 10, 1, 0), _MD5_A),
+        _image_msg(_local_ts(2026, 3, 10, 2, 0), twin),
+        _image_msg(_local_ts(2026, 3, 10, 3, 0), _MD5_A),  # same picture re-posted
+    ]
+    tokenized, _ = privacy.tokenize_messages(messages, contacts, _alias_db())
+    id_map = privacy.assign_image_ids(tokenized, _FakeDecoder(tmp_path))
+    assert id_map == {"3fa9c1d2": _MD5_A, twin: twin}
+
+
+def test_format_blocks_undecodable_image_gets_no_id():
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    messages = [_image_msg(_local_ts(2026, 3, 10, 10, 0), "aa")]
+    tokenized, _ = privacy.tokenize_messages(messages, contacts, _alias_db())
+    blocks, id_map = privacy.format_tokenized_messages_blocks(
+        tokenized, _NullDecoder(), image_ids=True
+    )
+    assert id_map == {}
+    assert "[图片]" in blocks[0]["text"]
+
+
+def test_format_blocks_keep_line_break_after_inline_image(tmp_path):
+    contacts = _contact_map({"wxid_alice": "Alice"})
+    messages = [
+        _image_msg(_local_ts(2026, 3, 10, 10, 0), "aa"),
+        _msg(_local_ts(2026, 3, 10, 10, 1), message_parser.MSG_TEXT, "wxid_alice", "after"),
+    ]
+    tokenized, _ = privacy.tokenize_messages(messages, contacts, _alias_db())
+    blocks, _ = privacy.format_tokenized_messages_blocks(
+        tokenized, _FakeDecoder(tmp_path), image_ids=True
+    )
+    # Blocks are concatenated with no separator: without the trailing newline
+    # the next line would be glued onto the `[图片]` line.
+    flat = "".join(b["text"] for b in blocks if b["type"] == "text")
+    assert "]\n[" in flat
+    assert "after" in flat.split("\n")[-2]

@@ -809,3 +809,57 @@ def test_render_public_cleans_tracking_params():
     out = renderer.render_public(_wrap(md), _make_db())
     assert "utm_source" not in out
     assert "[《标题》](https://zhuanlan.zhihu.com/p/123#showWechatShareTip)" in out
+
+
+# ── Inline chat images ──────────────────────────────────────────────────────────
+
+
+def test_group_resolves_image_ref_to_a_real_path(tmp_path):
+    jpeg = tmp_path / "shot.jpg"
+    jpeg.write_bytes(b"\xff")
+    md = "## 工具\n\n### 话题\nbody\n\n![吞吐对比](img:3fa9c1d2)\n"
+    out = renderer.render_group(
+        _wrap(md),
+        _make_db(),
+        _make_contacts(),
+        [],
+        image_paths={"3fa9c1d2": jpeg},
+    )
+    assert f"![吞吐对比]({jpeg.as_posix()})" in out
+
+
+def test_group_drops_unknown_image_ref():
+    """A hallucinated handle must not survive as a broken image."""
+    md = "## 工具\n\n### 话题\nbody\n\n![不存在的图](img:deadbeef)\n"
+    out = renderer.render_group(_wrap(md), _make_db(), _make_contacts(), [], image_paths={})
+    assert "img:" not in out
+    assert "不存在的图" not in out
+
+
+def test_public_resolves_image_ref_to_published_url():
+    md = "## 工具\n\n### 话题\nbody\n\n![吞吐对比](img:3fa9c1d2)\n"
+    out = renderer.render_public(
+        _wrap(md),
+        _make_db(),
+        image_urls={"3fa9c1d2": "/assets/img/daily/2026/04/2026-04-30-01.webp"},
+    )
+    assert "![吞吐对比](/assets/img/daily/2026/04/2026-04-30-01.webp)" in out
+
+
+def test_public_drops_image_ref_with_no_published_url():
+    """Missed the size budget, or never existed — either way, no dangling link."""
+    md = "## 工具\n\n### 话题\nbody\n\n![吞吐对比](img:3fa9c1d2)\n"
+    out = renderer.render_public(_wrap(md), _make_db(), image_urls={})
+    assert "img:" not in out
+    assert "![" not in out
+
+
+def test_public_image_ref_ids_excludes_hidden_sections():
+    """An image inside a `[章节不公开]` section must never be exported to git."""
+    md = (
+        "## 工具\n\n"
+        "### 公开话题\nbody\n\n![公开图](img:1111aaaa)\n\n"
+        "### 隐藏话题\nbody\n\n![隐藏图](img:2222bbbb)\n[章节不公开：原因]\n"
+    )
+    assert renderer.image_ref_ids(md) == ["1111aaaa", "2222bbbb"]
+    assert renderer.public_image_ref_ids(md) == ["1111aaaa"]

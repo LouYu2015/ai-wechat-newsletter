@@ -538,6 +538,83 @@ def _warn_malformed_links(text: str) -> str:
     return text
 
 
+# ── Inline group images ─────────────────────────────────────────────────────────
+
+# ``![说明](img:3fa9c1d2)`` — a reference to one decoded chat image, by the
+# handle the model saw in the chat log.
+_IMAGE_REF_RE = re.compile(r"!\[(?P<alt>[^\]\n]*)\]\(img:(?P<id>[^)\s]+)\)")
+
+
+def resolve_image_refs(text: str, image_paths: dict[str, pathlib.Path]) -> str:
+    """Point ``img:`` refs at real files (group version).
+
+    A ref whose id isn't in *image_paths* is dropped with a warning rather
+    than left to render as a broken image: the model can hallucinate a handle
+    (or copy one out of ``<previous_reports>``), and the prompt requires the
+    body to carry the information regardless, so losing the picture costs
+    nothing. Validation lives here, not in the model's self-discipline.
+    """
+
+    def sub(m: re.Match[str]) -> str:
+        img_id = m.group("id")
+        path = image_paths.get(img_id)
+        if path is None:
+            print(
+                f"[warn] 日报引用了不存在的图片编号 img:{img_id} "
+                f"({m.group('alt')!r}) — 已删除该引用",
+                file=sys.stderr,
+            )
+            return ""
+        return f"![{m.group('alt')}]({path.as_posix()})"
+
+    return _IMAGE_REF_RE.sub(sub, text)
+
+
+def resolve_image_urls(text: str, image_urls: dict[str, str]) -> str:
+    """Point ``img:`` refs at published URLs (public version).
+
+    A ref with no URL is dropped: either the model made the handle up, or the
+    image missed the public size budget and was never committed. Both cases
+    resolve the same way — the prompt requires the prose to carry the section
+    on its own, so a missing picture is lossless for the reader, while a
+    dangling path would fail the site's link check.
+    """
+
+    def sub(m: re.Match[str]) -> str:
+        url = image_urls.get(m.group("id"))
+        if url is None:
+            return ""
+        return f"![{m.group('alt')}]({url})"
+
+    return _IMAGE_REF_RE.sub(sub, text)
+
+
+def strip_image_refs(text: str) -> str:
+    """Drop every ``img:`` ref, publishing none of them."""
+    return _IMAGE_REF_RE.sub("", text)
+
+
+def image_ref_ids(text: str) -> list[str]:
+    """Ids referenced by *text*, in order of appearance (deduped)."""
+    seen: dict[str, None] = {}
+    for m in _IMAGE_REF_RE.finditer(text):
+        seen.setdefault(m.group("id"), None)
+    return list(seen)
+
+
+def public_image_ref_ids(markdown: str) -> list[str]:
+    """Ids that survive into the public version, in order.
+
+    `render_public` drops whole ``[章节不公开]`` sections *after* resolving
+    image refs, so a picture inside one never reaches a reader. Callers export
+    against this list rather than `image_ref_ids`: committing that image would
+    publish the hidden section's evidence while the text around it stays
+    unpublished — and git would keep it forever.
+    """
+    body, _ = _strip_trailing_tags(markdown)
+    return image_ref_ids(_strip_hidden_for_public(body))
+
+
 # ── Group-version annotation ────────────────────────────────────────────────────
 
 
@@ -651,11 +728,17 @@ def render_group(
     contact_map: contacts.ContactMap,
     command_log: list[dict] | None = None,
     token_map=None,
+    image_paths: dict[str, pathlib.Path] | None = None,
 ) -> str:
-    """Render the internal version: real names, 🔒 markers, [TOC], command log."""
+    """Render the internal version: real names, 🔒 markers, [TOC], command log.
+
+    *image_paths* maps the ``img:`` handles the model saw to decoded JPEGs on
+    disk; refs to anything not in it are dropped (see `resolve_image_refs`).
+    """
 
     body, tags = _strip_trailing_tags(report.markdown)
     body = _clean_tracking_params(body)
+    body = resolve_image_refs(body, image_paths or {})
     body = _annotate_hidden_for_group(body)
     body = _expand_refs_group(body)
     body = _insert_toc(body)
@@ -735,11 +818,17 @@ def render_public(
     report: models.DailyReport,
     alias_db: aliases.AliasDB,
     token_map=None,
+    image_urls: dict[str, str] | None = None,
 ) -> str:
-    """Render the public version: anonymized, hidden sections fully removed."""
+    """Render the public version: anonymized, hidden sections fully removed.
+
+    *image_urls* maps ``img:`` handles to site-absolute paths of images already
+    exported into the public repo; refs missing from it are dropped.
+    """
 
     body, tags = _strip_trailing_tags(report.markdown)
     body = _clean_tracking_params(body)
+    body = resolve_image_urls(body, image_urls or {})
     body = _strip_hidden_for_public(body)
     body = _expand_refs_public(body)
     body = _validate_final_refs_public(body)

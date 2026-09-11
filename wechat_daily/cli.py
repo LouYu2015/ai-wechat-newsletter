@@ -343,6 +343,11 @@ def _run_db_pipeline(
         f"{n_h3} 个 ### 子话题，{n_hidden} 个标记不公开[/dim]\n"
     )
 
+    # ── C2: Materialize the images the report points at ─────────────────────
+    group_images, public_image_urls = _materialize_report_images(
+        date_str, tokenized, report.markdown
+    )
+
     # ── D: Render group version → PDF ───────────────────────────────────────
     console.rule("[bold]渲染群内版 Markdown → PDF")
 
@@ -352,7 +357,14 @@ def _run_db_pipeline(
         for e in alias_db.command_log()
         if datetime.datetime.fromtimestamp(e["ts"]).date() == target_date
     ]
-    group_md = renderer.render_group(report, alias_db, contact_map, day_log, token_map=token_map)
+    group_md = renderer.render_group(
+        report,
+        alias_db,
+        contact_map,
+        day_log,
+        token_map=token_map,
+        image_paths=group_images,
+    )
 
     debug_day = config.debug_dir_for(date_str)
     debug_day.mkdir(exist_ok=True, parents=True)
@@ -387,6 +399,7 @@ def _run_db_pipeline(
                 contact_map=contact_map,
                 token_map=token_map,
                 target_date=target_date,
+                tokenized=tokenized,
             )
     elif run_compare:
         compare_report = _run_streaming_extraction(
@@ -416,17 +429,23 @@ def _run_db_pipeline(
                 contact_map=contact_map,
                 token_map=token_map,
                 target_date=target_date,
+                tokenized=tokenized,
             )
 
     # ── E: Render public version + leak check ───────────────────────────────
     console.rule("[bold]渲染公开版 + 泄漏检测")
-    public_md = renderer.render_public(report, alias_db, token_map=token_map)
+    public_md = renderer.render_public(
+        report, alias_db, token_map=token_map, image_urls=public_image_urls
+    )
 
     try:
         privacy.leak_check(public_md, alias_db)
     except privacy.LeakDetected as e:
         console.print(f"[bold red]泄漏检测失败，公开版已中止:[/bold red] {e}")
         _save_leak_debug(date_str, str(e), public_md)
+        # The images were written into the public repo before the check ran;
+        # leave nothing staged for a post that is not going to be published.
+        _discard_public_images(date_str)
         console.print("[yellow]群内版 PDF 不受影响。[/yellow]")
         return
 
@@ -461,6 +480,103 @@ def _run_db_pipeline(
             "\n[dim]公开版已本地 commit（--no-push，未推送）。"
             "下次运行（不带 --no-push）会一并推送到 GitHub。[/dim]"
         )
+
+
+def _discard_public_images(date_str: str) -> None:
+    """Remove this date's exported images from the public repo working tree."""
+    year, month, _ = date_str.split("-")
+    public_dir = config.PUBLIC_REPO_DIR / config.PUBLIC_IMG_SUBDIR / year / month
+    if not public_dir.is_dir():
+        return
+    for path in public_dir.glob(f"{date_str}-*.webp"):
+        path.unlink()
+
+
+def _materialize_report_images(
+    date_str: str,
+    tokenized: list,
+    markdown: str,
+    *,
+    publish: bool = True,
+) -> tuple[dict[str, pathlib.Path], dict[str, str]]:
+    """Turn the report's ``img:`` refs into real files for both channels.
+
+    Returns ``(group_paths, public_urls)``. The group copy goes to
+    ``debug/YYYY/MM/DD/images/`` (gitignored, feeds the PDF); the public copy
+    is written straight into the public repo's asset tree as WebP, subject to
+    a per-image cap and a per-day byte budget — that tree is git history.
+
+    Images are re-decoded here rather than carried over from the extraction
+    step: on a batch resume the request blocks came from a snapshot and were
+    never rebuilt, so the numbering has to be reconstructible from
+    ``tokenized`` alone. `ImageDecoder` memoizes, so this costs one extra
+    decode pass over a day's images (seconds) and buys one code path.
+
+    *publish* is False for the AB-compare report, which is local-only: it must
+    not touch the public asset tree, where its own ref ordering would overwrite
+    the canonical run's files under the same names — and where its stale-file
+    sweep would delete them outright.
+    """
+    import tempfile
+
+    from wechat_daily import image_decoder, image_export
+
+    group_wanted = renderer.image_ref_ids(markdown)
+    if not group_wanted:
+        return {}, {}
+    # Pictures inside a `[章节不公开]` section must not reach the public repo.
+    public_wanted = set(renderer.public_image_ref_ids(markdown))
+
+    group_dir = config.debug_dir_for(date_str) / "images"
+    group_dir.mkdir(parents=True, exist_ok=True)
+    year, month, _ = date_str.split("-")
+    public_dir = config.PUBLIC_REPO_DIR / config.PUBLIC_IMG_SUBDIR / year / month
+    # A re-run of the same date must not leave the previous run's orphans.
+    if publish and public_dir.is_dir():
+        for stale in public_dir.glob(f"{date_str}-*.webp"):
+            stale.unlink()
+
+    group_paths: dict[str, pathlib.Path] = {}
+    public_urls: dict[str, str] = {}
+    spent = 0
+
+    with tempfile.TemporaryDirectory(prefix="wechat_daily_imgs_") as td:
+        decoder = image_decoder.ImageDecoder(pathlib.Path(td))
+        id_map = privacy.assign_image_ids(tokenized, decoder)
+
+        for n, img_id in enumerate(group_wanted, start=1):
+            md5 = id_map.get(img_id)
+            if md5 is None:
+                continue  # hallucinated handle; the renderer warns and drops it
+            src = decoder.decode(md5)
+            if src is None:
+                continue
+
+            dst = group_dir / f"{img_id}.jpg"
+            if image_export.fit_for_report(src, dst) is not None:
+                group_paths[img_id] = dst
+
+            if not publish or img_id not in public_wanted:
+                continue
+            if spent >= config.PUBLIC_IMG_DAY_BUDGET:
+                console.print(
+                    f"[yellow]公开版图片日预算已用尽"
+                    f"（{config.PUBLIC_IMG_DAY_BUDGET // 1024}KB），"
+                    f"img:{img_id} 起不再发布[/yellow]"
+                )
+                continue
+            name = f"{date_str}-{n:02d}.webp"
+            exported = image_export.export_public(src, public_dir / name)
+            if exported is not None:
+                spent += exported.stat().st_size
+                public_urls[img_id] = f"{config.PUBLIC_IMG_URL_PREFIX}/{year}/{month}/{name}"
+
+    console.print(
+        f"[green]图片[/green] [dim]引用 {len(group_wanted)} 张；"
+        f"群内版 {len(group_paths)} 张，公开版 {len(public_urls)} 张"
+        f"（{spent / 1024:.0f}KB / {config.PUBLIC_IMG_DAY_BUDGET // 1024}KB 预算）[/dim]\n"
+    )
+    return group_paths, public_urls
 
 
 _COMPARE_DEBUG_SUFFIX = ".opus-4-6"
@@ -605,7 +721,9 @@ def _run_streaming_extraction(
         try:
             with tempfile.TemporaryDirectory(prefix="wechat_daily_imgs_") as td:
                 decoder = image_decoder.ImageDecoder(pathlib.Path(td))
-                chat_blocks = privacy.format_tokenized_messages_blocks(tokenized, decoder)
+                chat_blocks, _ = privacy.format_tokenized_messages_blocks(
+                    tokenized, decoder, image_ids=True
+                )
                 if show_decode_stats:
                     n_images = sum(1 for m in tokenized if m.image_md5)
                     n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
@@ -666,23 +784,29 @@ def _render_compare_report(
     contact_map: contacts.ContactMap,
     token_map: dict,
     target_date,
+    tokenized: list,
 ) -> None:
     """Render the Opus compare report → group markdown + PDF (local only).
 
     No public path, no leak check, never feeds next-day continuity — the
-    ``(opus-4-6)`` PDF sits alongside the canonical one for AB reading.
+    ``(opus-4-6)`` PDF sits alongside the canonical one for AB reading. Its
+    images are materialized ``publish=False`` for the same reason.
     """
     day_log = [
         e
         for e in alias_db.command_log()
         if datetime.datetime.fromtimestamp(e["ts"]).date() == target_date
     ]
+    compare_images, _ = _materialize_report_images(
+        date_str, tokenized, compare_report.markdown, publish=False
+    )
     compare_group_md = renderer.render_group(
         compare_report,
         alias_db,
         contact_map,
         day_log,
         token_map=token_map,
+        image_paths=compare_images,
     )
 
     debug_day = config.debug_dir_for(date_str)
@@ -901,7 +1025,9 @@ def _run_batch_extraction(
             )
         else:
             decoder = image_decoder.ImageDecoder(pathlib.Path(td))
-            chat_blocks = privacy.format_tokenized_messages_blocks(tokenized, decoder)
+            chat_blocks, _ = privacy.format_tokenized_messages_blocks(
+                tokenized, decoder, image_ids=True
+            )
             n_images = sum(1 for m in tokenized if m.image_md5)
             n_decoded = sum(1 for b in chat_blocks if b.get("type") == "image")
             if n_images:

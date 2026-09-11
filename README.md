@@ -7,6 +7,7 @@
 - **双版本产出**：群内版保留真实昵称，公开版经过三级隐私处理后发布到 GitHub Pages
 - **Markdown 提取**：用 Claude Fable 从聊天记录中流式生成 Markdown 日报；公开/内部版本通过后期处理分流
 - **模型 AB 对比**：主版本（Fable 5，发布 + 喂续写）跑完后，再用 Opus 4.6 旁路生成一份对比日报（仅本地 PDF/debug，不发布、不喂续写），便于并排比质量与成本
+- **表格与图片**：日报可按机械阈值起 Markdown 表格，也可引用群里的原图（`![说明](img:3fa9c1d2)`）；群内版内嵌进 PDF，公开版转 WebP 提交到公开仓库（单张 ≤80KB、每天 ≤200KB），隐藏章节里的图不导出
 - **链接摘要**：用 DeepSeek V4 Pro（关 thinking）抓取并摘要群内分享的链接，作为 `[网页摘要]` 喂给报告生成；两版日报共用同一批摘要
 - **三级隐私模型**：`/optout`（不出现）/ 默认匿名（稳定派生）/ `/alias`（自定义公开别名）
 - **泄漏检测**：公开版发布前硬性拦截三类泄漏（optout 用户匿名名、原始 wxid、同名消歧标记残留），命中即中止发布；真实昵称变体改为在群内版用 `<mark>` 可视化标出，交由作者人工复核，不再自动拦截
@@ -113,6 +114,8 @@ python3 main.py --no-batch
 | `debug/YYYY/MM/DD/batch_state.json` | 批量模式批次状态（断点续接凭据，含 schema version） |
 | `debug/YYYY/MM/DD/batch_input.txt` | 批量模式提交输入的纯文本审计快照 |
 | `debug/YYYY/MM/DD/batch_content.json` | 提交输入的完整块列表快照（含图片；批次消费后自动删除） |
+| `debug/YYYY/MM/DD/images/` | 日报引用到的图片（群内版用，内嵌进 PDF；不进 git） |
+| `data/public_repo/assets/img/daily/YYYY/MM/` | 公开版图片（WebP，随帖子一起 commit） |
 | `debug/costs.jsonl` | 每次模型调用的 token 用量 + 价格估算（JSON Lines，批量调用带 `batch` 标记） |
 | `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
 
@@ -252,7 +255,8 @@ wechat_daily/
 ├── contacts.py          # wxid → 昵称映射
 ├── chatroom_members.py  # 群成员名单
 ├── message_parser.py    # 消息解析
-├── image_decoder.py     # 图片附件解码（dat → 原图）
+├── image_decoder.py     # 图片附件解码（dat → 原图，喂模型规格 1568px/q85）
+├── image_export.py      # 日报用图再编码：群内 PDF（JPEG ≤200KB）/ 公开版（WebP ≤80KB）
 ├── chat_extractor.py    # 按日期提取消息
 ├── url_enricher.py      # 链接卡片抓取与摘要（DeepSeek 摘要，喂给 LLM 的 [网页摘要] 来源）
 ├── deepseek_client.py   # DeepSeek（OpenAI 兼容）流式客户端（链接摘要）

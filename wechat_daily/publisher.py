@@ -67,6 +67,13 @@ def commit(date_str: str) -> bool:
     rel = f"_posts/{year}/{month}/{date_str}-daily.md"
     _run(["git", "add", rel], cwd=repo)
 
+    # Images the post references live beside it and must go in the same commit;
+    # a post pushed without them renders broken and fails the site's link check.
+    # ``--all`` over this date's files only, so a re-run that drops an image
+    # stages its deletion without touching any other date in the same month.
+    img_glob = f"{config.PUBLIC_IMG_SUBDIR}/{year}/{month}/{date_str}-*.webp"
+    _run(["git", "add", "--all", "--", ":(glob)" + img_glob], cwd=repo, check=False)
+
     # Only commit if there are staged changes (handles re-runs on same date)
     diff = _run(["git", "diff", "--cached", "--quiet"], cwd=repo, check=False)
     if diff.returncode == 0:

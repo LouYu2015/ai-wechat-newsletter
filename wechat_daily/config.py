@@ -115,6 +115,32 @@ ALIAS_RESERVATION_DAYS = 30
 PUBLIC_REPO_URL = "git@github.com:LouYu2015/AI-chatgroup-daily.git"
 PUBLIC_REPO_DIR = DATA_DIR / "public_repo"
 
+# ── Public-repo images ──────────────────────────────────────────────────────────
+# Every byte published here lands in the GitHub Pages repo's git history and
+# cannot be removed later, so these are hard caps rather than targets. Today
+# `assets/img` holds 20 hand-added images averaging 500KB — 10MB of a 13MB
+# repo — which is exactly the shape this is meant to avoid repeating daily.
+#
+# Long edge: Chirpy's content column is ~890px (1250px max-width × 9/12 minus
+# padding); WeChat's HD decode tops out at 1284px anyway, so 1280 means "never
+# upscale, only shrink" and still gives the lightbox something to zoom into.
+# Byte cap: WebP q80 measured 60–69KB on real referenced screenshots, so 80KB
+# per image and a 200KB daily budget bound the worst case at ~73MB/year, versus
+# ~25MB/year at the observed rate of ~1 published image per day.
+PUBLIC_IMG_LONG_EDGE = 1280
+PUBLIC_IMG_MAX_BYTES = 80_000
+PUBLIC_IMG_DAY_BUDGET = 200_000
+# Quality before resolution: a text screenshot's legibility rides on pixels,
+# and downscaling is not even monotonically cheaper (1284→1100 at q85 measured
+# *larger*, resampling noise defeating the encoder).
+PUBLIC_IMG_LADDER = ((1280, 80), (1280, 70), (1100, 80), (1100, 70), (900, 70), (900, 60))
+# Post-relative URL prefix. Chirpy rewrites a site-absolute path to include
+# `baseurl`, so posts carry `/assets/img/daily/...` verbatim. Kept as a constant
+# so moving images to a separate assets repo later is a one-line change that
+# needs no rewrite of already-published posts.
+PUBLIC_IMG_URL_PREFIX = "/assets/img/daily"
+PUBLIC_IMG_SUBDIR = "assets/img/daily"
+
 # ── API Keys ────────────────────────────────────────────────────────────────────
 
 

@@ -95,9 +95,21 @@ def _get_pdf_css() -> str:
           font-family: 'Courier New', 'Menlo', monospace, 'PingFang SC', 'STHeiti', sans-serif;
           font-size: 0.85em; overflow-x: auto; border-radius: 4pt; }
 
-    table { border-collapse: collapse; width: 100%; margin: 12pt 0; }
-    th, td { border: 1pt solid #ccc; padding: 7pt 12pt; text-align: left; }
+    table { border-collapse: collapse; width: 100%; margin: 12pt 0;
+            font-size: 0.82em; }
+    th, td { border: 1pt solid #ccc; padding: 7pt 12pt; text-align: left;
+             word-break: break-word; }
     th { background: #f0f0f0; font-weight: bold; }
+
+    figure { margin: 16pt 0; page-break-inside: avoid; text-align: center; }
+    /* max-height: a portrait screenshot (e.g. 725×1568) scaled to the 688px
+       content width would run 394mm tall — past A4's 261mm content box, which
+       page-break-inside can't rescue. Cap the height and let width follow. */
+    figure img { max-width: 100%; max-height: 160mm; width: auto; height: auto;
+                 border: 1pt solid #ddd; border-radius: 4pt; }
+    figcaption { font-size: 0.7em; color: #6b7280; margin-top: 6pt;
+                 line-height: 1.4; }
+    img { max-width: 100%; height: auto; }
 
     hr { border: none; border-top: 1pt solid #ddd; margin: 14pt 0; }
     a { color: #1a56db; text-decoration: none; }
@@ -116,6 +128,49 @@ def _get_pdf_css() -> str:
     """
 
 
+_IMG_TAG = r'<img\s+alt="(?P<alt>[^"]*)"\s+src="(?P<src>[^"]+)"\s*/?>'
+# A ref on its own line becomes a whole paragraph; swap the <p> for the <figure>
+# rather than nesting one inside the other. The bare form catches the rest.
+_IMG_PARA_RE = re.compile(r"<p>\s*" + _IMG_TAG + r"\s*</p>")
+_IMG_TAG_RE = re.compile(_IMG_TAG)
+
+_IMG_MIME = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def _inline_local_images(html: str) -> str:
+    """Embed on-disk images as data URIs, wrapped in ``<figure>`` with a caption.
+
+    The PDF has to be self-contained — it outlives the temp directory the
+    chat images were decoded into — and Chrome is invoked on a ``file://``
+    document, where a stale relative path would silently render as a broken
+    image. Remote (``http``) sources are left alone; a path that no longer
+    exists drops the whole figure rather than emitting a broken box.
+    """
+    import base64
+
+    def sub(m: re.Match[str]) -> str:
+        src = m.group("src")
+        alt = m.group("alt")
+        if src.startswith(("http://", "https://", "data:")):
+            return m.group(0)
+        path = pathlib.Path(src)
+        if not path.is_file():
+            print(f"[warn] PDF: 图片文件不存在，已跳过：{src}", file=sys.stderr)
+            return ""
+        mime = _IMG_MIME.get(path.suffix.lower(), "image/jpeg")
+        data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+        caption = f"<figcaption>{alt}</figcaption>" if alt else ""
+        return f'<figure><img alt="{alt}" src="data:{mime};base64,{data}">{caption}</figure>'
+
+    return _IMG_TAG_RE.sub(sub, _IMG_PARA_RE.sub(sub, html))
+
+
 def _build_full_html(markdown_text: str) -> str:
     """Convert Markdown to a complete, self-contained HTML document.
 
@@ -131,6 +186,7 @@ def _build_full_html(markdown_text: str) -> str:
         ]
     )
     html_body = converter.convert(markdown_text)
+    html_body = _inline_local_images(html_body)
     html_body = html_body.replace('<div class="toc">', '<div class="toc" id="toc">', 1)
     html_body = re.sub(
         r"(</h[23]>)",

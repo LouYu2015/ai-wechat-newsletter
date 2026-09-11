@@ -436,17 +436,84 @@ def format_tokenized_messages(
     return "\n".join(lines)
 
 
+_IMAGE_ID_LEN = 8
+
+
+def _walk_images(
+    messages: list[message_parser.Message],
+    image_decoder,  # ImageDecoder; duck-typed `.decode(md5) -> Path | None`
+):
+    """Yield ``(msg, jpeg_path, img_id)`` for every message that carries an image.
+
+    The id is the image's own md5 cut to 8 hex chars (``3fa9c1d2``), so one
+    picture has one id in every run. Each run covers a different window — it
+    starts where the previous report stopped — and today's report becomes
+    tomorrow's ``<previous_reports>``. The original per-window counter
+    (``2026-09-08/03``) restarted in every run, handing the same string to
+    different pictures on consecutive days: an id copied out of an old report
+    landed on the wrong image. A content id copied that way resolves to the
+    same picture or to nothing, and doesn't shift when some other image in the
+    window fails to decode or the host runs in another timezone.
+
+    Images that fail to decode are skipped — they get no id, because the
+    model never sees them.
+
+    Single source of truth for the ids, shared by the block builder and by
+    `assign_image_ids`, so the two can never drift apart.
+    """
+    md5_by_id: dict[str, str] = {}
+    for msg in messages:
+        if msg.local_type != message_parser.MSG_IMAGE or not msg.image_md5:
+            continue
+        jpeg = image_decoder.decode(msg.image_md5)
+        if jpeg is None:
+            continue
+        img_id = msg.image_md5[:_IMAGE_ID_LEN]
+        if md5_by_id.setdefault(img_id, msg.image_md5) != msg.image_md5:
+            # Two different pictures share a prefix (~1e-6 per day at 8 hex
+            # chars): the later one falls back to its full md5.
+            img_id = msg.image_md5
+        yield msg, jpeg, img_id
+
+
+def assign_image_ids(
+    messages: list[message_parser.Message],
+    image_decoder,
+) -> dict[str, str]:
+    """``{img_id: image_md5}`` for every decodable image, without building blocks.
+
+    The render step needs the mapping again to resolve whatever the report
+    pointed at, including on a batch resume where the request blocks came from
+    a snapshot and were never rebuilt.
+    """
+    return {img_id: msg.image_md5 for msg, _, img_id in _walk_images(messages, image_decoder)}
+
+
 def format_tokenized_messages_blocks(
     messages: list[message_parser.Message],
     image_decoder,  # ImageDecoder; duck-typed `.decode(md5) -> Path | None`
-) -> list[dict]:
+    *,
+    image_ids: bool = False,
+) -> tuple[list[dict], dict[str, str]]:
     """Same content as `format_tokenized_messages`, but as Anthropic content blocks.
 
     Inline image blocks are inserted **right after** the `[图片]` line they
     correspond to. If the image can't be decoded, the text line is still
     emitted so the LLM at least sees the placeholder.
+
+    With *image_ids*, every successfully decoded image also gets a stable
+    handle written into its text line (``[图片 img:3fa9c1d2]``) so the
+    model can point at one from the report. Returns ``(blocks, id_map)``;
+    ``id_map`` is empty when *image_ids* is off.
     """
     import base64
+
+    ids_by_msg: dict[int, str] = {}
+    id_map: dict[str, str] = {}
+    if image_ids:
+        for msg, _, img_id in _walk_images(messages, image_decoder):
+            ids_by_msg[id(msg)] = img_id
+            id_map[img_id] = msg.image_md5
 
     blocks: list[dict] = []
     text_buf: list[str] = []
@@ -454,7 +521,10 @@ def format_tokenized_messages_blocks(
 
     def flush_text() -> None:
         if text_buf:
-            blocks.append({"type": "text", "text": "\n".join(text_buf)})
+            # Trailing newline: blocks are concatenated with no separator, so
+            # without it the line after an inline image gets glued onto the
+            # `[图片]` line (`[图片][20:21] …`).
+            blocks.append({"type": "text", "text": "\n".join(text_buf) + "\n"})
             text_buf.clear()
 
     for msg in messages:
@@ -465,26 +535,32 @@ def format_tokenized_messages_blocks(
         if msg_date != last_date:
             text_buf.append(_date_divider(msg_date))
             last_date = msg_date
-        text_buf.append(line)
 
+        jpeg = None
         if msg.local_type == message_parser.MSG_IMAGE and msg.image_md5:
             jpeg = image_decoder.decode(msg.image_md5)
-            if jpeg is not None:
-                flush_text()
-                data = base64.standard_b64encode(jpeg.read_bytes()).decode("ascii")
-                blocks.append(
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": data,
-                        },
-                    }
-                )
+            img_id = ids_by_msg.get(id(msg))
+            if img_id is not None:
+                line = line.replace("[图片]", f"[图片 img:{img_id}]", 1)
+
+        text_buf.append(line)
+
+        if jpeg is not None:
+            flush_text()
+            data = base64.standard_b64encode(jpeg.read_bytes()).decode("ascii")
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": data,
+                    },
+                }
+            )
 
     flush_text()
-    return blocks
+    return blocks, id_map
 
 
 # ── Leak detection ───────────────────────────────────────────────────────────────
