@@ -8,7 +8,6 @@ import sys
 
 from wechat_daily import config, contacts, coverage, message_parser, wechat_db
 
-
 _MESSAGE_SHARD_RE = re.compile(r"message_(\d+)\.db")
 
 
@@ -230,9 +229,7 @@ def _cutoff_day(dt: datetime.datetime) -> datetime.date:
     """*dt* 所属的截止日：以 ``config.DAY_CUTOFF_HOUR`` 为界，[D-1 21:00, D 21:00)
     记为 D。用于把一个原始时间戳换算成它落在哪一天的日报窗口里。
     """
-    boundary = dt.replace(
-        hour=config.DAY_CUTOFF_HOUR, minute=0, second=0, microsecond=0
-    )
+    boundary = dt.replace(hour=config.DAY_CUTOFF_HOUR, minute=0, second=0, microsecond=0)
     return dt.date() if dt < boundary else dt.date() + datetime.timedelta(days=1)
 
 
