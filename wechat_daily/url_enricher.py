@@ -57,60 +57,76 @@ _DEFAULT_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-_SUMMARY_PROMPT = """\
-你正在为「微信 AI 技术讨论群日报」准备链接摘要。这些摘要会用于让日报编辑生成群聊的总结。
+# Link-summary prompt, chosen by blind LLM-judge rounds on real links (see
+# data/experiment/20260915-deepseek-flash-vs-pro-link-summary). Key lessons:
+# asking to "keep facts and numbers" made models retell the page in order;
+# a pick-first rule plus an explicit delete list is what actually compressed.
+# Assembled from pieces so the with/without-chat variants can't drift apart.
+_SUMMARY_SYSTEM = (
+    "你是日报编辑的资料员：把群里分享的网页压缩成给编辑看的要点摘要。直接输出摘要正文。"
+)
 
-日报的读者有两类：
+_PROMPT_HEAD = """\
+这份摘要是给「微信 AI 技术讨论群日报」编辑的背景资料，不直接发表。编辑拿它做三件事：判断这条链接值不值得写、看懂群友在围绕网页里的哪一点讨论、挑一两个事实或数字写进日报。需要更多细节时编辑会自己点开原文——所以摘要的任务是**帮编辑抓住重点**，不是替代原文，更不是按原文顺序复述。
+读者是中文程序员 / AI 实战派，LLM、agent、RAG、context window、prompt cache、tool use、MCP、skills、evals、Claude Code / Codex / Cursor 等不需要解释。"""
 
-1. **群友本人**——他们就是被引用的人，会回看自己说过什么，其他人有什么回应，想看到因为消息太多而错过的信息。
-2. **群外类似背景的中文程序员/AI 实战派**——日常写代码、用 agent、关心模型迭代，订阅科技博主的文章和新闻，对其他人的技术分享十分好奇。
-
-他们已知、不需要科普的概念：LLM、agent、RAG、context window、prompt cache、tool use、subagent、harness、skills、evals、MCP、Claude Code / Codex / Cursor 等常见工具。
-
-下面给你两段资料：
-1. `<surrounding_chat>`：链接前后约 10 条群聊消息，仅作"为什么群里要分享这条 / 在讨论哪个点"的背景。**不要把它写进摘要、不要引用群友发言。**
-2. `<webpage>` 里是网页元数据与正文。其中 `content` 是抓取到的正文，`card_preview` 是微信卡片预览（分享者发出时看到的那段话），`meta_description` 是网页 og:description / meta description。**以 content 为主**，其他字段用于交叉印证、或在 content 不足时作为补充信息。
-
-任务：写一段中文摘要，纯文本一段（无 Markdown 标题、无 bullet 列表、无小标题），长度 300–800 字。
-
-要求：
-- 紧扣网页本身：保留具体事实、数据、版本号、结论、关键例子、作者核心判断。
-- 利用上下文：如果群里讨论的是网页中的某个具体点（一段提示、一个工具、一处争议），优先把那个点交代清楚，让日报作者能直接对接群聊。
-- 不评价聊天记录、不引用群友发言。
-- 禁用元描述句式：「本文/这篇文章介绍了……」「作者认为……」「文章指出……」。直接讲清网页里的事就好。
+_PROMPT_CHAT = """
 
 <surrounding_chat>
 {surrounding}
 </surrounding_chat>
 
+上面是链接前后约 10 条群聊（发言人已匿名，`[本次要总结的链接]` 标出分享那一条）。它只用来判断群友关心网页里的哪一点：如果能看出群友在讨论网页里的某个具体点，把网页中关于这一点的内容写清楚。摘要里不要复述、引用或评价群友发言，不要替群友补充理由，也不要猜测「群友可能关心什么」——看不出关联时就当没有这段群聊。"""
+
+_PROMPT_PAGE = """
+
 {webpage_block}
+
+`content` 是抓取到的正文，`card_preview` 是微信卡片预览（分享者发出时看到的那段话），`meta_description` 是网页描述。以 content 为主，其他字段用于交叉印证或在 content 不足时补充。"""
+
+_PROMPT_PICK_CHAT = "群友正在讨论的那个点（如果看得出来）必须在其中，哪怕它在原文里只占一小段。"
+
+_PROMPT_RULES = """
+
+## 先选，再写
+动笔前先想清楚：这个网页最核心的一句话是什么？支撑它的最关键的 3–5 个点是什么？<pick_chat>只写这些，其余一律删。
+
+值得留下的点：
+- 新消息 / 核心结论本身，以及谁发布、谁说的。
+- 能改变判断的硬数字：关键 benchmark 分数、价格、版本号、日期、前后对比。一个论点配一两个最有说服力的数字即可。
+- 反常识的发现、争议、作者的明确判断和理由。
+- 负面信息和适用边界：官方自己承认的缺陷、风险、局限、「不适合做什么」——这些往往比正面宣传更值得留。
+- 可以直接拿去用的做法。
+
+直接删掉的东西：
+- 实验口径与计算参数（筛选条件、分位数定义、电价功率等）、次要对比、长尾型号或数据。
+- 安装步骤、命令、配置项、路径、依赖、FAQ、排障——最多一句「支持 X / 提供 Y」。
+- 官方宣传语、营销话术、背景科普、作者 / 公众号 / 转载信息、结尾号召、相关推荐。
+- 重复论证同一观点的多个例子（留一个）、原文引语（最多留一句最有冲击力的）。
+
+## 准确性（最容易出错的地方）
+- 数字照抄原文，不自己换算或约略：原文写「两倍以上」就不要写成「约两倍」，原文给了 1.9 亿和 6000 万就直接写这两个数。
+- 保留原文的限定和不确定性：「可能 / likely / 据报道 / 据称 / 初步」不能写成确定的事实；「无幻觉满分」不能简化成「满分」。
+- 分清是谁的话：当事人原话、网页作者或媒体自己的叙述、第三方评论，归属不要张冠李戴。整篇是二手转述、单方声明、编译稿或带产品植入的软文时，用半句话点明。
+- 只写网页里有的内容，不补外部知识，不猜数字。正文明显不完整（只抓到片段、页面壳、登录墙）时开头注明「只抓到部分内容」。
+
+## 写法
+- 中文纯文本，不用 Markdown（标题、列表符号、加粗、链接都不要），不贴 URL。
+- 第一句就是核心结论，不铺垫。超过约 400 字时按主题分成 2–3 段，每段开头一句点明这段讲什么；不要写成一整块。
+- 长度硬性目标：一般 300–600 字；短新闻、短帖、单条推文 100–250 字；长篇报告或信息特别密集的长文最多 900 字。每段 2–4 句。超出时优先删次要数字和第二个例子，而不是删核心结论、负面信息或群友讨论的点。
+- 直接陈述事实，不写「本文 / 这篇文章 / 作者认为 / 文章指出 / 文中还提到」这类转述壳；标明来源时直接写人名或机构名。
+- 不写你自己对价值的评语（「最值得写」「很有参考价值」「最出圈的一句」），取舍交给编辑。
 
 直接输出摘要正文。
 """
 
-_SUMMARY_PROMPT_NO_CONTEXT = """\
-你正在为「微信 AI 技术讨论群日报」准备链接摘要。
-
-读者两类：
-1. 群友本人——他们就是分享/讨论这条链接的人，会回看自己说过什么。
-2. 群外类似背景的中文程序员/AI 实战派——日常写代码、用 agent、关心模型迭代。
-
-他们已知、不需要科普的概念：LLM、agent、RAG、context window、prompt cache、tool use、subagent、harness、skills、evals、MCP、Claude Code / Codex / Cursor 等常见工具与模型版本号。
-
-`<webpage>` 里是网页元数据与正文：`content` 为抓取到的正文，`card_preview` 为微信卡片预览，`meta_description` 为 og:description / meta description。**以 content 为主**，其他字段用于交叉印证、或在 content 不足时作为补充信息。
-
-任务：写一段中文摘要，纯文本一段（无 Markdown 标题、无 bullet 列表、无小标题），长度 300–800 字。
-
-要求：
-- 紧扣网页本身：保留具体事实、数据、版本号、结论、关键例子、作者核心判断。
-- 不需要匿名化网页内容。
-- 禁用元描述句式：「本文/这篇文章介绍了……」「作者认为……」「文章指出……」。直接讲清网页里的事就好。
-- 反 AI 味词：深入探讨、赋能、助力、重塑、范式、拥抱变化、值得注意的是、综上所述。
-
-{webpage_block}
-
-直接输出摘要正文。
-"""
+_SUMMARY_PROMPT = (
+    _PROMPT_HEAD
+    + _PROMPT_CHAT
+    + _PROMPT_PAGE
+    + _PROMPT_RULES.replace("<pick_chat>", _PROMPT_PICK_CHAT)
+)
+_SUMMARY_PROMPT_NO_CONTEXT = _PROMPT_HEAD + _PROMPT_PAGE + _PROMPT_RULES.replace("<pick_chat>", "")
 
 
 @dataclasses.dataclass
@@ -123,6 +139,12 @@ class EnrichStats:
 
 
 SHORT_THRESHOLD = 800
+
+# Thinking tokens count toward max_tokens. The old 2500 cap truncated ~26% of
+# real summaries (Sept 2026) — many to an empty answer, which fell back to raw
+# page text. 16000 left every tested page (up to 220k chars) room to finish.
+_DEEPSEEK_MAX_TOKENS = 16000
+_DEEPSEEK_ATTEMPTS = 2
 
 
 class _TextExtractor(html.parser.HTMLParser):
@@ -565,7 +587,7 @@ def summarize_text(
     with client.messages.stream(
         model=config.LINK_SUMMARY_MODEL,
         max_tokens=2500,
-        system="你是一个网页内容摘要器。直接输出摘要正文。",
+        system=_SUMMARY_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     ) as stream:
         for event in stream:
@@ -595,6 +617,11 @@ def _summarize_deepseek(
     Same return contract as :func:`summarize_text`. Raises ``RuntimeError``
     if the key is missing — :func:`enrich_link_messages` catches summary
     failures and falls back to raw-concat context.
+
+    An empty answer or an API error is retried once before giving up: the
+    fallback dumps the raw page text (up to 50k chars) into the report input,
+    so one extra cheap call is always worth it. Usage is summed across
+    attempts so the cost log stays honest.
     """
     import time
 
@@ -605,15 +632,28 @@ def _summarize_deepseek(
         raise RuntimeError("缺少 DEEPSEEK_API_KEY，无法生成链接摘要")
 
     t0 = time.perf_counter()
-    content, _reasoning, usage, _finish = deepseek_client.stream_chat(
-        api_key=key,
-        model=config.LINK_SUMMARY_MODEL,
-        system="你是一个网页内容摘要器。直接输出摘要正文。",
-        user=prompt,
-        thinking=True,
-        max_tokens=2500,
-        content_cb=delta_cb,
-    )
+    usage: dict = {}
+    content = ""
+    for attempt in range(_DEEPSEEK_ATTEMPTS):
+        try:
+            content, _reasoning, attempt_usage, _finish = deepseek_client.stream_chat(
+                api_key=key,
+                model=config.LINK_SUMMARY_MODEL,
+                system=_SUMMARY_SYSTEM,
+                user=prompt,
+                thinking=True,
+                max_tokens=_DEEPSEEK_MAX_TOKENS,
+                content_cb=delta_cb,
+            )
+        except deepseek_client.DeepSeekError:
+            if attempt == _DEEPSEEK_ATTEMPTS - 1:
+                raise
+            continue
+        for k, v in attempt_usage.items():
+            if isinstance(v, int | float):
+                usage[k] = usage.get(k, 0) + v
+        if _clean_text(content):
+            break
     duration_s = time.perf_counter() - t0
     return _clean_text(content), usage, duration_s, len(prompt)
 

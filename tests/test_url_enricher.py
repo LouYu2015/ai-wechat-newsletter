@@ -647,3 +647,64 @@ def test_enrich_routes_to_deepseek_when_no_client(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["model"] == "deepseek-v4-pro"
     assert calls[0]["thinking"] is True
+    # Thinking tokens count toward max_tokens; a tight cap truncated real
+    # summaries to empty and fell back to raw page text.
+    assert calls[0]["max_tokens"] >= 16000
+
+
+def test_deepseek_summary_retries_once_on_empty_answer(monkeypatch):
+    """An empty answer is retried before falling back to raw page text, and
+    usage from both attempts is summed for the cost log."""
+    import wechat_daily.config as cfg
+    import wechat_daily.deepseek_client as dc
+
+    monkeypatch.setattr(cfg, "LINK_SUMMARY_MODEL", "deepseek-flash")
+    monkeypatch.setattr(cfg, "get_deepseek_key", lambda: "fake-key")
+    answers = iter(["", "第二次摘要"])
+
+    def fake_stream_chat(**kwargs):
+        return next(answers), "", {"prompt_tokens": 10, "completion_tokens": 5}, "stop"
+
+    monkeypatch.setattr(dc, "stream_chat", fake_stream_chat)
+
+    url = "https://example.com/a"
+    html = "<article><p>" + ("正文 " * 500) + "</p></article>"
+    msg = _link_msg(url=url)
+    seen: list[tuple] = []
+    stats = url_enricher.enrich_link_messages(
+        [msg],
+        api_key="ignored",
+        http_client=FakeHTTP({url: (html, "text/html")}),
+        usage_cb=lambda u, d, c: seen.append((u, d, c)),
+    )
+
+    assert stats.summarized == 1
+    assert msg.link_context == "第二次摘要"
+    assert seen[0][0] == {"prompt_tokens": 20, "completion_tokens": 10}
+
+
+def test_deepseek_summary_retries_once_on_api_error(monkeypatch):
+    import wechat_daily.config as cfg
+    import wechat_daily.deepseek_client as dc
+
+    monkeypatch.setattr(cfg, "LINK_SUMMARY_MODEL", "deepseek-flash")
+    monkeypatch.setattr(cfg, "get_deepseek_key", lambda: "fake-key")
+    calls = []
+
+    def fake_stream_chat(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise dc.DeepSeekError("网络错误：reset")
+        return "摘要", "", {}, "stop"
+
+    monkeypatch.setattr(dc, "stream_chat", fake_stream_chat)
+
+    url = "https://example.com/a"
+    html = "<article><p>" + ("正文 " * 500) + "</p></article>"
+    msg = _link_msg(url=url)
+    stats = url_enricher.enrich_link_messages(
+        [msg], api_key="ignored", http_client=FakeHTTP({url: (html, "text/html")})
+    )
+
+    assert stats.summarized == 1
+    assert len(calls) == 2

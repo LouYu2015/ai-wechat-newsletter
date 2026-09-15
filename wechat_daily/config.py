@@ -53,12 +53,13 @@ GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 # ── Models ──────────────────────────────────────────────────────────────────────
 # AB test: 报告生成对比 Opus 4.6（主版本，发布 + 喂续写）vs Opus 5（旁路，仅本地
 # PDF/debug）。两版都走 Anthropic 同一条 extract_report 路径、同套提示词、原生喂图，
-# 只有报告生成模型不同——把唯一变量真正收敛到模型上。链接摘要走 DeepSeek V4
-# （成本约为 Sonnet 的 1/10；deepseek 前缀触发 url_enricher 的 OpenAI 兼容分支，
-# thinking 关闭），两版日报共用同一批摘要。
+# 只有报告生成模型不同——把唯一变量真正收敛到模型上。链接摘要走 DeepSeek
+# V4.1 Flash（deepseek 前缀触发 url_enricher 的 OpenAI 兼容分支，thinking 开启），
+# 两版日报共用同一批摘要。2026-09 盲评实测 Flash 在「保留日报有用信息」上优于
+# V4 Pro，且快 4–5 倍、便宜约 6 倍。
 CLAUDE_MODEL = "claude-opus-4-6"  # 主版本报告生成（发布）
 COMPARE_REPORT_MODEL = "claude-opus-5"  # 对比版报告生成（旁路，不发布）
-LINK_SUMMARY_MODEL = "deepseek-v4-pro"  # 链接摘要（DeepSeek V4，无思考）
+LINK_SUMMARY_MODEL = "deepseek-flash"  # 链接摘要（DeepSeek-V4.1-Flash，开思考）
 
 # ── Anthropic API pricing (USD per 1M tokens) ──────────────────────────────────
 # Source: https://platform.claude.com/docs/en/about-claude/pricing
@@ -92,15 +93,22 @@ MODEL_PRICES: dict[str, dict[str, float]] = {
         "cache_read": 0.30,
     },
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_write_5m": 1.25, "cache_read": 0.10},
-    # DeepSeek 官方价（https://api-docs.deepseek.com/quick_start/pricing）：
-    # 输入 cache-miss $0.435/M、cache-hit $0.0036/M、输出 $0.87/M。DeepSeek 缓存
-    # 写入按普通输入计费（无单独 write 价），故 cache_write_5m 取 = input。
+    # DeepSeek 官方价（https://api-docs.deepseek.com/quick_start/pricing，2026-09
+    # 核对）：分峰时 / 错峰两档，错峰为峰时一半；峰时为 UTC 周一至周五 01:00–04:00
+    # 与 06:00–10:00。日报常在太平洋时间深夜跑、正好跨两档，这里保守按峰时价估。
+    # DeepSeek 缓存写入按普通输入计费（无单独 write 价），故 cache_write_5m 取 = input。
     # usage 归一在 cost_tracker.usage_to_dict：miss→input、hit→cache_read。
+    "deepseek-flash": {
+        "input": 0.30,
+        "output": 1.20,
+        "cache_write_5m": 0.30,
+        "cache_read": 0.006,
+    },
     "deepseek-v4-pro": {
-        "input": 0.435,
-        "output": 0.87,
-        "cache_write_5m": 0.435,
-        "cache_read": 0.003625,
+        "input": 1.32,
+        "output": 3.96,
+        "cache_write_5m": 1.32,
+        "cache_read": 0.044,
     },
 }
 

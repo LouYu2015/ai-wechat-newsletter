@@ -169,7 +169,7 @@ def _run_db_pipeline(
             f"（{link_count} 个链接的摘要已包含在已提交的输入里）[/dim]\n"
         )
     elif link_count:
-        console.rule(f"[bold]链接增强  [dim]({config.LINK_SUMMARY_MODEL}, no thinking)[/dim]")
+        console.rule(f"[bold]链接增强  [dim]({config.LINK_SUMMARY_MODEL}, thinking)[/dim]")
         link_lanes = lanes_ui.Lanes(
             "链接增强",
             total=link_count,
