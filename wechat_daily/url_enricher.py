@@ -12,7 +12,7 @@ import re
 import urllib.parse
 from typing import Callable
 
-import httpx
+import httpx2
 
 from wechat_daily import config, message_parser
 
@@ -204,7 +204,7 @@ def enrich_link_messages(
     messages: list[message_parser.Message],
     api_key: str,
     reporter=None,
-    http_client: httpx.Client | None = None,
+    http_client: httpx2.Client | None = None,
     anthropic_client=None,
     usage_cb: Callable[[object, float, int], None] | None = None,
     max_workers: int = 5,
@@ -236,8 +236,8 @@ def enrich_link_messages(
 
     own_http = http_client is None
     if http_client is None:
-        http_client = httpx.Client(
-            timeout=httpx.Timeout(12.0, connect=5.0),
+        http_client = httpx2.Client(
+            timeout=httpx2.Timeout(12.0, connect=5.0),
             follow_redirects=True,
             headers=_DEFAULT_HEADERS,
         )
@@ -484,7 +484,7 @@ def _trim_url(url: str) -> str:
     return html.unescape(url).rstrip(".,，。；;：:!?！？\"'）】》")
 
 
-def fetch_url_text(url: str, client: httpx.Client) -> tuple[str, str]:
+def fetch_url_text(url: str, client: httpx2.Client) -> tuple[str, str]:
     """Fetch a URL and return (main_text, og_description).
 
     `og_description` is non-empty only for HTML responses where
@@ -578,7 +578,7 @@ def summarize_text(
 
         client = anthropic.Anthropic(
             api_key=api_key,
-            timeout=httpx.Timeout(120.0, connect=15.0),
+            timeout=httpx2.Timeout(120.0, connect=15.0),
         )
 
     parts: list[str] = []
@@ -658,7 +658,7 @@ def _summarize_deepseek(
     return _clean_text(content), usage, duration_s, len(prompt)
 
 
-def _fetch_tweet(url: str, client: httpx.Client) -> str:
+def _fetch_tweet(url: str, client: httpx2.Client) -> str:
     api_url = _fxtwitter_url(url)
     if not api_url:
         return ""
@@ -676,7 +676,7 @@ def _fetch_tweet(url: str, client: httpx.Client) -> str:
     return _clean_text(f"{author_name}: {text}" if author_name else text)
 
 
-def _fetch_circle_post_text(url: str, client: httpx.Client) -> str:
+def _fetch_circle_post_text(url: str, client: httpx2.Client) -> str:
     parsed = urllib.parse.urlparse(url)
     parts = [p for p in parsed.path.split("/") if p]
     if len(parts) < 3 or parts[0] != "c":

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import httpx
+import httpx2
 
 from wechat_daily import config, message_parser, url_enricher
 
@@ -13,11 +13,11 @@ class FakeHTTP:
     def get(self, url: str):
         self.urls.append(url)
         text, content_type = self.routes[url]
-        return httpx.Response(
+        return httpx2.Response(
             200,
             text=text,
             headers={"content-type": content_type},
-            request=httpx.Request("GET", url),
+            request=httpx2.Request("GET", url),
         )
 
 
@@ -541,8 +541,8 @@ def test_douyin_is_skipped_like_xiaohongshu():
 def test_default_client_sends_browser_like_headers():
     """Regression: openai.com (and other Cloudflare/Vercel-fronted sites)
     return 403 challenge pages when only User-Agent is set. The default
-    httpx.Client should ship full browser-like headers."""
-    import httpx as _httpx
+    httpx2.Client should ship full browser-like headers."""
+    import httpx2 as _httpx
 
     from wechat_daily import url_enricher
 

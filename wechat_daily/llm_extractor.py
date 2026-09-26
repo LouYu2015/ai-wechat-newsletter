@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import time
 
-import httpx
+import httpx2
 
 from wechat_daily import config, models, prompts
 
@@ -34,7 +34,7 @@ def _default_client(api_key: str):
 
     return anthropic.Anthropic(
         api_key=api_key,
-        timeout=httpx.Timeout(600.0, connect=30.0),
+        timeout=httpx2.Timeout(600.0, connect=30.0),
     )
 
 
@@ -310,7 +310,7 @@ def extract_report(
         # RemoteProtocolError, and also ReadError, a mid-stream "connection
         # reset by peer" that the old explicit tuple missed. That one killed a
         # run outright after the input tokens had already been paid for.
-        except httpx.TransportError as e:
+        except httpx2.TransportError as e:
             last_exc = e
             if attempt < max_retries:
                 time.sleep(5 * attempt)

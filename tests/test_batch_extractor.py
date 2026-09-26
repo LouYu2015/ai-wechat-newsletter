@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-import httpx
+import httpx2
 import pytest
 
 from wechat_daily import batch_extractor as bx
@@ -325,9 +325,9 @@ def test_poll_survives_connection_errors_then_ends():
     """Sleep/wake resilience: transient network failures retry, not raise."""
     client = _FakeClient()
     client.messages.batches.retrieve_script = [
-        httpx.ConnectError("network down (laptop asleep)"),
+        httpx2.ConnectError("network down (laptop asleep)"),
         _Batch("b", "in_progress"),
-        httpx.ReadTimeout("flaky"),
+        httpx2.ReadTimeout("flaky"),
         _Batch("b", "ended"),
     ]
     notes = []
@@ -344,7 +344,7 @@ def test_poll_survives_connection_errors_then_ends():
 def test_poll_raises_batch_not_found():
     import anthropic
 
-    resp = httpx.Response(404, request=httpx.Request("GET", "http://x"))
+    resp = httpx2.Response(404, request=httpx2.Request("GET", "http://x"))
     client = _FakeClient()
     client.messages.batches.retrieve_script = [
         anthropic.NotFoundError("nope", response=resp, body=None),
@@ -589,8 +589,8 @@ def test_poll_rebuilds_client_after_consecutive_failures():
     """连续 ≥2 轮失败 → 丢弃死连接池、用工厂重建一个全新 client。"""
     client = _FakeClient()
     client.messages.batches.retrieve_script = [
-        httpx.ConnectError("dead pool 1"),
-        httpx.ConnectError("dead pool 2"),
+        httpx2.ConnectError("dead pool 1"),
+        httpx2.ConnectError("dead pool 2"),
         _Batch("b", "ended"),  # 不会用到：第 2 次失败后已换 client
     ]
     built = []
@@ -625,8 +625,8 @@ def test_run_batch_uses_rebuilt_client_for_fetch_and_retry(debug_dir):
     original = _FakeClient()
     # 原 client 连续两次失败触发重建，之后再被 poll/fetch 使用就会抛 RuntimeError。
     original.messages.batches.retrieve_script = [
-        httpx.ConnectError("dead pool 1"),
-        httpx.ConnectError("dead pool 2"),
+        httpx2.ConnectError("dead pool 1"),
+        httpx2.ConnectError("dead pool 2"),
     ]
     rebuilt = _FakeClient()
     rebuilt.messages.batches.retrieve_script = [_Batch("msgbatch_001", "ended")]
@@ -721,10 +721,10 @@ def test_poll_failure_note_has_consecutive_count():
     """失败 note 带连续重试计数；成功一轮后计数清零。"""
     client = _FakeClient()
     client.messages.batches.retrieve_script = [
-        httpx.ConnectError("x"),
-        httpx.ConnectError("y"),
+        httpx2.ConnectError("x"),
+        httpx2.ConnectError("y"),
         _Batch("b", "in_progress"),  # 成功一轮 → 计数清零
-        httpx.ConnectError("z"),
+        httpx2.ConnectError("z"),
         _Batch("b", "ended"),
     ]
     notes = []
@@ -743,7 +743,7 @@ def test_fetch_results_note_cb_reports_retries():
     def _results(batch_id):
         calls[0] += 1
         if calls[0] < 3:
-            raise httpx.ConnectError("blip")
+            raise httpx2.ConnectError("blip")
         return iter([_Result("main", "succeeded", _Message("ok"))])
 
     client.messages.batches.results = _results

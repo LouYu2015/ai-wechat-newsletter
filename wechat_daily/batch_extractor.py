@@ -46,7 +46,7 @@ import pathlib
 import time
 from typing import Callable
 
-import httpx
+import httpx2
 
 from wechat_daily import config, coverage, llm_extractor, models
 
@@ -233,7 +233,7 @@ def make_client(api_key: str):
 
     return anthropic.Anthropic(
         api_key=api_key,
-        timeout=httpx.Timeout(120.0, connect=15.0),
+        timeout=httpx2.Timeout(120.0, connect=15.0),
     )
 
 
@@ -252,7 +252,7 @@ def _retrieve_batch(client, batch_id: str):
     if with_options is not None:
         client = with_options(
             max_retries=0,
-            timeout=httpx.Timeout(POLL_RETRIEVE_TIMEOUT_S, connect=15.0),
+            timeout=httpx2.Timeout(POLL_RETRIEVE_TIMEOUT_S, connect=15.0),
         )
     return client.messages.batches.retrieve(batch_id)
 
@@ -262,7 +262,7 @@ def _is_retryable(exc: Exception) -> bool:
     retry forever (sleep/wake resilience); client errors surface immediately."""
     import anthropic
 
-    if isinstance(exc, (httpx.TransportError, anthropic.APIConnectionError)):
+    if isinstance(exc, (httpx2.TransportError, anthropic.APIConnectionError)):
         return True
     if isinstance(exc, anthropic.APIStatusError):
         return exc.status_code == 429 or exc.status_code >= 500
