@@ -544,7 +544,7 @@ class AliasDB:
                 pass
 
         rows: list[tuple] = []
-        for rel in ["message/message_0.db", "message/message_1.db"]:
+        for rel in wechat_db.message_db_rels():
             try:
                 conn = wechat_db.get_conn(rel)
             except FileNotFoundError:

@@ -41,10 +41,7 @@ from wechat_daily.message_parser import (
     parse_row,
 )
 from wechat_daily.privacy import tokenize_messages
-from wechat_daily.wechat_db import get_conn, name2id_map
-
-DB_RELS = ["message/message_0.db", "message/message_1.db"]
-
+from wechat_daily.wechat_db import get_conn, message_db_rels, name2id_map
 
 # ── Time parsing ──────────────────────────────────────────────────────────────
 
@@ -78,14 +75,14 @@ def fetch_messages(
     end_ts: int | None,
     sql_limit: int | None,
 ) -> list[Message]:
-    """Fetch + parse messages from GROUP_TABLE across both message DBs.
+    """Fetch + parse messages from GROUP_TABLE across all message DB shards.
 
     When *sql_limit* is given, each DB returns its newest rows (DESC LIMIT);
     the merged result is re-sorted ascending. With a keyword the caller passes
     sql_limit=None so every in-range message is available for matching.
     """
     raw_rows: list[tuple] = []
-    for rel in DB_RELS:
+    for rel in message_db_rels():
         try:
             conn = get_conn(rel)
         except FileNotFoundError:

@@ -8,39 +8,16 @@ import sys
 
 from wechat_daily import config, contacts, coverage, message_parser, wechat_db
 
-_MESSAGE_SHARD_RE = re.compile(r"message_(\d+)\.db")
-
-
-def _db_rels() -> list[str]:
-    """当前存在的消息分片相对路径，按分片编号排序。
-
-    微信把群消息按时间分片存进多个数据库（message_0.db, message_1.db, ...），
-    写满一片后会滚动新建更高编号的分片继续写。这里直接扫描 db_storage/message/
-    目录发现有哪些分片，而不是硬编码固定几个——硬编码曾在 2026-08 导致微信滚动出
-    message_2.db 后消息「停更」两天都没被发现（脚本一直在读已不再写入的旧分片）。
-    找不到 db_storage（测试环境、未解密）时退回原先的两片默认值。
-    """
-    db_storage = wechat_db._find_db_storage()
-    if db_storage is not None:
-        shards: list[tuple[int, str]] = []
-        for p in (db_storage / "message").glob("message_*.db"):
-            m = _MESSAGE_SHARD_RE.fullmatch(p.name)
-            if m:
-                shards.append((int(m.group(1)), p.name))
-        if shards:
-            return [f"message/{name}" for _, name in sorted(shards)]
-    return ["message/message_0.db", "message/message_1.db"]
-
 
 def _nth_recent_ts(anchor_ts: int, n: int = config.OVERLAP_MIN_MESSAGES) -> int | None:
-    """跨两个消息库，返回 create_time <= *anchor_ts* 的倒数第 *n* 条消息的 create_time。
+    """跨所有消息分片，返回 create_time <= *anchor_ts* 的倒数第 *n* 条消息的 create_time。
 
     不足 n 条时返回最旧的那条；一条都没有返回 None。用来把重叠窗口起点从固定的
     -1h 往前延伸到「至少 n 条消息」，避免安静的夜晚重叠段消息太少接不上跨日话题。
     容错写法与 extract_messages 一致：库缺失/表缺失跳过、损坏库 warn 跳过。
     """
     candidates: list[int] = []
-    for rel in _db_rels():
+    for rel in wechat_db.message_db_rels():
         try:
             conn = wechat_db.get_conn(rel)
             cur = conn.cursor()
@@ -109,7 +86,7 @@ def extract_messages(
     # (the embedded ``wxid:\n`` content prefix is missing on the owner's own
     # messages, which is why they used to vanish). Resolve per-db before merging.
     rows: list[tuple] = []
-    for rel in _db_rels():
+    for rel in wechat_db.message_db_rels():
         try:
             conn = wechat_db.get_conn(rel)
             cur = conn.cursor()
@@ -243,7 +220,7 @@ def find_missing_dates(allow_incomplete: bool = False) -> list[str]:
                 existing.add(m.group(1))
 
     last_ts = 0
-    for rel in _db_rels():
+    for rel in wechat_db.message_db_rels():
         try:
             conn = wechat_db.get_conn(rel)
         except FileNotFoundError:
