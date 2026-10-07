@@ -51,13 +51,15 @@ GROUP_CHAT_ID = "26389512912@chatroom"
 GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 
 # ── Models ──────────────────────────────────────────────────────────────────────
-# AB test: 报告生成对比 Opus 4.6（主版本，发布 + 喂续写）vs Opus 5（旁路，仅本地
-# PDF/debug）。两版都走 Anthropic 同一条 extract_report 路径、同套提示词、原生喂图，
-# 只有报告生成模型不同——把唯一变量真正收敛到模型上。链接摘要走 DeepSeek
+# 主版本 2026-10 由 Opus 4.6 换为 Opus 5.5，提示词同期重写（见 prompts.py 与
+# scripts/exp_opus55.py）：三天实测质量更好、Batch 单篇 $0.3 左右，约为 4.6 的 1/3。
+# effort 取 high（llm_extractor.build_request_params）：比 medium 每篇只贵约 $0.02，
+# 小事实错误更少。AB test 旁路仍为 Opus 5（仅本地 PDF/debug），两版走同一条
+# extract_report 路径、同套提示词、原生喂图，只有报告生成模型不同。链接摘要走 DeepSeek
 # V4.1 Flash（deepseek 前缀触发 url_enricher 的 OpenAI 兼容分支，thinking 开启），
 # 两版日报共用同一批摘要。2026-09 盲评实测 Flash 在「保留日报有用信息」上优于
 # V4 Pro，且快 4–5 倍、便宜约 6 倍。
-CLAUDE_MODEL = "claude-opus-4-6"  # 主版本报告生成（发布）
+CLAUDE_MODEL = "claude-opus-5-5"  # 主版本报告生成（发布）
 COMPARE_REPORT_MODEL = "claude-opus-5"  # 对比版报告生成（旁路，不发布）
 LINK_SUMMARY_MODEL = "deepseek-flash"  # 链接摘要（DeepSeek-V4.1-Flash，开思考）
 
@@ -66,10 +68,13 @@ LINK_SUMMARY_MODEL = "deepseek-flash"  # 链接摘要（DeepSeek-V4.1-Flash，�
 # (verified 2026-05). Cache-write 5m = 1.25× base input; cache-read = 0.1× base
 # input; we list them out explicitly so call sites don't have to multiply.
 MODEL_PRICES: dict[str, dict[str, float]] = {
+    # Opus 5.5（主版本报告生成）：$4/M 输入、$20/M 输出。cache-write 5m = 1.25×
+    # 输入；cache-read 官方定价 $0.20/M（0.05× 输入，比前代的 0.1× 更低）。
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cache_write_5m": 5.00, "cache_read": 0.20},
     # Opus 5（对比版报告生成）：$5/M 输入、$25/M 输出。cache-write 5m = 1.25×
     # 输入、cache-read = 0.1× 输入。
     "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_write_5m": 6.25, "cache_read": 0.50},
-    # Opus 4.6（主版本报告生成）：$5/M 输入、$25/M 输出。cache-write 5m = 1.25×
+    # Opus 4.6（2026-10 前的主版本报告生成）：$5/M 输入、$25/M 输出。cache-write 5m = 1.25×
     # 输入、cache-read = 0.1× 输入。
     "claude-opus-4-6": {
         "input": 5.00,

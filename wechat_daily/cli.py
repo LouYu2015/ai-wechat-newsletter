@@ -97,7 +97,7 @@ def _run_db_pipeline(
     prior_days: int = 3,
     prior_title_days: int = 7,
     prompt_on_missing_prior: bool = True,
-    run_compare: bool = True,
+    run_compare: bool = False,
     cost_records: list[cost_tracker.CostRecord] | None = None,
     use_batch: bool = True,
     force_resume: bool = False,
@@ -115,8 +115,8 @@ def _run_db_pipeline(
     *prompt_on_missing_prior* — when *some* of the last *prior_days* are
     available but others aren't (suggesting a recent gap, not a fresh start),
     ask the user whether to proceed.
-    *run_compare* — also produce the Opus 4.6 AB-compare report (bypass, local
-    only). ``False`` (``--no-compare``) skips it to save cost.
+    *run_compare* — also produce the ``COMPARE_REPORT_MODEL`` AB-compare report
+    (bypass, local only). Off by default; ``--compare`` turns it on.
     *use_batch* — Batch API (default: 50% pricing, no live streaming); the
     ``--no-batch`` flag flips this off for the legacy streaming path.
     *force_resume* / *force_resubmit* — skip the interactive question when a
@@ -579,7 +579,10 @@ def _materialize_report_images(
     return group_paths, public_urls
 
 
-_COMPARE_DEBUG_SUFFIX = ".opus-4-6"
+# 对比版 sidecar / PDF 的模型标签（如 "opus-5"），与 Batch 路径的
+# batch_extractor.debug_suffix_for 同规则，换对比模型时不必再改这里。
+_COMPARE_TAG = config.COMPARE_REPORT_MODEL.removeprefix("claude-")
+_COMPARE_DEBUG_SUFFIX = f".{_COMPARE_TAG}"
 
 
 def _run_streaming_extraction(
@@ -789,7 +792,7 @@ def _render_compare_report(
     """Render the Opus compare report → group markdown + PDF (local only).
 
     No public path, no leak check, never feeds next-day continuity — the
-    ``(opus-4-6)`` PDF sits alongside the canonical one for AB reading. Its
+    ``(<对比模型>)`` PDF sits alongside the canonical one for AB reading. Its
     images are materialized ``publish=False`` for the same reason.
     """
     day_log = [
@@ -815,9 +818,9 @@ def _render_compare_report(
     md_path.write_text(compare_group_md, encoding="utf-8")
 
     config.ARCHIVE_DIR.mkdir(exist_ok=True)
-    # Always exactly one "(opus-4-6)" file per date, overwriting stale ones on
+    # Always exactly one "(<model>)" file per date, overwriting stale ones on
     # re-runs (matching how the canonical path overwrites debug/{date}.md).
-    compare_pdf_path = config.ARCHIVE_DIR / f"{date_str} 群聊日报 (opus-4-6).pdf"
+    compare_pdf_path = config.ARCHIVE_DIR / f"{date_str} 群聊日报 ({_COMPARE_TAG}).pdf"
     with rich.progress.Progress(
         rich.progress.SpinnerColumn(),
         rich.progress.TextColumn("[bold magenta]{task.description}"),
@@ -981,7 +984,7 @@ def _run_batch_extraction(
         requests["compare"] = config.COMPARE_REPORT_MODEL
     if state is not None:
         # Resume: regenerate exactly what was submitted, whatever today's
-        # flags say (--no-compare doesn't drop an already-paid-for request).
+        # flags say (turning --compare off doesn't drop an already-paid-for request).
         requests = dict(state.requests)
 
     debug_day = config.debug_dir_for(date_str)
@@ -1218,11 +1221,11 @@ def main() -> None:
         help="最近若干天日报有缺失时不交互询问，按现有材料继续（适合自动化场景）。",
     )
     parser.add_argument(
-        "--no-compare",
+        "--compare",
         action="store_true",
         help=(
-            "跳过 Opus 4.6 对比版（旁路，仅本地 PDF/debug、不发布）。"
-            "对比版与主版本同价位、且每天跑全天聊天记录，成本不低；只想要发布版时用此项关闭。"
+            f"额外生成 {config.COMPARE_REPORT_MODEL} 对比版（旁路，仅本地 PDF/debug、不发布）。"
+            "默认关闭：对比版每天跑全天聊天记录，与主版本成本相当，只在评估模型时打开。"
         ),
     )
     args = parser.parse_args()
@@ -1301,7 +1304,7 @@ def main() -> None:
                 prior_days=args.prior_days,
                 prior_title_days=args.prior_title_days,
                 prompt_on_missing_prior=not args.no_prior_prompt,
-                run_compare=not args.no_compare,
+                run_compare=args.compare,
                 cost_records=cost_records,
                 use_batch=not args.no_batch,
                 force_resume=args.resume,

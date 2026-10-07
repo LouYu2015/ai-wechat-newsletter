@@ -213,7 +213,7 @@ def raw_messages_fingerprint(messages: list) -> tuple[int, str]:
 def debug_suffix_for(custom_id: str, model: str) -> str:
     """Sidecar suffix per request: main is canonical (un-suffixed, feeds
     next-day continuity); every other id gets ``.{model minus claude-}`` —
-    matching the streaming path's hardcoded ``.opus-4-6``."""
+    matching the streaming path's ``cli._COMPARE_DEBUG_SUFFIX``."""
     if custom_id == "main":
         return ""
     return "." + model.removeprefix("claude-")

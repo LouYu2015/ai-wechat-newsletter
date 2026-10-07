@@ -5,8 +5,8 @@
 ## 功能概览
 
 - **双版本产出**：群内版保留真实昵称，公开版经过三级隐私处理后发布到 GitHub Pages
-- **Markdown 提取**：用 Claude Fable 从聊天记录中流式生成 Markdown 日报；公开/内部版本通过后期处理分流
-- **模型 AB 对比**：主版本（Fable 5，发布 + 喂续写）跑完后，再用 Opus 4.6 旁路生成一份对比日报（仅本地 PDF/debug，不发布、不喂续写），便于并排比质量与成本
+- **Markdown 提取**：用 Claude Opus 5.5 从聊天记录中生成 Markdown 日报；公开/内部版本通过后期处理分流
+- **模型 AB 对比**（默认关闭，`--compare` 开启）：主版本（Opus 5.5，发布 + 喂续写）之外，再用 Opus 5 旁路生成一份对比日报（仅本地 PDF/debug，不发布、不喂续写），便于并排比质量与成本
 - **表格与图片**：日报可按机械阈值起 Markdown 表格，也可引用群里的原图（`![说明](img:3fa9c1d2)`）；群内版内嵌进 PDF，公开版转 WebP 提交到公开仓库（单张 ≤80KB、每天 ≤200KB），隐藏章节里的图不导出
 - **链接摘要**：用 DeepSeek V4 Pro（关 thinking）抓取并摘要群内分享的链接，作为 `[网页摘要]` 喂给报告生成；两版日报共用同一批摘要
 - **三级隐私模型**：`/optout`（不出现）/ 默认匿名（稳定派生）/ `/alias`（自定义公开别名）
@@ -70,7 +70,7 @@ echo -n "26389512912@chatroom" | md5
 source .venv/bin/activate
 
 # 生成缺失日报（默认走 Batch API：全部 token 5 折，无流式预览，
-# 通常几分钟到几十分钟完成；主版 + 对比版同批提交）
+# 通常几分钟到几十分钟完成）
 python3 main.py
 
 # 只生成、不推送（留人工审核窗口，本地 commit 保留）
@@ -81,6 +81,9 @@ python3 main.py --allow-incomplete
 
 # 不用批量，走传统流式生成（有实时预览，标准价计费）
 python3 main.py --no-batch
+
+# 额外生成对比版（与主版本同批提交），评估模型时用
+python3 main.py --compare
 ```
 
 **推送时机**：默认在每天的 PDF / 公开版生成并本地 commit 后**立即推送**到公开仓库，GitHub Pages 自动构建；启动时也会先把之前攒下的未推送 commit 推掉。带 `--no-push` 则本次只做本地 commit，等人工审核后下次运行再一并推送。（旧的 `-y` 标志已废弃，保留为空操作。）
@@ -105,12 +108,12 @@ python3 main.py --no-batch
 
 | 路径 | 说明 |
 |------|------|
-| `archive/YYYY-MM-DD 群聊日报.pdf` | 主版本（Fable 5）群内版 PDF（真实昵称） |
+| `archive/YYYY-MM-DD 群聊日报.pdf` | 主版本（Opus 5.5）群内版 PDF（真实昵称） |
 | `debug/YYYY/MM/DD/group.md` | 主版本群内版 Markdown 原文 |
 | `debug/YYYY/MM/DD/extract.{md,input.txt,thinking.md}` | 主版本原始 Markdown 日报（用作下日续写素材）+ 输入快照 + thinking 摘要 |
-| `archive/YYYY-MM-DD 群聊日报 (opus-4-6).pdf` | **对比版**（Opus 4.6）群内版 PDF（仅本地，不发布、不喂续写） |
-| `debug/YYYY/MM/DD/group.opus-4-6.md` | 对比版群内版 Markdown 原文 |
-| `debug/YYYY/MM/DD/extract.opus-4-6.{md,input.txt,thinking.md}` | 对比版原始 Markdown + 输入快照 + thinking 摘要 |
+| `archive/YYYY-MM-DD 群聊日报 (opus-5).pdf` | **对比版**（Opus 5，仅 `--compare`）群内版 PDF（仅本地，不发布、不喂续写） |
+| `debug/YYYY/MM/DD/group.opus-5.md` | 对比版群内版 Markdown 原文 |
+| `debug/YYYY/MM/DD/extract.opus-5.{md,input.txt,thinking.md}` | 对比版原始 Markdown + 输入快照 + thinking 摘要 |
 | `debug/YYYY/MM/DD/batch_state.json` | 批量模式批次状态（断点续接凭据，含 schema version） |
 | `debug/YYYY/MM/DD/batch_input.txt` | 批量模式提交输入的纯文本审计快照 |
 | `debug/YYYY/MM/DD/batch_content.json` | 提交输入的完整块列表快照（含图片；批次消费后自动删除） |
@@ -119,7 +122,7 @@ python3 main.py --no-batch
 | `debug/costs.jsonl` | 每次模型调用的 token 用量 + 价格估算（JSON Lines，批量调用带 `batch` 标记） |
 | `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
 
-每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表，阶段含 `link`（DeepSeek 链接摘要）/ `extract`（Fable 5 主版本）/ `extract-compare`（Opus 4.6 对比版），批量调用的模型列标注「(batch 5折)」，可直接并排比成本。对比版生成失败不影响主版本。
+每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表，阶段含 `link`（DeepSeek 链接摘要）/ `extract`（Opus 5.5 主版本）/ `extract-compare`（Opus 5 对比版），批量调用的模型列标注「(batch 5折)」，可直接并排比成本。对比版生成失败不影响主版本。
 
 ## 测试
 

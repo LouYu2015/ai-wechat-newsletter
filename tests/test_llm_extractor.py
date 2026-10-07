@@ -475,12 +475,12 @@ def test_prior_report_titles_empty_list_omits_block(monkeypatch, tmp_path):
     assert "</previous_report_titles>" not in user_msg
 
 
-def test_system_prompt_documents_title_block(monkeypatch, tmp_path):
-    """System prompt should mention <previous_report_titles> so the model
-    knows what to do when it appears."""
+def test_prompt_documents_title_block(monkeypatch, tmp_path):
+    """The prompt (input-semantics section after the chat log) should mention
+    <previous_report_titles> so the model knows what to do when it appears."""
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=["x"])
     llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
 
-    system = client.messages.calls[0]["system"]
-    assert "previous_report_titles" in system
+    user = client.messages.calls[0]["messages"][0]["content"]
+    assert "previous_report_titles" in user
