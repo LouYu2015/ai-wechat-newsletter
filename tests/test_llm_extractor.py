@@ -151,7 +151,7 @@ def test_refusal_raises_and_writes_failure(monkeypatch, tmp_path):
     monkeypatch.setattr("wechat_daily.config.DEBUG_DIR", tmp_path)
     client = _FakeClient(text_chunks=[], stop_reason="refusal")
 
-    with pytest.raises(llm_extractor.ExtractionError, match="拒绝"):
+    with pytest.raises(llm_extractor.RefusalError, match="拒绝"):
         llm_extractor.extract_report("2026-04-30", "chat", api_key="fake", client=client)
     failure = config.debug_dir_for("2026-04-30") / "extract.FAILED.json"
     assert failure.exists()

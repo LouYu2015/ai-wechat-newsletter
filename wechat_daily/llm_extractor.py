@@ -29,6 +29,15 @@ class ExtractionError(Exception):
     """Claude returned an unusable response (refusal or max_tokens cutoff)."""
 
 
+class RefusalError(ExtractionError):
+    """Claude refused the request (``stop_reason="refusal"``).
+
+    Split out from :class:`ExtractionError` because it is the one failure the
+    pipeline recovers from — by regenerating with the fallback model
+    (:mod:`wechat_daily.openai_extractor`).
+    """
+
+
 def _default_client(api_key: str):
     import anthropic
 
@@ -73,7 +82,7 @@ def build_extract_user_content(
         parts.append(prior_report.format_prior_reports_block(prior_reports) + "\n")
     parts.append(f'<chat_log date="{date_str}">\n')
     prefix = "".join(parts)
-    suffix = "\n</chat_log>\n\n---\n\n" + prompts.USER_INSTRUCTIONS.format(date_str=date_str)
+    suffix = _INSTRUCTIONS_MARKER + prompts.USER_INSTRUCTIONS.format(date_str=date_str)
 
     if chat_blocks is not None:
         user_content: str | list[dict] = [
@@ -89,6 +98,29 @@ def build_extract_user_content(
         debug_text = user_content
 
     return user_content, debug_text
+
+
+# Separates the chat log from the trailing instructions in the user message.
+_INSTRUCTIONS_MARKER = "\n</chat_log>\n\n---\n\n"
+
+
+def replace_instructions(user_content: str | list[dict], instructions: str):
+    """Swap the instructions after the chat log for *instructions*.
+
+    Works on both shapes :func:`build_extract_user_content` returns (and on
+    its flat debug text), so a model with its own prompt pair — the Astra
+    fallback — can reuse the exact input an Opus request was built from,
+    including a batch content snapshot.
+    """
+    if isinstance(user_content, str):
+        head, sep, _ = user_content.rpartition(_INSTRUCTIONS_MARKER)
+        if not sep:
+            raise ValueError("user content has no </chat_log> instructions marker")
+        return head + sep + instructions
+    *blocks, last = user_content
+    if last.get("type") != "text":
+        raise ValueError("user content does not end with the instructions text block")
+    return [*blocks, {"type": "text", "text": replace_instructions(last["text"], instructions)}]
 
 
 # ── Shared request construction / response finalization ─────────────────────────
@@ -148,7 +180,7 @@ def finalize_response(
     stop_reason = getattr(response, "stop_reason", None)
     if stop_reason == "refusal":
         _save_failure(date_str, debug_text, markdown, "Claude 拒绝处理该内容", suffix=suffix)
-        raise ExtractionError("Claude 拒绝处理该内容（stop_reason=refusal）")
+        raise RefusalError("Claude 拒绝处理该内容（stop_reason=refusal）")
 
     if stop_reason == "max_tokens":
         _save_failure(date_str, debug_text, markdown, "响应被 max_tokens 截断", suffix=suffix)

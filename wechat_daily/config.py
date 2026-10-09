@@ -61,6 +61,11 @@ GROUP_TABLE = "Msg_1f5cd6985e2d31687fc076061b1fa6da"
 # V4 Pro，且快 4–5 倍、便宜约 6 倍。
 CLAUDE_MODEL = "claude-opus-5-5"  # 主版本报告生成（发布）
 COMPARE_REPORT_MODEL = "claude-opus-5"  # 对比版报告生成（旁路，不发布）
+# 主版本被 Opus 拒绝（stop_reason=refusal）时改用 GPT-6 Astra 重写一份，用它自己的
+# 提示词（prompts.ASTRA_*，2026-10-09 用 scripts/exp_openai.py 调过去 AI 味）。走
+# OpenAI Responses API 的 flex 档（与 Batch 同为 5 折；当前 key 没有 Batch 权限），
+# flex 无容量时退回标准价。单篇约 $0.5–0.6（flex）。
+FALLBACK_REPORT_MODEL = "gpt-6-astra"
 LINK_SUMMARY_MODEL = "deepseek-flash"  # 链接摘要（DeepSeek-V4.1-Flash，开思考）
 
 # ── Anthropic API pricing (USD per 1M tokens) ──────────────────────────────────
@@ -98,6 +103,10 @@ MODEL_PRICES: dict[str, dict[str, float]] = {
         "cache_read": 0.30,
     },
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_write_5m": 1.25, "cache_read": 0.10},
+    # GPT-6 Astra（主版本被拒时的兜底）：OpenAI 官方价（developers.openai.com，
+    # 2026-10-09 核对），≤272K 输入档 $10/M 输入、$50/M 输出、缓存命中 $1/M；
+    # OpenAI 没有缓存写入费，cache_write_5m 取 = input。flex 档按 batch=True 记 5 折。
+    "gpt-6-astra": {"input": 10.00, "output": 50.00, "cache_write_5m": 10.00, "cache_read": 1.00},
     # DeepSeek 官方价（https://api-docs.deepseek.com/quick_start/pricing，2026-09
     # 核对）：分峰时 / 错峰两档，错峰为峰时一半；峰时为 UTC 周一至周五 01:00–04:00
     # 与 06:00–10:00。日报常在太平洋时间深夜跑、正好跨两档，这里保守按峰时价估。
@@ -169,6 +178,11 @@ def get_anthropic_key() -> str:
 def get_deepseek_key() -> str:
     load_env()
     return os.getenv("DEEPSEEK_API_KEY", "")
+
+
+def get_chatgpt_key() -> str:
+    load_env()
+    return os.getenv("CHATGPT_API_KEY", "")
 
 
 def get_glm_key() -> str:

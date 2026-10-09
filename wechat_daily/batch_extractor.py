@@ -466,6 +466,9 @@ class BatchOutcome:
 
     reports: dict[str, models.DailyReport] = dataclasses.field(default_factory=dict)
     errors: dict[str, str] = dataclasses.field(default_factory=dict)  # custom_id → reason
+    # Subset of *errors* that were refusals — the caller may regenerate these
+    # with the fallback model.
+    refused: set[str] = dataclasses.field(default_factory=set)
 
 
 def process_results(
@@ -509,6 +512,8 @@ def process_results(
                 )
             except llm_extractor.ExtractionError as e:
                 outcome.errors[custom_id] = str(e)
+                if isinstance(e, llm_extractor.RefusalError):
+                    outcome.refused.add(custom_id)
                 continue
             if usage_cb:
                 usage_cb(custom_id, model, getattr(message, "usage", None))
@@ -627,6 +632,7 @@ def run_batch(
         )
         outcome.reports.update(retry_outcome.reports)
         outcome.errors.update(retry_outcome.errors)
+        outcome.refused |= retry_outcome.refused
         for cid, model in still_failing.items():
             outcome.errors[cid] = "重试后仍失败（服务端错误/过期）"
 

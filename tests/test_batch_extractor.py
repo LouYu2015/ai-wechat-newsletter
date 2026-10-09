@@ -413,6 +413,18 @@ def test_process_results_refusal_is_terminal_error(debug_dir):
     assert not retryable
     assert "main" in outcome.errors
     assert (config.debug_dir_for("2026-07-02") / "extract.FAILED.json").exists()
+    assert outcome.refused == {"main"}
+
+
+def test_process_results_truncation_is_not_marked_refused(debug_dir):
+    outcome, _ = bx.process_results(
+        "2026-07-02",
+        "input",
+        {"main": "claude-opus-4-6"},
+        {"main": _Result("main", "succeeded", _Message("半截", stop_reason="max_tokens"))},
+    )
+    assert "main" in outcome.errors
+    assert not outcome.refused
 
 
 def test_process_results_server_error_and_expired_are_retryable(debug_dir):

@@ -6,6 +6,7 @@
 
 - **双版本产出**：群内版保留真实昵称，公开版经过三级隐私处理后发布到 GitHub Pages
 - **Markdown 提取**：用 Claude Opus 5.5 从聊天记录中生成 Markdown 日报；公开/内部版本通过后期处理分流
+- **拒绝兜底**：Opus 拒绝生成（`stop_reason=refusal`）时，同一份输入改交 GPT-6 Astra 用它自己的提示词（`prompts.ASTRA_*`）重写，结果照常发布、喂续写
 - **模型 AB 对比**（默认关闭，`--compare` 开启）：主版本（Opus 5.5，发布 + 喂续写）之外，再用 Opus 5 旁路生成一份对比日报（仅本地 PDF/debug，不发布、不喂续写），便于并排比质量与成本
 - **表格与图片**：日报可按机械阈值起 Markdown 表格，也可引用群里的原图（`![说明](img:3fa9c1d2)`）；群内版内嵌进 PDF，公开版转 WebP 提交到公开仓库（单张 ≤80KB、每天 ≤200KB），隐藏章节里的图不导出
 - **链接摘要**：用 DeepSeek V4 Pro（关 thinking）抓取并摘要群内分享的链接，作为 `[网页摘要]` 喂给报告生成；两版日报共用同一批摘要
@@ -36,6 +37,7 @@ pip install -r requirements.txt
 ```
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 DEEPSEEK_API_KEY=your_deepseek_api_key_here   # 链接摘要（主版本 + 对比版共用同一批摘要）需要
+CHATGPT_API_KEY=your_openai_api_key_here      # Opus 拒绝时改用 GPT-6 Astra 兜底（可选，缺了兜底直接失败）
 ```
 
 ## 配置目标群聊
@@ -122,7 +124,7 @@ python3 main.py --compare
 | `debug/costs.jsonl` | 每次模型调用的 token 用量 + 价格估算（JSON Lines，批量调用带 `batch` 标记） |
 | `data/public_repo/_posts/` | 公开版 Jekyll Markdown（本地 commit，待推送） |
 
-每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表，阶段含 `link`（DeepSeek 链接摘要）/ `extract`（Opus 5.5 主版本）/ `extract-compare`（Opus 5 对比版），批量调用的模型列标注「(batch 5折)」，可直接并排比成本。对比版生成失败不影响主版本。
+每次跑完会在终端打出按 (日期, 阶段, 模型) 聚合的成本汇总表，阶段含 `link`（DeepSeek 链接摘要）/ `extract`（Opus 5.5 主版本）/ `extract-compare`（Opus 5 对比版）/ `extract-fallback`（被拒后的 Astra 兜底，flex 档同记 5 折），批量调用的模型列标注「(batch 5折)」，可直接并排比成本。对比版生成失败不影响主版本。
 
 ## 测试
 
