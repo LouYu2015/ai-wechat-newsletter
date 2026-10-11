@@ -506,6 +506,14 @@ def test_slugify_inline_code_keeps_double_hyphen():
     )
 
 
+def test_slugify_drops_inline_html_tags():
+    """Matches the deployed id ``淡定的大象连更物理与数学母题`` for a mention heading."""
+    assert (
+        renderer._slugify_heading('<span class="mention">@淡定的大象</span>连更：物理与数学母题')
+        == "淡定的大象连更物理与数学母题"
+    )
+
+
 def test_slugify_strips_chinese_punctuation():
     assert renderer._slugify_heading("话题：副标题") == "话题副标题"
 

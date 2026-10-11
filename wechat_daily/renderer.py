@@ -75,6 +75,7 @@ _VALID_HREF_RE = re.compile(r"^\s*(?:https?://|/|#|\.{1,2}/|mailto:|\{\{)")
 # URL fragments.
 _SLUG_DROP_RE = re.compile(r"[^\w\- \t]", re.UNICODE)
 _SLUG_SPACE_RE = re.compile(r"[ \t]")
+_HTML_TAG_RE = re.compile(r"<[^>\n]+>")
 
 _TAG_INVALID_RE = re.compile(r"[^a-z0-9-]+")
 _TAG_DASHES_RE = re.compile(r"-{2,}")
@@ -389,8 +390,10 @@ def _slugify_heading(title: str) -> str:
     a single hyphen. No hyphen collapsing and no leading/trailing strip — a
     heading like ``Claude `-p` 禁令`` keeps the double hyphen (``claude--p-禁令``)
     that the rendered HTML id carries, so htmlproofer's hash check passes.
+    Inline HTML tags (the ``<span class="mention">`` around an @-mention) are
+    dropped first: kramdown builds the id from the heading's text content.
     """
-    s = title.strip().lower()
+    s = _HTML_TAG_RE.sub("", title).strip().lower()
     s = _SLUG_DROP_RE.sub("", s)
     s = _SLUG_SPACE_RE.sub("-", s)
     return s
