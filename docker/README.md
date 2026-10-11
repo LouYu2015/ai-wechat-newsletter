@@ -55,5 +55,5 @@ bundle exec htmlproofer _site --disable-external --no-enforce-https   # 与 CI �
 
 ## 注意
 
-- 容器内 Python 用 `/opt/venv`（已装好依赖），**不要** source 项目里 macOS 的 `.venv`。
+- 容器内 Python 用 `/opt/venv`（已装好运行依赖和 pytest / ruff 等开发工具），**不要** source 项目里 macOS 的 `.venv`。
 - PDF 渲染：容器用 Chromium + Noto CJK 字体；正文字体退回 Noto（宿主机才有苹方 PingFang）。

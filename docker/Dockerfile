@@ -1,7 +1,7 @@
 # 开发沙箱：跑项目 + 在里面跑 Claude Code。
 # - 只读挂载微信加密数据库（见 dev.sh），读写挂载项目目录到 /workspace
 # - Claude Code 用官方原生安装器装进持久卷，启动时自更新到最新版（见 entrypoint.sh）
-FROM python:3.14-slim-bookworm
+FROM python:3.14-slim-trixie
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -21,7 +21,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   git / openssh-client / curl ...    : Claude Code 日常工具（openssh 供 git over SSH 的 fetch；推送在宿主机做）
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config \
-        libsqlcipher-dev libsqlcipher0 \
+        libsqlcipher-dev libsqlcipher1 \
         libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 \
         libffi8 libcairo2 shared-mime-info \
         chromium fonts-noto-cjk fonts-noto-color-emoji \
@@ -46,11 +46,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY docker/jekyll-Gemfile /opt/jekyll/Gemfile
 RUN cd /opt/jekyll && bundle install
 
-# ── Python 依赖（装进 /opt/venv）─────────────────────────────────────────
+# ── Python 依赖（装进 /opt/venv，含 pytest / ruff 等开发工具）──────────────
 RUN python -m venv "$VIRTUAL_ENV"
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.txt requirements-dev.txt /tmp/
 RUN pip install --upgrade pip \
-    && pip install -r /tmp/requirements.txt
+    && pip install -r /tmp/requirements.txt -r /tmp/requirements-dev.txt
 
 # pdf.py 在 PATH 里找的是 `chromium`，Debian 装的是 /usr/bin/chromium —— 已匹配
 ENV CHROME_BIN=/usr/bin/chromium
