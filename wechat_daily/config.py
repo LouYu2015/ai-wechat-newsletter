@@ -136,6 +136,9 @@ ALIAS_RESERVATION_DAYS = 30
 # ── Publisher ───────────────────────────────────────────────────────────────────
 PUBLIC_REPO_URL = "git@github.com:LouYu2015/AI-chatgroup-daily.git"
 PUBLIC_REPO_DIR = DATA_DIR / "public_repo"
+# Absolute site root (url + baseurl from the public repo's _config.yml). The
+# group/PDF version links here since it is read outside the Jekyll site.
+PUBLIC_SITE_URL = "https://louyu2015.github.io/AI-chatgroup-daily"
 
 # ── Public-repo images ──────────────────────────────────────────────────────────
 # Every byte published here lands in the GitHub Pages repo's git history and

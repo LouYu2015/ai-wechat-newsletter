@@ -396,15 +396,6 @@ def _slugify_heading(title: str) -> str:
     return s
 
 
-def _expand_refs_group(text: str) -> str:
-    """Group/PDF version: keep only the section title in 「…」.
-
-    Date is intentionally dropped; the model is instructed to write a natural-
-    language date marker in surrounding prose ("昨天", "上周三" 等).
-    """
-    return _REF_RE.sub(lambda m: f"「{m.group(4).strip()}」", text)
-
-
 @functools.lru_cache(maxsize=None)
 def _post_heading_slugs(post_path: pathlib.Path) -> frozenset[str]:
     """Slug set for every ``##``/``###`` heading in *post_path*.
@@ -430,6 +421,66 @@ def _post_heading_slugs(post_path: pathlib.Path) -> frozenset[str]:
     return frozenset(slugs)
 
 
+def _public_ref_path(
+    y: str,
+    mo: str,
+    d: str,
+    title: str,
+    base: pathlib.Path,
+    *,
+    warn: bool = True,
+) -> str | None:
+    """Site path ``/daily/Y/M/D/daily/#slug`` for a cross-day ref, or None.
+
+    None when the target post is missing, or exists but has no heading whose
+    slug matches *title* (usually the LLM attributing a section to the wrong
+    date) — better to drop the URL than ship a dangling hash.
+    """
+    post = base / y / mo / f"{y}-{mo}-{d}-daily.md"
+    if not post.exists():
+        return None
+    slug = _slugify_heading(title)
+    if slug and slug not in _post_heading_slugs(post):
+        if warn:
+            print(
+                f"[warn] cross-day ref to {y}-{mo}-{d}#{slug} "
+                f"({title!r}) not found in target post; dropping URL",
+                file=sys.stderr,
+            )
+        return None
+    anchor = f"#{slug}" if slug else ""
+    return f"/daily/{y}/{mo}/{d}/daily/{anchor}"
+
+
+def _expand_refs_group(
+    text: str,
+    posts_dir: pathlib.Path | None = None,
+) -> str:
+    """Group/PDF version: link ``「title」`` to the section on the public site.
+
+    Date is intentionally dropped from the text; the model is instructed to
+    write a natural-language date marker in surrounding prose ("昨天", "上周三"
+    等). The PDF is read outside the Jekyll site, so the URL is absolute.
+    Validation matches the public version, so a section hidden from the public
+    post — or a ref to a missing post — degrades to plain ``「title」``. Also
+    rewrites final-form Liquid links the LLM sometimes writes directly, which
+    would otherwise leak raw ``{{ … }}`` into the PDF. Warnings are left to the
+    public pass, which checks the same refs.
+    """
+    base = posts_dir if posts_dir is not None else (config.PUBLIC_REPO_DIR / "_posts")
+
+    def link(y: str, mo: str, d: str, title: str) -> str:
+        path = _public_ref_path(y, mo, d, title, base, warn=False)
+        if path is None:
+            return f"「{title}」"
+        return f"[「{title}」]({config.PUBLIC_SITE_URL}{path})"
+
+    text = _REF_RE.sub(lambda m: link(m.group(1), m.group(2), m.group(3), m.group(4).strip()), text)
+    return _FINAL_REF_RE.sub(
+        lambda m: link(m.group("y"), m.group("mo"), m.group("d"), m.group("title").strip()), text
+    )
+
+
 def _expand_refs_public(
     text: str,
     posts_dir: pathlib.Path | None = None,
@@ -453,19 +504,9 @@ def _expand_refs_public(
 
     def sub(m: re.Match[str]) -> str:
         y, mo, d, raw_title = m.group(1), m.group(2), m.group(3), m.group(4).strip()
-        post = base / y / mo / f"{y}-{mo}-{d}-daily.md"
-        if not post.exists():
+        url = _public_ref_path(y, mo, d, raw_title, base)
+        if url is None:
             return f"「{raw_title}」"
-        slug = _slugify_heading(raw_title)
-        if slug and slug not in _post_heading_slugs(post):
-            print(
-                f"[warn] cross-day ref to {y}-{mo}-{d}#{slug} "
-                f"({raw_title!r}) not found in target post; dropping URL",
-                file=sys.stderr,
-            )
-            return f"「{raw_title}」"
-        anchor = f"#{slug}" if slug else ""
-        url = f"/daily/{y}/{mo}/{d}/daily/{anchor}"
         return f"[「{raw_title}」]({{{{ '{url}' | relative_url }}}})"
 
     return _REF_RE.sub(sub, text)
@@ -771,7 +812,7 @@ def render_group(
         "",
         "---",
         "",
-        "公开版日报网站：<https://louyu2015.github.io/AI-chatgroup-daily/>",
+        f"公开版日报网站：<{config.PUBLIC_SITE_URL}/>",
     ]
     return "\n".join(parts)
 

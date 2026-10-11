@@ -510,20 +510,47 @@ def test_slugify_strips_chinese_punctuation():
     assert renderer._slugify_heading("话题：副标题") == "话题副标题"
 
 
-def test_expand_refs_group_keeps_only_title():
-    """Group/PDF version drops the date — model writes natural-language date in prose."""
+def test_expand_refs_group_links_to_public_site(tmp_path):
+    """Group/PDF version drops the date and links to the public post's section."""
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    (posts / "2026-05-09-daily.md").write_text("### Claude Opus 4.7 发布\nbody\n", encoding="utf-8")
     text = "昨天 [[ref:2026-05-09|Claude Opus 4.7 发布]] 已经写过要点。"
-    assert renderer._expand_refs_group(text) == "昨天 「Claude Opus 4.7 发布」 已经写过要点。"
+    assert renderer._expand_refs_group(text, posts_dir=tmp_path / "_posts") == (
+        "昨天 [「Claude Opus 4.7 发布」]"
+        "(https://louyu2015.github.io/AI-chatgroup-daily/daily/2026/05/09/daily/#claude-opus-47-发布)"
+        " 已经写过要点。"
+    )
 
 
-def test_expand_refs_group_handles_multiple():
+def test_expand_refs_group_unpublished_degrades_to_title(tmp_path, capsys):
+    """Missing post or a heading absent from it (e.g. a 🔒 section) → plain title, no warning."""
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    (posts / "2026-05-09-daily.md").write_text("### 别的话题\nbody\n", encoding="utf-8")
     text = "[[ref:2026-05-08|话题 A]] 与 [[ref:2026-05-09|话题 B]]"
-    assert renderer._expand_refs_group(text) == "「话题 A」 与 「话题 B」"
+    assert renderer._expand_refs_group(text, posts_dir=tmp_path / "_posts") == "「话题 A」 与 「话题 B」"
+    assert capsys.readouterr().err == ""
 
 
-def test_expand_refs_group_no_match_unchanged():
+def test_expand_refs_group_rewrites_final_form_liquid_link(tmp_path):
+    """A Liquid link the LLM wrote directly must not leak ``{{ … }}`` into the PDF."""
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    (posts / "2026-05-11-daily.md").write_text("### 话题\nbody\n", encoding="utf-8")
+    text = (
+        "见 [「话题」]({{ '/daily/2026/05/11/daily/#话题' | relative_url }})"
+        " 和 [「旧」]({{ '/daily/2026/05/01/daily/#旧' | relative_url }})"
+    )
+    assert renderer._expand_refs_group(text, posts_dir=tmp_path / "_posts") == (
+        "见 [「话题」](https://louyu2015.github.io/AI-chatgroup-daily/daily/2026/05/11/daily/#话题)"
+        " 和 「旧」"
+    )
+
+
+def test_expand_refs_group_no_match_unchanged(tmp_path):
     text = "no refs here"
-    assert renderer._expand_refs_group(text) == text
+    assert renderer._expand_refs_group(text, posts_dir=tmp_path) == text
 
 
 def test_expand_refs_public_with_existing_post(tmp_path):
