@@ -96,9 +96,10 @@ def _get_pdf_css() -> str:
           font-size: 0.85em; overflow-x: auto; border-radius: 4pt; }
 
     table { border-collapse: collapse; width: 100%; margin: 12pt 0;
-            font-size: 0.82em; }
-    th, td { border: 1pt solid #ccc; padding: 7pt 12pt; text-align: left;
+            font-size: 0.7em; }
+    th, td { border: 1pt solid #ccc; padding: 7pt 8pt; text-align: left;
              word-break: break-word; }
+    table.dense { font-size: 0.6em; }
     th { background: #f0f0f0; font-weight: bold; }
 
     figure { margin: 16pt 0; page-break-inside: avoid; text-align: center; }
@@ -126,6 +127,33 @@ def _get_pdf_css() -> str:
     .back-to-toc a { font-size: 0.6em; color: #1a56db; background: #e8f0fe;
                      border: 0.5pt solid #93c5fd; border-radius: 100pt; padding: 3pt 8pt; }
     """
+
+
+# Two-tier table font: every table starts at the CSS default (0.7em); one that
+# wraps at least 2 fewer lines at 0.6em keeps the smaller `dense` size. Picking
+# by measured layout beats any character-count rule — wrapping usually comes
+# from one long cell, which shrinking can't fix. Layout runs at screen width
+# here, so pin body to the A4 content width (210mm − 2×14mm @page margins)
+# while measuring. WeasyPrint ignores scripts and just keeps the default.
+_DENSE_TABLE_JS = """
+<script>
+(() => {
+  const lines = (t) => [...t.rows].reduce((sum, row) => sum + Math.max(...[...row.cells].map((cell) => {
+    const r = document.createRange();
+    r.selectNodeContents(cell);
+    return new Set([...r.getClientRects()].filter((q) => q.width > 0.5).map((q) => Math.round(q.top / 4))).size || 1;
+  })), 0);
+  const margin = getComputedStyle(document.body).marginLeft;
+  document.body.style.width = `calc(182mm - 2 * ${margin})`;
+  for (const t of document.querySelectorAll("table")) {
+    const base = lines(t);
+    if (base === t.rows.length) continue;
+    t.classList.add("dense");
+    if (lines(t) > base - 2) t.classList.remove("dense");
+  }
+  document.body.style.width = "";
+})();
+</script>"""
 
 
 _IMG_TAG = r'<img\s+alt="(?P<alt>[^"]*)"\s+src="(?P<src>[^"]+)"\s*/?>'
@@ -199,6 +227,7 @@ def _build_full_html(markdown_text: str) -> str:
 <head><meta charset="UTF-8"><style>{_get_pdf_css()}</style></head>
 <body>
 {html_body}
+{_DENSE_TABLE_JS}
 </body>
 </html>"""
 
