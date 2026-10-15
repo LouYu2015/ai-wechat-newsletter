@@ -3,9 +3,15 @@
 Three steps, so every tuning round only pays for the generation itself:
 
     TZ=America/Los_Angeles python -m scripts.exp_opus55 prepare --date 2026-10-06
+    # or, for a day production already generated, reuse its input snapshot
+    # (no DeepSeek spend, text byte-identical to the published report's input):
+    TZ=America/Los_Angeles python -m scripts.exp_opus55 prepare-snapshot --date 2026-10-13
     TZ=America/Los_Angeles python -m scripts.exp_opus55 submit  --date 2026-10-06 \\
         --run baseline:claude-opus-4-6:high --run v1:claude-opus-5-5:high
     TZ=America/Los_Angeles python -m scripts.exp_opus55 fetch   --date 2026-10-06
+    # streaming instead of Batch (full price, result in minutes, runs/<name>-live/):
+    TZ=America/Los_Angeles python -m scripts.exp_opus55 run     --date 2026-10-06 \\
+        --run v7:claude-opus-5-5:high
 
 ``prepare`` runs the real input pipeline once (messages, DeepSeek link
 summaries, tokenization, roster, prior reports, native images) and freezes it
@@ -31,6 +37,7 @@ import datetime
 import json
 import pathlib
 import pickle
+import re
 import tempfile
 import time
 
@@ -128,6 +135,76 @@ def cmd_prepare(args) -> None:
     console.print(f"[green]已冻结输入[/green] {out}")
 
 
+def cmd_prepare_snapshot(args) -> None:
+    """Freeze the day's *production* input instead of rebuilding it.
+
+    Reuses ``debug/YYYY/MM/DD/batch_input.txt`` (roster, prior reports, chat
+    log with the link summaries production paid for) and only re-decodes the
+    images from the WeChat DB, so variants see byte-identical text to what the
+    published report was generated from, and nothing is spent on DeepSeek.
+    """
+    date_str = args.date
+    out = exp_dir(date_str)
+    out.mkdir(parents=True, exist_ok=True)
+    img_dir = out / "images"
+    img_dir.mkdir(exist_ok=True)
+
+    snap = (config.debug_dir_for(date_str) / "batch_input.txt").read_text("utf-8")
+    marker = "\n</chat_log>\n"
+    text = snap[: snap.index(marker) + len(marker)]
+
+    contact_map = contacts.ContactMap.from_db()
+    alias_db = aliases.AliasDB.load()
+    messages = chat_extractor.extract_messages(date_str, contact_map)
+    _tokenized, token_map = privacy.tokenize_messages(messages, contact_map, alias_db)
+    with tempfile.TemporaryDirectory(prefix="exp55_imgs_") as td:
+        decoder = image_decoder.ImageDecoder(pathlib.Path(td))
+        for msg in messages:
+            if not msg.image_md5:
+                continue
+            src = decoder.decode(msg.image_md5)
+            if src is not None:
+                image_export.fit_for_report(src, img_dir / f"{msg.image_md5[:8]}.jpg")
+
+    import base64
+
+    img_line = re.compile(r"\[图片 img:([0-9a-f]{8})\]")
+    blocks: list[dict] = []
+    buf: list[str] = []
+    n_img = n_missing = 0
+    for line in text.split("\n"):
+        m = img_line.search(line)
+        if m and (img_dir / f"{m.group(1)}.jpg").exists():
+            buf.append(line)
+            blocks.append({"type": "text", "text": "\n".join(buf) + "\n"})
+            buf = []
+            data = base64.standard_b64encode((img_dir / f"{m.group(1)}.jpg").read_bytes())
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": data.decode()},
+                }
+            )
+            n_img += 1
+            continue
+        if m:
+            line = img_line.sub("[图片]", line)  # not decodable now: model must not cite it
+            n_missing += 1
+        buf.append(line)
+    blocks.append({"type": "text", "text": "\n".join(buf)})
+
+    (out / "content.json").write_text(
+        json.dumps(blocks, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+    )
+    (out / "input.txt").write_text(batch_extractor.snapshot_debug_text(blocks), "utf-8")
+    with (out / "render_state.pkl").open("wb") as fh:
+        pickle.dump({"token_map": token_map}, fh)
+    console.print(
+        f"[green]已从生产快照冻结输入[/green] {out}：消息 {len(messages)} 条，"
+        f"图片 {n_img} 张（{n_missing} 张无法解码，已降级为 [图片]）"
+    )
+
+
 # ── submit ───────────────────────────────────────────────────────────────────────
 
 
@@ -187,7 +264,7 @@ def cmd_submit(args) -> None:
 # ── fetch ────────────────────────────────────────────────────────────────────────
 
 
-def cost_of(model: str, usage: dict) -> float:
+def cost_of(model: str, usage: dict, *, batch: bool = True) -> float:
     p = config.MODEL_PRICES[model]
     usd = (
         usage.get("input_tokens", 0) * p["input"]
@@ -195,7 +272,7 @@ def cost_of(model: str, usage: dict) -> float:
         + usage.get("cache_creation_input_tokens", 0) * p["cache_write_5m"]
         + usage.get("cache_read_input_tokens", 0) * p["cache_read"]
     ) / 1e6
-    return usd * 0.5  # Batch API
+    return usd * 0.5 if batch else usd  # Batch API is half price
 
 
 def render_run(date_str: str, run_dir: pathlib.Path, markdown: str) -> None:
@@ -231,6 +308,46 @@ def render_run(date_str: str, run_dir: pathlib.Path, markdown: str) -> None:
     console.print(f"  图片 {len(image_paths)}/{len(wanted)}（缺 {missing}）泄漏检测 {leak}")
 
 
+def save_run(date_str: str, cid: str, meta: dict, msg, elapsed: float, *, batch: bool) -> None:
+    """Write one run's markdown, thinking, usage/cost and renders under runs/<cid>/."""
+    run_dir = exp_dir(date_str) / "runs" / cid
+    run_dir.mkdir(parents=True, exist_ok=True)
+    md, thinking = llm_extractor.harvest_message_text(msg)
+    usage = cost_tracker.usage_to_dict(msg.usage)
+    usd = cost_of(meta["model"], usage, batch=batch)
+    (run_dir / "extract.md").write_text(md, "utf-8")
+    (run_dir / "thinking.md").write_text(thinking, "utf-8")
+    (run_dir / "usage.json").write_text(
+        json.dumps(
+            {
+                **meta,
+                "batch": batch,
+                "stop_reason": msg.stop_reason,
+                "usage": usage,
+                "usd": usd,
+                "elapsed_s": elapsed,
+                "chars": len(md),
+            },
+            indent=2,
+        ),
+        "utf-8",
+    )
+    cost_tracker.log_call(
+        date=date_str,
+        stage=f"exp55:{cid}",
+        model=meta["model"],
+        usage=msg.usage,
+        duration_s=elapsed,
+        batch=batch,
+    )
+    console.print(
+        f"[bold]{cid}[/bold] stop={msg.stop_reason} in={usage.get('input_tokens')} "
+        f"out={usage.get('output_tokens')} ${usd:.3f} 正文 {len(md)} 字"
+    )
+    if md.strip():
+        render_run(date_str, run_dir, md)
+
+
 def cmd_fetch(args) -> None:
     date_str = args.date
     client = batch_extractor.make_client(config.get_anthropic_key())
@@ -257,51 +374,54 @@ def cmd_fetch(args) -> None:
             if result.result.type != "succeeded":
                 console.print(f"[red]{cid} {result.result.type}[/red] {result.result}")
                 continue
-            msg = result.result.message
-            md, thinking = llm_extractor.harvest_message_text(msg)
-            usage = cost_tracker.usage_to_dict(msg.usage)
-            usd = cost_of(meta["model"], usage)
-            (run_dir / "extract.md").write_text(md, "utf-8")
-            (run_dir / "thinking.md").write_text(thinking, "utf-8")
-            (run_dir / "usage.json").write_text(
-                json.dumps(
-                    {
-                        **meta,
-                        "stop_reason": msg.stop_reason,
-                        "usage": usage,
-                        "usd": usd,
-                        "elapsed_s": elapsed,
-                        "chars": len(md),
-                    },
-                    indent=2,
-                ),
-                "utf-8",
-            )
-            cost_tracker.log_call(
-                date=date_str,
-                stage=f"exp55:{cid}",
-                model=meta["model"],
-                usage=msg.usage,
-                duration_s=elapsed,
-                batch=True,
-            )
-            console.print(
-                f"[bold]{cid}[/bold] stop={msg.stop_reason} in={usage.get('input_tokens')} "
-                f"out={usage.get('output_tokens')} ${usd:.3f} 正文 {len(md)} 字"
-            )
-            if md.strip():
-                render_run(date_str, run_dir, md)
+            save_run(date_str, cid, meta, result.result.message, elapsed, batch=True)
         rec["consumed"] = True
         f.write_text(json.dumps(rec, indent=2), "utf-8")
+
+
+# ── run (streaming, full price, minutes instead of a queue) ──────────────────────
+
+
+def cmd_run(args) -> None:
+    """Generate one or more runs over the streaming API, sequentially.
+
+    Same frozen input and request params as ``submit``; pays full price but
+    returns in minutes, for prompt-iteration rounds where feedback latency
+    matters more than the Batch discount. ``custom_id`` gets a ``-live`` tag
+    so a streamed run never collides with a batched one.
+    """
+    date_str = args.date
+    client = batch_extractor.make_client(config.get_anthropic_key())
+    for spec in args.run:
+        prompt_name, model, effort, *rest = spec.split(":")
+        cid = custom_id(prompt_name, model, effort, "-".join(["live", *rest]))
+        params = build_params(date_str, prompt_name, model, effort)
+        console.print(f"[cyan]{cid}[/cyan] 流式生成中 …")
+        t0 = time.time()
+        with client.messages.stream(**params) as stream:
+            n = 0
+            for _ in stream.text_stream:
+                n += 1
+                if n % 200 == 0:
+                    console.print(f"  … {int(time.time() - t0)}s", end="\r")
+            msg = stream.get_final_message()
+        save_run(
+            date_str,
+            cid,
+            {"prompt": prompt_name, "model": model, "effort": effort},
+            msg,
+            time.time() - t0,
+            batch=False,
+        )
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("prepare", "submit", "fetch"):
+    for name in ("prepare", "prepare-snapshot", "submit", "run", "fetch"):
         sp = sub.add_parser(name)
         sp.add_argument("--date", required=True)
-        if name == "submit":
+        if name in ("submit", "run"):
             sp.add_argument(
                 "--run",
                 action="append",
@@ -312,7 +432,13 @@ def main() -> None:
             sp.add_argument("--batch", default=None)
             sp.add_argument("--poll", type=float, default=30.0)
     args = p.parse_args()
-    {"prepare": cmd_prepare, "submit": cmd_submit, "fetch": cmd_fetch}[args.cmd](args)
+    {
+        "prepare": cmd_prepare,
+        "prepare-snapshot": cmd_prepare_snapshot,
+        "submit": cmd_submit,
+        "run": cmd_run,
+        "fetch": cmd_fetch,
+    }[args.cmd](args)
 
 
 if __name__ == "__main__":
