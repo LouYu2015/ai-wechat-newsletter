@@ -174,8 +174,8 @@ def test_extract_titles_preserves_h2_h3_hierarchy_in_order():
     )
 
 
-def test_extract_titles_includes_hidden_section_titles():
-    """`[章节不公开]` markers shouldn't filter out the surrounding ### title."""
+def test_extract_titles_keeps_hidden_titles_with_marker():
+    """Hidden titles stay (for de-dup) but carry their marker so they aren't ref'd."""
     md = (
         "## 行业新闻\n"
         "### 某客户案例\n"
@@ -185,7 +185,7 @@ def test_extract_titles_includes_hidden_section_titles():
         "body\n"
     )
     assert prior_report.extract_titles_outline(md) == (
-        "## 行业新闻\n### 某客户案例\n### Claude 4.7 发布"
+        "## 行业新闻\n### 某客户案例\n[章节不公开：涉及保密客户的敏感信息]\n### Claude 4.7 发布"
     )
 
 

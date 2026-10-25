@@ -25,7 +25,10 @@ import re
 from wechat_daily import config
 
 # Match ``## title`` and ``### title`` lines. Anchored to start of line.
-_TITLE_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$", re.MULTILINE)
+_TITLE_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
+
+# Hide marker (mirrors renderer._HIDE_RE).
+_HIDE_RE = re.compile(r"\[章节不公开[：:]\s*([^\]]*)\]")
 
 # Final-form cross-day link the public renderer emits (mirrors renderer._FINAL_REF_RE).
 # Kept local so prior_report has no import dep on renderer's regex internals.
@@ -132,11 +135,26 @@ def extract_titles_outline(markdown: str) -> str:
 
     Each matched header is emitted on its own line as ``## title`` /
     ``### title`` in source order. Other content (intro paragraphs, body text,
-    blockquotes, ``[章节不公开]`` markers, ``---`` / tags footer) is dropped.
+    blockquotes, ``---`` / tags footer) is dropped — except ``[章节不公开]``
+    markers, which are kept on their own line right under the heading they
+    hide. Without them the model can't tell a hidden section from a public
+    one and ``[[ref:…]]``s titles the public site doesn't have (2026-10-24 →
+    2026-10-20「遥测与 local proxy：继续拆 Claude Code」).
 
     Returns the empty string if no headers are found.
     """
-    lines = [f"{hashes} {title.strip()}" for hashes, title in _TITLE_RE.findall(markdown)]
+    lines: list[str] = []
+    marked = False  # current heading already carries a marker
+    for line in markdown.split("\n"):
+        m = _TITLE_RE.match(line)
+        if m:
+            lines.append(f"{m.group(1)} {m.group(2).strip()}")
+            marked = False
+            continue
+        h = _HIDE_RE.search(line)
+        if h and lines and not marked:
+            lines.append(h.group(0))
+            marked = True
     return "\n".join(lines)
 
 
