@@ -164,3 +164,38 @@ def test_preview_creates_html(monkeypatch, tmp_path):
     html = path.read_text(encoding="utf-8")
     assert "<h1" in html
     assert "Hello" in html
+
+
+# ── warm_up_ssh ─────────────────────────────────────────────────────────────────
+
+
+def test_warm_up_ssh_skips_non_ssh_url(monkeypatch, tmp_path):
+    import wechat_daily.config as cfg
+    import wechat_daily.publisher as pub
+
+    monkeypatch.setattr(cfg, "PUBLIC_REPO_URL", str(tmp_path / "remote.git"))
+    monkeypatch.setattr(pub.subprocess, "run", lambda *a, **k: pytest.fail("ssh spawned"))
+    assert pub.warm_up_ssh() is True
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("Hi LouYu2015! You've successfully authenticated, but GitHub does not provide", True),
+        ("git@github.com: Permission denied (publickey).", False),
+    ],
+)
+def test_warm_up_ssh_reads_greeting(monkeypatch, stderr, expected):
+    import wechat_daily.config as cfg
+    import wechat_daily.publisher as pub
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(cfg, "PUBLIC_REPO_URL", "git@github.com:o/r.git")
+    monkeypatch.setattr(pub.subprocess, "run", fake_run)
+    assert pub.warm_up_ssh() is expected
+    assert calls[0][-1] == "git@github.com"

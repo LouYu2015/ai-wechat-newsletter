@@ -1340,6 +1340,12 @@ def main() -> None:
         # 本次生成的 commit 在各自 pipeline 末尾推送（除非 --no-push）。
         if not args.no_push:
             console.rule("[bold]Step 2  推送上次未推送的公开版")
+            # 先做一次 SSH 认证：1Password SSH agent 的指纹授权在此刻弹出，
+            # 之后生成完再推送时无需等人。
+            with console.status("SSH 认证中（如有 1Password 指纹提示请确认）…"):
+                ssh_ok = publisher.warm_up_ssh()
+            if not ssh_ok:
+                console.print("[yellow]SSH 认证未成功，稍后推送可能失败或再次提示。[/yellow]")
             try:
                 pushed = publisher.push_pending()
                 console.print(
