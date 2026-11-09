@@ -68,6 +68,8 @@ echo -n "26389512912@chatroom" | md5
 
 ## 使用方法
 
+`./run.sh` 会自动激活 `.venv` 并把参数原样转给 `main.py`（如 `./run.sh --no-batch`）。手动方式：
+
 ```bash
 source .venv/bin/activate
 
