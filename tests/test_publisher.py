@@ -199,3 +199,17 @@ def test_warm_up_ssh_reads_greeting(monkeypatch, stderr, expected):
     monkeypatch.setattr(pub.subprocess, "run", fake_run)
     assert pub.warm_up_ssh() is expected
     assert calls[0][-1] == "git@github.com"
+    # Never prompt on the tty: a passphrase typed here wouldn't be remembered.
+    assert "BatchMode=yes" in calls[0]
+
+
+def test_warm_up_ssh_without_ssh_binary(monkeypatch):
+    import wechat_daily.config as cfg
+    import wechat_daily.publisher as pub
+
+    def no_ssh(cmd, **kw):
+        raise FileNotFoundError(2, "No such file or directory", "ssh")
+
+    monkeypatch.setattr(cfg, "PUBLIC_REPO_URL", "git@github.com:o/r.git")
+    monkeypatch.setattr(pub.subprocess, "run", no_ssh)
+    assert pub.warm_up_ssh() is False

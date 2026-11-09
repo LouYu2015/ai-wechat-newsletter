@@ -89,26 +89,31 @@ def warm_up_ssh(timeout: float = 120) -> bool:
     With the 1Password SSH agent this is where the Touch ID prompt fires, so the
     approval happens at startup instead of after a long generation run; the
     agent remembers it for this terminal session and the later ``git push``
-    goes through silently. Same for a passphrase-protected key in a plain agent.
+    goes through silently.
 
-    Output is captured; the 1Password prompt is a GUI dialog, and a tty
-    passphrase prompt still reaches the terminal via /dev/tty. Returns True when the
-    host greeted us as authenticated (GitHub exits 1 even on success, so the
-    greeting is the signal, not the exit code).
+    ``BatchMode=yes`` stops ssh itself from asking anything on the tty (key
+    passphrase, unknown host key) but leaves agent-side approval alone — the
+    1Password dialog still appears. Without an agent nothing would remember a
+    typed passphrase, so asking for it here would only mean typing it twice;
+    in that case (and for an unknown host) the warm-up fails fast and quietly,
+    and ``git push`` asks once later as it always did.
+
+    Returns True when the host greeted us as authenticated (GitHub exits 1
+    even on success, so the greeting is the signal, not the exit code).
     """
     host = config.PUBLIC_REPO_URL.split(":", 1)[0]
     if "@" not in host:  # not an scp-style SSH URL (e.g. a local path in tests)
         return True
     try:
         result = subprocess.run(
-            ["ssh", "-T", "-o", "ConnectTimeout=15", host],
+            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             timeout=timeout,
             check=False,
         )
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):  # OSError: no ssh binary
         return False
     return "successfully authenticated" in (result.stdout + result.stderr)
 
