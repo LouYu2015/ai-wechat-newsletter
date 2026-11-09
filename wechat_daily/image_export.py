@@ -9,11 +9,12 @@ live here and the decoder never learns that "public version" exists:
   the only real constraint is not bloating a 1MB file with 3 screenshots.
 - `export_public` — the GitHub Pages repo. Tight, and the one that matters:
   every byte committed there is in git history permanently. WebP at the site's
-  actual column width, with a per-day budget on top of the per-image cap.
+  actual column width, all images of a day allocated one shared byte budget.
 """
 
 from __future__ import annotations
 
+import io
 import pathlib
 import sys
 from typing import Optional
@@ -112,30 +113,76 @@ def fit_for_report(src: pathlib.Path, dst: pathlib.Path) -> Optional[pathlib.Pat
 # ── Public repo (git!) ───────────────────────────────────────────────────────
 
 
-def export_public(src: pathlib.Path, dst: pathlib.Path) -> Optional[pathlib.Path]:
-    """Write one image into the public repo as WebP, or ``None`` if it won't fit.
+def _webp_rungs(im: Image.Image) -> list[tuple[int, bytes]]:
+    """Encode every ladder rung, keeping only those smaller than all before.
+
+    The ladder isn't monotone in bytes (downscaling can come out *larger*), so
+    a rung that saves nothing over a higher-quality one is never worth taking.
+    Returns ``(ladder_index, webp_bytes)`` from best quality down.
+    """
+    rungs: list[tuple[int, bytes]] = []
+    for i, (long_edge, quality) in enumerate(config.PUBLIC_IMG_LADDER):
+        buf = io.BytesIO()
+        _scaled(im, long_edge).save(buf, "WEBP", quality=quality, method=6)
+        data = buf.getvalue()
+        if not rungs or len(data) < len(rungs[-1][1]):
+            rungs.append((i, data))
+    return rungs
+
+
+def export_public_day(
+    jobs: dict[str, tuple[pathlib.Path, pathlib.Path]],
+    budget: Optional[int] = None,
+) -> dict[str, pathlib.Path]:
+    """Fit one day's public images (``id -> (src, dst)``) into a shared budget.
+
+    Every rung of every image is encoded up front, then allocated jointly:
+
+    1. Count first. If even the smallest rungs together overshoot, drop the
+       image whose smallest rung is largest, until they fit — that keeps the
+       most images.
+    2. Then quality, kept as even as possible: start everyone at the top rung
+       and, while over budget, step down the image on the highest-quality rung
+       (the larger one on a tie).
 
     Unlike `fit_for_report` there is no "ship it anyway" rung: what lands here
-    goes into git history and cannot be taken back, so the cap is absolute and
-    an image that misses it is simply not published (the public renderer then
-    drops the reference and the prose carries the section alone).
+    goes into git history and cannot be taken back, so the budget is absolute
+    and a dropped image is simply not published (the public renderer then
+    drops the reference and the prose carries the section alone). Returns the
+    ids actually written.
     """
-    im = _load_rgb(src)
-    if im is None:
-        return None
+    if budget is None:
+        budget = config.PUBLIC_IMG_DAY_BUDGET
+    rungs: dict[str, list[tuple[int, bytes]]] = {}
+    for img_id, (src, _) in jobs.items():
+        im = _load_rgb(src)
+        if im is not None:
+            rungs[img_id] = _webp_rungs(im)
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    size: int | None = None
-    for long_edge, quality in config.PUBLIC_IMG_LADDER:
-        _scaled(im, long_edge).save(dst, "WEBP", quality=quality, method=6)
-        size = dst.stat().st_size
-        if size <= config.PUBLIC_IMG_MAX_BYTES:
-            return dst
+    while rungs and sum(len(r[-1][1]) for r in rungs.values()) > budget:
+        img_id = max(rungs, key=lambda k: len(rungs[k][-1][1]))
+        print(
+            f"[warn] 公开版图片压到最小规格仍有 {len(rungs[img_id][-1][1]) / 1024:.0f}KB，"
+            f"全天 {budget / 1024:.0f}KB 预算放不下，不发布该图：{jobs[img_id][1].name}",
+            file=sys.stderr,
+        )
+        del rungs[img_id]
 
-    print(
-        f"[warn] 公开版图片压到最小规格仍有 {(size or 0) / 1024:.0f}KB，超过 "
-        f"{config.PUBLIC_IMG_MAX_BYTES / 1024:.0f}KB 上限，不发布该图：{dst.name}",
-        file=sys.stderr,
-    )
-    dst.unlink(missing_ok=True)
-    return None
+    pick = dict.fromkeys(rungs, 0)
+    total = sum(len(r[0][1]) for r in rungs.values())
+    while total > budget:
+        img_id = min(
+            (k for k in pick if pick[k] < len(rungs[k]) - 1),
+            key=lambda k: (rungs[k][pick[k]][0], -len(rungs[k][pick[k]][1])),
+        )
+        total -= len(rungs[img_id][pick[img_id]][1])
+        pick[img_id] += 1
+        total += len(rungs[img_id][pick[img_id]][1])
+
+    written: dict[str, pathlib.Path] = {}
+    for img_id, i in pick.items():
+        dst = jobs[img_id][1]
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(rungs[img_id][i][1])
+        written[img_id] = dst
+    return written

@@ -8,7 +8,7 @@
 - **Markdown 提取**：用 Claude Opus 5.5 从聊天记录中生成 Markdown 日报；公开/内部版本通过后期处理分流
 - **拒绝兜底**：Opus 拒绝生成（`stop_reason=refusal`）时，同一份输入改交 GPT-6 Astra 用它自己的提示词（`prompts.ASTRA_*`）重写，结果照常发布、喂续写
 - **模型 AB 对比**（默认关闭，`--compare` 开启）：主版本（Opus 5.5，发布 + 喂续写）之外，再用 Opus 5 旁路生成一份对比日报（仅本地 PDF/debug，不发布、不喂续写），便于并排比质量与成本
-- **表格与图片**：日报可按机械阈值起 Markdown 表格，也可引用群里的原图（`![说明](img:3fa9c1d2)`）；群内版内嵌进 PDF，公开版转 WebP 提交到公开仓库（单张 ≤80KB、每天 ≤200KB），隐藏章节里的图不导出
+- **表格与图片**：日报可按机械阈值起 Markdown 表格，也可引用群里的原图（`![说明](img:3fa9c1d2)`）；群内版内嵌进 PDF，公开版转 WebP 提交到公开仓库（全天共享 300KB 预算、全局分配：先保张数再均衡画质，不设单张上限），隐藏章节里的图不导出
 - **链接摘要**：用 DeepSeek V4 Pro（关 thinking）抓取并摘要群内分享的链接，作为 `[网页摘要]` 喂给报告生成；两版日报共用同一批摘要
 - **三级隐私模型**：`/optout`（不出现）/ 默认匿名（稳定派生）/ `/alias`（自定义公开别名）
 - **泄漏检测**：公开版发布前硬性拦截三类泄漏（optout 用户匿名名、原始 wxid、同名消歧标记残留），命中即中止发布；真实昵称变体改为在群内版用 `<mark>` 可视化标出，交由作者人工复核，不再自动拦截
@@ -261,7 +261,7 @@ wechat_daily/
 ├── chatroom_members.py  # 群成员名单
 ├── message_parser.py    # 消息解析
 ├── image_decoder.py     # 图片附件解码（dat → 原图，喂模型规格 1568px/q85）
-├── image_export.py      # 日报用图再编码：群内 PDF（JPEG ≤200KB）/ 公开版（WebP ≤80KB）
+├── image_export.py      # 日报用图再编码：群内 PDF（JPEG ≤200KB）/ 公开版（WebP，全天共享 300KB）
 ├── chat_extractor.py    # 按日期提取消息
 ├── url_enricher.py      # 链接卡片抓取与摘要（DeepSeek 摘要，喂给 LLM 的 [网页摘要] 来源）
 ├── deepseek_client.py   # DeepSeek（OpenAI 兼容）流式客户端（链接摘要）

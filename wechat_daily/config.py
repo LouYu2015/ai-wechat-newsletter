@@ -149,12 +149,14 @@ PUBLIC_SITE_URL = "https://louyu2015.github.io/AI-chatgroup-daily"
 # Long edge: Chirpy's content column is ~890px (1250px max-width × 9/12 minus
 # padding); WeChat's HD decode tops out at 1284px anyway, so 1280 means "never
 # upscale, only shrink" and still gives the lightbox something to zoom into.
-# Byte cap: WebP q80 measured 60–69KB on real referenced screenshots, so 80KB
-# per image and a 200KB daily budget bound the worst case at ~73MB/year, versus
-# ~25MB/year at the observed rate of ~1 published image per day.
+# Byte cap: one budget shared by the whole day, no per-image cap — WebP q80
+# measured 60–90KB on real referenced screenshots, and a lone dense one (91KB
+# at the last rung on 10-28) shouldn't be dropped on a day with room to spare.
+# `image_export.export_public_day` allocates it jointly: as many images as fit,
+# then quality as even as possible. Worst case ~110MB/year, versus ~25MB/year at the observed
+# rate of ~1 published image per day.
 PUBLIC_IMG_LONG_EDGE = 1280
-PUBLIC_IMG_MAX_BYTES = 80_000
-PUBLIC_IMG_DAY_BUDGET = 200_000
+PUBLIC_IMG_DAY_BUDGET = 300 * 1024
 # Quality before resolution: a text screenshot's legibility rides on pixels,
 # and downscaling is not even monotonically cheaper (1284→1100 at q85 measured
 # *larger*, resampling noise defeating the encoder).

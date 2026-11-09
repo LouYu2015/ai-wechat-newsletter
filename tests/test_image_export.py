@@ -64,21 +64,49 @@ def test_unreadable_source_is_dropped(tmp_path):
     assert image_export.fit_for_report(src, tmp_path / "out.jpg") is None
 
 
-def test_public_export_is_webp_within_the_cap(tmp_path):
-    src = _screenshot(tmp_path / "s.jpg")
-    dst = tmp_path / "pub" / "2026-09-02-01.webp"
-    assert image_export.export_public(src, dst) == dst
-    assert dst.stat().st_size <= config.PUBLIC_IMG_MAX_BYTES
-    assert Image.open(dst).format == "WEBP"
+def _jobs(tmp_path, *srcs):
+    return {
+        f"id{i}": (src, tmp_path / "pub" / f"2026-09-02-{i:02d}.webp")
+        for i, src in enumerate(srcs, start=1)
+    }
 
 
-def test_public_export_never_ships_over_the_cap(tmp_path, monkeypatch):
+def test_public_export_is_webp_at_top_rung_when_budget_allows(tmp_path):
+    jobs = _jobs(tmp_path, _screenshot(tmp_path / "s.jpg"))
+    written = image_export.export_public_day(jobs)
+    dst = written["id1"]
+    assert dst.stat().st_size <= config.PUBLIC_IMG_DAY_BUDGET
+    with Image.open(dst) as im:
+        assert im.format == "WEBP"
+        assert max(im.size) == config.PUBLIC_IMG_LADDER[0][0]
+
+
+def test_public_export_squeezes_quality_to_keep_every_image(tmp_path):
+    """A budget too small for all-top-rung still ships every image, smaller."""
+    srcs = [_photo(tmp_path / f"p{i}.jpg") for i in range(3)]
+    tops = [len(image_export._webp_rungs(Image.open(s).convert("RGB"))[0][1]) for s in srcs]
+    floors = [len(image_export._webp_rungs(Image.open(s).convert("RGB"))[-1][1]) for s in srcs]
+    budget = (sum(tops) + sum(floors)) // 2
+    written = image_export.export_public_day(_jobs(tmp_path, *srcs), budget)
+    assert len(written) == 3
+    assert sum(p.stat().st_size for p in written.values()) <= budget
+
+
+def test_public_export_drops_the_biggest_to_keep_the_most(tmp_path):
+    """When even the smallest rungs overshoot, the largest image goes first."""
+    small = _screenshot(tmp_path / "s.jpg")
+    big = _photo(tmp_path / "p.jpg")
+    floor = len(image_export._webp_rungs(Image.open(small).convert("RGB"))[-1][1])
+    written = image_export.export_public_day(_jobs(tmp_path, big, small), floor)
+    assert set(written) == {"id2"}
+    assert not (tmp_path / "pub" / "2026-09-02-01.webp").exists()
+
+
+def test_public_export_never_ships_over_the_budget(tmp_path):
     """Unlike the PDF path there is no "ship it anyway" rung — git is forever."""
-    monkeypatch.setattr(config, "PUBLIC_IMG_MAX_BYTES", 200)
-    src = _photo(tmp_path / "p.jpg")
-    dst = tmp_path / "pub" / "x.webp"
-    assert image_export.export_public(src, dst) is None
-    assert not dst.exists()
+    jobs = _jobs(tmp_path, _photo(tmp_path / "p.jpg"))
+    assert image_export.export_public_day(jobs, 200) == {}
+    assert not jobs["id1"][1].exists()
 
 
 @pytest.mark.parametrize("long_edge,quality", config.PUBLIC_IMG_LADDER)

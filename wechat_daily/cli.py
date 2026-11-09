@@ -538,6 +538,7 @@ def _materialize_report_images(
 
     group_paths: dict[str, pathlib.Path] = {}
     public_urls: dict[str, str] = {}
+    public_jobs: dict[str, tuple[pathlib.Path, pathlib.Path]] = {}
     spent = 0
 
     with tempfile.TemporaryDirectory(prefix="wechat_daily_imgs_") as td:
@@ -558,18 +559,13 @@ def _materialize_report_images(
 
             if not publish or img_id not in public_wanted:
                 continue
-            if spent >= config.PUBLIC_IMG_DAY_BUDGET:
-                console.print(
-                    f"[yellow]公开版图片日预算已用尽"
-                    f"（{config.PUBLIC_IMG_DAY_BUDGET // 1024}KB），"
-                    f"img:{img_id} 起不再发布[/yellow]"
-                )
-                continue
             name = f"{date_str}-{n:02d}.webp"
-            exported = image_export.export_public(src, public_dir / name)
-            if exported is not None:
-                spent += exported.stat().st_size
-                public_urls[img_id] = f"{config.PUBLIC_IMG_URL_PREFIX}/{year}/{month}/{name}"
+            public_jobs[img_id] = (src, public_dir / name)
+
+        # Inside the tempdir: the decoded sources live there.
+        for img_id, dst in image_export.export_public_day(public_jobs).items():
+            spent += dst.stat().st_size
+            public_urls[img_id] = f"{config.PUBLIC_IMG_URL_PREFIX}/{year}/{month}/{dst.name}"
 
     console.print(
         f"[green]图片[/green] [dim]引用 {len(group_wanted)} 张；"
