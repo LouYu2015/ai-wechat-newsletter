@@ -1,10 +1,10 @@
-anthropic>=1.15.0
-httpx2>=2.13.1
+anthropic>=2.3.0
+httpx2>=2.16.0
 rich>=15.0.0
 python-dotenv>=1.2.4
-markdown>=3.11.1
+markdown>=3.11.2
 weasyprint>=70.0
 trafilatura>=2.3.1
 sqlcipher3>=0.6.4
-pycryptodome>=4.0.1
+pycryptodome>=4.2.0
 pillow>=13.0.0

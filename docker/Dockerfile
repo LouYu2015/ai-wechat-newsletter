@@ -1,7 +1,7 @@
 # 开发沙箱：跑项目 + 在里面跑 Claude Code。
 # - 只读挂载微信加密数据库（见 dev.sh），读写挂载项目目录到 /workspace
 # - Claude Code 用官方原生安装器装进持久卷，启动时自更新到最新版（见 entrypoint.sh）
-FROM python:3.14-slim-trixie
+FROM python:3.15-slim-trixie
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
