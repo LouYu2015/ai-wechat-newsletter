@@ -898,3 +898,39 @@ def test_public_image_ref_ids_excludes_hidden_sections():
     )
     assert renderer.image_ref_ids(md) == ["1111aaaa", "2222bbbb"]
     assert renderer.public_image_ref_ids(md) == ["1111aaaa"]
+
+
+def test_expand_refs_title_with_brackets(tmp_path):
+    """Titles containing ``[…]`` / nested 「」 must still expand (2026-11-09 leak)."""
+    posts = tmp_path / "_posts" / "2026" / "11"
+    posts.mkdir(parents=True)
+    title = "会话命名规则：让 agent 把标题改成「[分类] 事项｜日期」"
+    (posts / "2026-11-08-daily.md").write_text(f"### {title}\nbody\n", encoding="utf-8")
+    text = f"这是 [[ref:2026-11-08|{title}]]（昨天）的后续。"
+    slug = renderer._slugify_heading(title)
+    public = renderer._expand_refs_public(text, posts_dir=tmp_path / "_posts")
+    assert public == (
+        f"这是 [「{title}」]({{{{ '/daily/2026/11/08/daily/#{slug}' | relative_url }}}})（昨天）的后续。"
+    )
+    # The final-form validator must recognise (and keep) the expanded link.
+    assert renderer._validate_final_refs_public(public, posts_dir=tmp_path / "_posts") == public
+    group = renderer._expand_refs_group(text, posts_dir=tmp_path / "_posts")
+    assert "[[ref:" not in group and f"[「{title}」](https://" in group
+
+
+def test_ref_title_ending_with_bracket_keeps_it(tmp_path):
+    text = "[[ref:2026-11-08|状态标签 [已完成]]] 后"
+    assert renderer._expand_refs_group(text, posts_dir=tmp_path) == "「状态标签 [已完成]」 后"
+
+
+def test_final_ref_does_not_span_preceding_link(tmp_path):
+    """Relaxed title pattern must not swallow an earlier ``[「…」](url)`` on the line."""
+    posts = tmp_path / "_posts" / "2026" / "05"
+    posts.mkdir(parents=True)
+    (posts / "2026-05-11-daily.md").write_text("### 话题\nbody\n", encoding="utf-8")
+    text = "[「外链」](https://x.com) 和 [「话题」]({{ '/daily/2026/05/11/daily/#话题' | relative_url }})"
+    out = renderer._expand_refs_group(text, posts_dir=tmp_path / "_posts")
+    assert out == (
+        "[「外链」](https://x.com) 和 "
+        "[「话题」](https://louyu2015.github.io/AI-chatgroup-daily/daily/2026/05/11/daily/#话题)"
+    )

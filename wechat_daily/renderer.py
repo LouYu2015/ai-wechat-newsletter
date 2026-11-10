@@ -50,13 +50,16 @@ _TAGS_LINE_RE = re.compile(r"^tags\s*:\s*(.*)$", re.IGNORECASE)
 
 # Cross-day section reference placeholder emitted by the LLM:
 # ``[[ref:YYYY-MM-DD|章节标题]]`` → expanded by render_public/render_group.
-_REF_RE = re.compile(r"\[\[ref:(\d{4})-(\d{2})-(\d{2})\|([^\]\n]+?)\]\]")
+# Titles may themselves contain brackets (e.g. 「[分类] 事项｜日期」), so the
+# title runs lazily up to the first ``]]`` not followed by another ``]`` —
+# a title ending in ``]`` keeps its bracket instead of leaking one outside.
+_REF_RE = re.compile(r"\[\[ref:(\d{4})-(\d{2})-(\d{2})\|([^\n]+?)\]\](?!\])")
 
 # Final-form cross-day link the public renderer emits (and which the LLM
 # occasionally writes directly, bypassing the placeholder):
 #   [「title」]({{ '/daily/Y/M/D/daily/#slug' | relative_url }})
 _FINAL_REF_RE = re.compile(
-    r"\[「(?P<title>[^」\n]+?)」\]"
+    r"\[「(?P<title>(?:(?!\]\()[^\n])+?)」\]"
     r"\(\{\{\s*'/daily/(?P<y>\d{4})/(?P<mo>\d{2})/(?P<d>\d{2})/daily/"
     r"(?:#(?P<slug>[^']*))?'\s*\|\s*relative_url\s*\}\}\)"
 )

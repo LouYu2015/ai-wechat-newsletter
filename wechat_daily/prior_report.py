@@ -33,7 +33,7 @@ _HIDE_RE = re.compile(r"\[章节不公开[：:]\s*([^\]]*)\]")
 # Final-form cross-day link the public renderer emits (mirrors renderer._FINAL_REF_RE).
 # Kept local so prior_report has no import dep on renderer's regex internals.
 _EXPANDED_REF_RE = re.compile(
-    r"\[「(?P<title>[^」\n]+?)」\]"
+    r"\[「(?P<title>(?:(?!\]\()[^\n])+?)」\]"
     r"\(\{\{\s*'/daily/(?P<y>\d{4})/(?P<mo>\d{2})/(?P<d>\d{2})/daily/"
     r"(?:#[^']*)?'\s*\|\s*relative_url\s*\}\}\)"
 )
